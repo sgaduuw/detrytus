@@ -174,8 +174,8 @@ well tested and a kernel written against them holds no surprises:
   `fence.vm` that names an ASID leaves global entries alone;
 - writing the reserved `ptbr` mode leaves `ptbr` unchanged.
 
-These were proposed in the pull request that implemented paging, for
-the owner to accept or change.
+These were proposed in the pull request that implemented paging
+(sgaduuw/detrytus#3) and accepted by the owner as written.
 
 ### 2026-11-18 · The emulator's TLB never evicts
 
