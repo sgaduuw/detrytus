@@ -1,15 +1,21 @@
 # detrytus ISA
 
-Version 0.1, **draft**. Everything here may change until the emulator
-has run real programs against it. Sections marked *sketch* are not yet
-normative: they record the direction, not the rule.
+Version 0.2, **draft**. Everything here may change until the emulator
+has run real programs against it. Sections marked *sketch* record a
+direction, not a rule.
 
 detrytus is a balanced-ternary instruction set in the spirit of the
-Soviet Setun (1958) and Setun-70 (1970), reshaped around what a modern
-RISC core looks like: a load/store architecture, a fixed instruction
-width, a hardwired zero register, privilege rings, traps, CSRs and
-atomics. Where ternary lets a feature be simpler than its binary
-equivalent, this spec takes the simpler form and says so.
+Soviet Setun (1958) and Setun-70 (1970), rebuilt around what a modern
+core offers an operating system: a load/store RISC design with
+position-independent code, three privilege rings with trap delegation,
+paged virtual memory, a timer, a weak memory model with acquire/release
+atomics, floating point, cache control and an entropy source. Where
+ternary lets a feature be simpler than its binary equivalent, the spec
+takes the simpler form and says so.
+
+It is designed to host its own operating system. It is not designed to
+run C-era binary software such as Linux, whose language and kernel
+assume binary integers and 8-bit bytes throughout.
 
 ## 1. Notation
 
@@ -22,54 +28,63 @@ are the default in this document.
 
 Trit positions are numbered from 0 at the least significant end. `x[i]`
 is trit `i` of `x`; `x[j:i]` is the field from trit `j` down to trit `i`
-inclusive.
+inclusive. A field is read as a balanced number in its own right, so a
+field's value can be negative.
 
 `wrap(x)` reduces an integer into the 27-trit word range by arithmetic
 modulo 3²⁷, choosing the representative in
 [−3,812,798,742,493, +3,812,798,742,493].
 
+`Hn` is `(3ⁿ − 1) / 2`, the largest value an `n`-trit field holds.
+
 ## 2. Why balanced ternary changes the design
 
-These properties are what the rest of the spec leans on.
+The rest of the spec leans on these properties.
 
 - **No sign bit, no unsigned types.** The sign of a number is the sign
-  of its most significant nonzero trit. Every value is signed, and there
-  is exactly one kind of integer. There are no unsigned compares, no
-  unsigned multiplies, no zero-extend versus sign-extend loads.
+  of its most significant nonzero trit. There is exactly one kind of
+  integer: no unsigned compares, no unsigned multiplies, no zero-extend
+  versus sign-extend loads.
 - **Negation is tritwise inversion.** Flipping every trit negates the
-  value, so `NOT` and `NEG` are the same operation and the range is
-  symmetric: there is no most-negative number that cannot be negated.
+  value, so `not` and `neg` are the same operation and the range is
+  symmetric: there is no most-negative number that cannot be negated,
+  and no negative zero in either integers or floats.
 - **Truncation rounds to nearest.** Dropping low trits leaves the
   nearest integer to the exact quotient. A right shift is therefore a
-  correctly rounded division by a power of three, and there is no
-  arithmetic versus logical shift distinction.
+  correctly rounded division by a power of three.
 - **Comparison never overflows.** Ordering is lexicographic on trits,
-  most significant first, with `-` < `0` < `+`. A compare does not need
-  a subtraction and so cannot overflow.
-- **A compare has three outcomes.** It yields a trit, which is itself a
-  first-class value: it can be stored, branched on three ways, or used
-  to select.
-- **Constants split without a carry fix-up.** Any integer is uniquely
-  `hi × 3ⁿ + lo` with `lo` in the n-trit balanced range, so building a
-  constant from an upper and a lower immediate needs none of RISC-V's
-  `%hi` rounding adjustment.
+  most significant first, with `-` < `0` < `+`. A compare needs no
+  subtraction.
+- **A compare has three outcomes**, and the outcome is itself a value:
+  it can be stored, branched on three ways, or used to select.
+- **Fields split without carries.** Any integer is uniquely
+  `hi × 3ⁿ + lo` with `lo` in the n-trit balanced range. Constants build
+  from an upper and a lower immediate with no rounding fix-up, and an
+  address splits into page number and offset just by cutting its trits.
+- **Everything is centred.** Because fields are signed, a page, a word
+  or a table is naturally centred on its base address rather than
+  starting at it (section 5). This looks odd at first and removes every
+  offset adjustment from address arithmetic.
 
-The costs are real too. Halving is not a shift: dividing by two is a
-true division, so algorithms that lean on powers of two (binary search
-midpoints, buddy allocators, hash masks) pay for it. Everything outside
-the core speaks binary, which section 12 discusses.
+The costs are real. Halving is not a shift, so algorithms built on
+powers of two (binary search midpoints, buddy allocators, hash masks)
+pay for a division or are redesigned around thirds. And everything
+outside the core speaks binary: section 11 covers how detrytus talks to
+it.
 
 ## 3. Data types
 
 | Unit  | Trits | Range                         | Approx. binary equivalent |
 |-------|-------|-------------------------------|---------------------------|
 | trit  | 1     | −1 .. +1                      | 1.58 bits                 |
-| tryte | 9     | −9,841 .. +9,841              | 14.3 bits                 |
+| tryte | 9     | ±9,841                        | 14.3 bits                 |
 | word  | 27    | ±3,812,798,742,493            | 42.8 bits                 |
+| float | 27    | about 10^±173, 9.5 digits      | between binary32 and binary64 |
 
-The word is three trytes. The 9/27 sizes keep every field boundary on a
-power of three, which is why 27 was chosen over a 41-trit word that would
-match a 64-bit range.
+The word is three trytes. Keeping every size a power of three keeps
+every field boundary clean. A 27-trit address space is about 7.6 × 10¹²
+trytes, roughly 13 TB of binary-equivalent storage, which is ample for
+this project; open question 1 records the alternative.
 
 ## 4. Programmer-visible state
 
@@ -79,205 +94,319 @@ There are 27 general-purpose registers, each one word, named by a
 balanced 3-trit index from −13 to +13: `r-13` .. `r-1`, `r0`, `r1` ..
 `r13`. `r0` always reads as zero and ignores writes.
 
-The program counter `pc` is a separate word register. It always holds
-a multiple of 3 (see 5.2).
+Integers and floats share this register file. There is no separate
+floating-point register file, which keeps context switches small: a
+microkernel saves 26 words and `pc`, nothing more.
 
-### 4.2 Calling convention (provisional)
+The program counter `pc` is a separate word register and always holds a
+multiple of 3.
 
-| Register      | ABI name    | Role                      | Saved by |
-|---------------|-------------|---------------------------|----------|
-| `r0`          | `zero`      | constant zero             |          |
-| `r1`..`r6`    | `a0`..`a5`  | arguments, `a0` returns   | caller   |
-| `r7`..`r13`   | `t0`..`t6`  | temporaries               | caller   |
-| `r-1`..`r-10` | `s0`..`s9`  | saved                     | callee   |
-| `r-11`        | `fp`        | frame pointer             | callee   |
-| `r-12`        | `ra`        | return address            | caller   |
-| `r-13`        | `sp`        | stack pointer             | callee   |
+### 4.2 Calling convention
 
-The split by sign is deliberate: positive registers are scratch,
-negative ones survive a call. The stack grows toward negative addresses.
+| Register       | ABI name     | Role                         | Saved by |
+|----------------|--------------|------------------------------|----------|
+| `r0`           | `zero`       | constant zero                |          |
+| `r1`..`r6`     | `a0`..`a5`   | arguments; `a0` returns      | caller   |
+| `r7`..`r13`    | `t0`..`t6`   | temporaries                  | caller   |
+| `r-1`..`r-9`   | `s0`..`s8`   | saved; `s0` is the frame pointer | callee |
+| `r-10`         | `gp`         | global pointer               |          |
+| `r-11`         | `tp`         | thread pointer (TLS)         |          |
+| `r-12`         | `ra`         | return address               | caller   |
+| `r-13`         | `sp`         | stack pointer                | callee   |
+
+Positive registers are scratch; negative ones survive a call. The stack
+grows toward negative addresses. A boolean is a trit: `+` true, `-`
+false, and `0` where a three-valued result needs "unknown".
 
 ## 5. Memory
 
 ### 5.1 Addressing
 
 Memory is tryte-addressable. An address is a word, so addresses are
-signed and the address space runs from −3²⁷/2 to +3²⁷/2, centred on 0.
-That is about 7.6 × 10¹² trytes.
+signed and the address space runs from −H27 to +H27, centred on 0.
 
-### 5.2 Alignment and byte order
+### 5.2 Centred layout
 
-A word occupies three consecutive trytes and must be **aligned**: its
-address must be a multiple of 3. In balanced ternary that is exactly the
-condition "trit 0 of the address is 0", so the alignment check is a
-single trit test. A misaligned word access traps (cause 2).
+An aligned unit of 3ᵏ trytes is centred on its address. Its address
+must be a multiple of 3ᵏ, which in balanced ternary is exactly "the low
+`k` trits of the address are 0", and the unit covers the address and
+H`k` trytes on each side.
 
-Words are stored **little-endian**: at address `a`, tryte `a` holds trits
-8..0, `a+1` holds 17..9, `a+2` holds 26..18.
+| Unit        | Trytes | Aligned to | Covers, for address `a`      |
+|-------------|--------|------------|------------------------------|
+| word        | 3      | 3          | `a−1` .. `a+1`               |
+| cache line  | 27     | 27         | `a−13` .. `a+13`             |
+| page        | 19,683 | 3⁹         | `a−9841` .. `a+9841`         |
 
-Instructions are words, so `pc` is always aligned and branch offsets
-count instructions, not trytes.
+This is what splitting balanced trits gives without help: the low `k`
+trits of any address are a signed offset from the nearest multiple of
+3ᵏ. Under a start-based layout a page centred on its offsets would need
+an adjustment on every translation, and the last word of a page would
+straddle the next one.
 
-### 5.3 Reset
+A word is stored low trits first: tryte `a−1` holds trits 8..0, `a`
+holds 17..9, and `a+1` holds 26..18. A misaligned word access traps
+(cause +2). Instructions are words, so `pc` is always aligned and branch
+offsets count instructions.
 
-On reset, all registers are 0, `pc` is 0, the current ring is +1 and
-interrupts are disabled. The all-zero word is an illegal instruction
-(opcode 0, section 6), so execution that runs into zeroed
-memory traps instead of sliding.
+### 5.3 Physical address map
+
+The sign of the physical page number (the physical address with its
+low 9 trits cut off) selects one of three regions:
+
+| Page number | Region |
+|-------------|--------|
+| positive    | RAM: cacheable, weakly ordered |
+| zero        | boot page: reset firmware, readable and executable |
+| negative    | MMIO: uncached, strongly ordered, no execution |
+
+Deciding whether an access is memory or a device is a single trit test,
+with no attribute table. Accessing an address that holds nothing traps
+(cause +3).
+
+### 5.4 Reset
+
+On reset `pc` is 0, inside the boot page. All registers are 0, the
+current ring is +1, interrupts are disabled and translation is off.
+The all-zero word is an illegal instruction (opcode 0), so execution
+that runs into zeroed memory traps instead of sliding.
+
+### 5.5 Memory model
+
+The memory model is weak, in the style of RISC-V's RVWMO:
+
+- A single hart always observes its own accesses in program order.
+- Between harts, accesses to RAM are ordered only by `fence` and by the
+  acquire/release annotations on atomics (7.9).
+- An aligned word access is single-copy atomic.
+- MMIO accesses are not reordered against each other and are never
+  cached or speculated.
+
+A precise axiomatic model is open question 5.
 
 ## 6. Instruction encoding
 
 Every instruction is one 27-trit word. The opcode sits in the low five
-trits, giving 243 major opcodes. Opcode 0 is permanently illegal. Each
-instruction has its own major opcode; there is no secondary function
-field except where noted, which keeps decode a single table lookup.
+trits, giving 243 major opcodes, numbered −121..+121. Opcode 0 is
+permanently illegal. Each instruction has its own major opcode, so
+decode is a single table lookup with no secondary function field.
 
 Register fields keep the same position in every format that has them,
 so the register file can be read before the format is known.
 
 ```
-trit:     26 ............ 17 | 16  14 | 13  11 | 10   8 | 7   5 | 4   0
-R         fn[10]             | rs3    | rs2    | rs1    | rd    | op
-I         imm[16] ...................          | rs1    | rd    | op
-S         imm[16] ...................          | rs1    | rs2   | op
-B         off[13] ............      | rs2    | rs1    | h c c | op
-T         offP[8] ....  | offN[8] ....   | rs1    | 0 0 h | op
-U         imm[19] ....................................  | rd    | op
-J         off[19] ....................................  | rd    | op
+trit:  26 ........... 17 | 16 14 | 13 11 | 10  8 | 7   5 | 4   0
+R      fn[10]            | rs3   | rs2   | rs1   | rd    | op
+I      imm[16] ......................... | rs1   | rd    | op
+S      imm[16] ......................... | rs1   | rs2   | op
+B      off[13] ............... | rs2     | rs1   | h c c | op
+T      offP[8] ..... | offN[8] .....     | rs1   | 0 0 h | op
+U      imm[19] ................................  | rd    | op
+J      off[19] ................................  | rd    | op
 ```
 
-| Format | Fields                                                        |
-|--------|---------------------------------------------------------------|
-| R      | `rd`, `rs1`, `rs2`, `rs3`, `fn` (10 trits)                    |
-| I      | `rd`, `rs1`, `imm` (16 trits, ±21,523,360)                    |
-| S      | `rs2` (in the `rd` slot), `rs1`, `imm` (16 trits)             |
-| B      | `cond` (trits 6..5), hint `h` (trit 7), `rs1`, `rs2`, `off` (13 trits, ±797,161 instructions) |
-| T      | hint `h` (trit 5), trits 7..6 zero, `rs1`, `offN`, `offP` (8 trits each, ±3,280 instructions) |
-| U      | `rd`, `imm` (19 trits)                                        |
-| J      | `rd`, `off` (19 trits, ±581,130,733 instructions)             |
+| Format | Fields |
+|--------|--------|
+| R | `rd`, `rs1`, `rs2`, `rs3`, `fn` (10 trits) |
+| I | `rd`, `rs1`, `imm` (16 trits, ±21,523,360) |
+| S | `rs2` (in the `rd` slot), `rs1`, `imm` (16 trits) |
+| B | `cond` (trits 6..5), hint `h` (trit 7), `rs1`, `rs2`, `off` (13 trits, ±797,161 instructions) |
+| T | hint `h` (trit 5), trits 7..6 zero, `rs1`, `offN`, `offP` (8 trits each, ±3,280 instructions) |
+| U | `rd`, `imm` (19 trits) |
+| J | `rd`, `off` (19 trits, ±581,130,733 instructions) |
 
-Unused register fields must be `r0`; unused `fn` trits must be 0. A
-nonzero value in a must-be-zero field is an illegal instruction, so the
-space stays available for extensions.
+Unused register fields must name `r0`, and unused `fn` or `imm` trits
+must be 0. Anything else is an illegal instruction, which keeps that
+encoding space free for later extensions.
 
 Branch and jump targets are `pc + 3 × off`, relative to the address of
 the branch itself.
 
-## 7. Base instruction set
+## 7. Instructions
 
-`rd`, `rs1` etc. below mean the register values. All arithmetic results
-pass through `wrap`.
+There is one profile: every instruction in this section is mandatory.
+Optional extensions fragment software, and a single-implementation
+project gains nothing from them. The vector extension (12.1) is the
+one planned exception.
 
-### 7.1 Arithmetic (R)
+All integer results pass through `wrap`.
+
+### 7.1 Integer arithmetic (R)
 
 | Op | Mnemonic | Semantics |
 |----|----------|-----------|
-| 1  | `add rd, rs1, rs2`  | `rd = wrap(rs1 + rs2)` |
-| 2  | `sub rd, rs1, rs2`  | `rd = wrap(rs1 − rs2)` |
+| 1  | `add rd, rs1, rs2`  | `rs1 + rs2` |
+| 2  | `sub rd, rs1, rs2`  | `rs1 − rs2` |
 | 3  | `mul rd, rs1, rs2`  | low word of the 54-trit product |
 | 4  | `mulh rd, rs1, rs2` | high word of the 54-trit product |
-| 5  | `div rd, rs1, rs2`  | quotient, truncated toward zero |
-| 6  | `rem rd, rs1, rs2`  | remainder, sign of `rs1`; `rs1 = div × rs2 + rem` |
+| 5  | `div rd, rs1, rs2`  | quotient truncated toward zero |
+| 6  | `rem rd, rs1, rs2`  | remainder of `div`, with the sign of `rs1` |
+| 7  | `divr rd, rs1, rs2` | quotient rounded to nearest, ties toward zero |
+| 8  | `remr rd, rs1, rs2` | remainder of `divr`, at most half of `rs2` in magnitude |
 
-The 54-trit product splits uniquely as `hi × 3²⁷ + lo` with both halves
-in word range, so one `mulh` covers what RISC-V needs `mulh`, `mulhu`
-and `mulhsu` for.
+The 54-trit product splits uniquely as `hi × 3²⁷ + lo`, so one `mulh`
+does what RISC-V needs `mulh`, `mulhu` and `mulhsu` for.
 
-Division cannot overflow, because the range is symmetric. Division by
-zero does not trap: `div` gives 0 and `rem` gives `rs1`, which keeps the
-identity `rs1 = div × rs2 + rem` true.
+`div`/`rem` give C's familiar semantics. `divr`/`remr` are the
+ternary-native pair: the remainder lands in the balanced range, the
+way a right shift does. Division cannot overflow, since the range is
+symmetric. Division by zero does not trap: the quotient is 0 and the
+remainder is `rs1`, which keeps `rs1 = q × rs2 + r` true for both pairs.
 
-### 7.2 Compare and select (R)
-
-| Op | Mnemonic | Semantics |
-|----|----------|-----------|
-| 7  | `cmp rd, rs1, rs2`      | `rd = sign(rs1 − rs2)`, computed without overflow |
-| 11 | `sel rd, rs1, rs2, rs3` | `rd = rs2` if `rs1 < 0`; `rd` unchanged if `rs1 = 0`; `rd = rs3` if `rs1 > 0` |
-
-`cmp` always yields −1, 0 or +1. `sel` takes a three-way condition and
-reads `rd` as its middle input. That costs a fourth register read port;
-see open question 2.
-
-### 7.3 Shifts (R)
+### 7.2 Compare, select, min/max (R)
 
 | Op | Mnemonic | Semantics |
 |----|----------|-----------|
-| 8  | `sh rd, rs1, rs2`  | shift left by `rs2` trits; a negative `rs2` shifts right |
-| 9  | `rot rd, rs1, rs2` | rotate left by `rs2` trits (taken modulo 27); negative rotates right |
+| 9  | `cmp rd, rs1, rs2`      | `sign(rs1 − rs2)`, computed without overflow |
+| 10 | `min rd, rs1, rs2`      | numeric minimum |
+| 11 | `max rd, rs1, rs2`      | numeric maximum |
+| 12 | `abs rd, rs1`           | magnitude (`rs2` must be `r0`) |
+| 13 | `sel rd, rs1, rs2, rs3` | `rs2` if `rs1 < 0`, `0` if `rs1 = 0`, `rs3` if `rs1 > 0` |
+
+With booleans as trits, `sel` is an ordinary select (false picks `rs2`,
+true picks `rs3`), and an unknown condition yields 0. It reads three
+registers, never four.
+
+### 7.3 Shifts and trit fields (R, I)
+
+| Op | Mnemonic | Format | Semantics |
+|----|----------|--------|-----------|
+| 14 | `sh rd, rs1, rs2`    | R | shift left by `rs2` trits; a negative `rs2` shifts right |
+| 15 | `rot rd, rs1, rs2`   | R | rotate left by `rs2` trits, taken modulo 27 |
+| 30 | `shi rd, rs1, imm`   | I | `sh` by an immediate |
+| 31 | `roti rd, rs1, imm`  | I | `rot` by an immediate |
+| 32 | `tex rd, rs1, pos, len` | I | `rd = rs1[pos+len−1 : pos]`, as a balanced value |
+| 33 | `tins rd, rs1, pos, len` | I | `rd[pos+len−1 : pos] = rs1[len−1 : 0]`; other trits of `rd` keep their value |
 
 A left shift by `n` is `wrap(rs1 × 3ⁿ)`. A right shift by `n` drops the
-low `n` trits, which is `rs1 / 3ⁿ` rounded to nearest. Ties cannot occur
-because 3ⁿ is odd. Shift amounts of 27 or more in either direction give
-0. One instruction with a signed amount replaces the usual three
-(left, logical right, arithmetic right).
+low `n` trits, which is `rs1 / 3ⁿ` rounded to nearest; ties cannot occur
+because 3ⁿ is odd. Shifts of 27 or more trits give 0. One signed shift
+replaces the usual three (left, logical right, arithmetic right).
 
-### 7.4 Tritwise logic (R)
+For `tex` and `tins`, `pos` is `imm[3:0]` and `len` is `imm[7:4]`, with
+`0 ≤ pos`, `1 ≤ len` and `pos + len ≤ 27`. They are the tools for
+packing fields such as page-table entries.
+
+### 7.4 Trit counting (R)
+
+All take `rs2 = r0`.
 
 | Op | Mnemonic | Semantics |
 |----|----------|-----------|
-| 10 | `tlut rd, rs1, rs2, table` | for each trit `i`: `rd[i] = table[3·(rs1[i]+1) + (rs2[i]+1)]` |
+| 16 | `lzt rd, rs1` | number of leading zero trits (27 for zero) |
+| 17 | `tzt rd, rs1` | number of trailing zero trits (27 for zero): the power of 3 dividing `rs1` |
+| 18 | `nzt rd, rs1` | number of nonzero trits |
+
+These are the ternary counterparts of `clz`, `ctz` and `popcount`.
+
+### 7.5 Tritwise logic (R)
+
+| Op | Mnemonic | Semantics |
+|----|----------|-----------|
+| 19 | `tlut rd, rs1, rs2, table` | for each trit `i`: `rd[i] = table[3·(rs1[i]+1) + (rs2[i]+1)]` |
 
 `table` is a 9-trit truth table held in `fn[8:0]` (`fn[9]` must be 0).
-Entry `k` of the table is the output for the input pair
+Entry `k` is the output for the input pair
 `(a, b) = (k div 3 − 1, k mod 3 − 1)`, so entry 0 is `(-,-)` and entry 8
 is `(+,+)`. One instruction expresses all 19,683 two-input trit
-functions, in the same way AVX-512's `vpternlog` covers every
-three-input boolean function.
+functions, the way AVX-512's `vpternlog` covers every three-input
+boolean function.
 
-The assembler provides names for the common tables:
+The assembler names the common tables:
 
-| Pseudo | Function | Table (decimal) | Table (`0t`, entry 8 first) |
-|--------|----------|-----------------|------------------------------|
-| `tmin`  | Kleene AND, `min(a, b)`          | 5792  | `0t+0-00----` |
-| `tmax`  | Kleene OR, `max(a, b)`           | 9728  | `0t++++00+0-` |
-| `tmul`  | `a × b` (the ternary XNOR)       | 5824  | `0t+0-000-0+` |
-| `tsum`  | `a + b` modulo 3, no carry       | −4160 | `0t-+0+0-0-+` |
-| `tcons` | consensus: `a` if `a = b`, else 0 | 6560 | `0t+0000000-` |
-| `tany`  | accept-anything: `sign(a + b)`   | 8960  | `0t++0+0-0--` |
+| Pseudo  | Function | Table (decimal) | Table (`0t`, entry 8 first) |
+|---------|----------|-----------------|------------------------------|
+| `tmin`  | Kleene AND, `min(a, b)`           | 5792  | `0t+0-00----` |
+| `tmax`  | Kleene OR, `max(a, b)`            | 9728  | `0t++++00+0-` |
+| `tmul`  | `a × b` (the ternary XNOR)        | 5824  | `0t+0-000-0+` |
+| `tsum`  | `a + b` modulo 3, no carry        | −4160 | `0t-+0+0-0-+` |
+| `tcons` | consensus: `a` if `a = b`, else 0 | 6560  | `0t+0000000-` |
+| `tany`  | accept-anything: `sign(a + b)`    | 8960  | `0t++0+0-0--` |
 
 Unary functions use `rs2 = r0`, so only entries 1, 4 and 7 matter. The
 pseudo `tmap rd, rs, f` takes any of the 27 unary trit functions; for
-example `tabs` (9490) maps every trit to its magnitude. Negation is not
-listed because it is arithmetic `neg`.
+example `tabs` (9490) maps every trit to its magnitude. Negation is
+arithmetic `neg`.
 
-Kleene logic gives a natural "unknown" value. A trit vector can carry
-true/false/unknown per lane, the shape of SQL `NULL` semantics or an
-initialised/uninitialised shadow map, and `tmin`/`tmax` propagate the
-unknowns correctly.
+Kleene logic gives a natural "unknown". A word can carry
+true/false/unknown in each of its 27 trits, the shape of SQL `NULL`
+semantics or an initialised/uninitialised shadow map, and `tmin`/`tmax`
+propagate the unknowns correctly.
 
-### 7.5 Immediates (I, U)
+### 7.6 Binary operations (R)
+
+| Op | Mnemonic | Semantics |
+|----|----------|-----------|
+| 20 | `band rd, rs1, rs2` | bitwise AND of the two's-complement forms |
+| 21 | `bor rd, rs1, rs2`  | bitwise OR |
+| 22 | `bxor rd, rs1, rs2` | bitwise XOR |
+| 23 | `bsh rd, rs1, rs2`  | shift left by `rs2` bits; negative shifts right, rounding toward −∞ |
+
+These treat each operand as an integer in infinite-precision two's
+complement and wrap the result. They exist for the binary world:
+checksums, CRCs, hash functions, network headers and cryptography
+specified in bits. Ternary code has no need of them.
+
+### 7.7 Immediates and PC-relative addressing (I, U)
 
 | Op | Mnemonic | Format | Semantics |
 |----|----------|--------|-----------|
-| 13 | `addi rd, rs1, imm` | I | `rd = wrap(rs1 + imm)` |
-| 14 | `cmpi rd, rs1, imm` | I | `rd = sign(rs1 − imm)` |
-| 15 | `shi rd, rs1, imm`  | I | `sh` by an immediate amount |
-| 16 | `roti rd, rs1, imm` | I | `rot` by an immediate amount |
-| 17 | `lui rd, imm`       | U | `rd = imm × 3⁸` |
+| 34 | `addi rd, rs1, imm` | I | `rs1 + imm` |
+| 35 | `cmpi rd, rs1, imm` | I | `sign(rs1 − imm)` |
+| 36 | `lui rd, imm`       | U | `imm × 3⁸` |
+| 37 | `auipc rd, imm`     | U | `pc + imm × 3⁸` |
 
-`lui` followed by `addi` with an 8-trit immediate builds any word
-constant, with no carry correction (section 2).
+`lui` + `addi` builds any constant, and `auipc` + `addi` or `auipc` + a
+load reaches any address relative to `pc`, with the low 8 trits in the
+second instruction and no carry correction (section 2). `auipc` is what
+makes position-independent code and relocatable kernels practical.
 
-### 7.6 Loads and stores (I, S)
+### 7.8 Loads and stores (I, S)
 
 | Op | Mnemonic | Format | Semantics |
 |----|----------|--------|-----------|
-| −1 | `lt rd, imm(rs1)`  | I | load the tryte at `rs1 + imm`; the upper trits are filled with 0 |
+| −1 | `lt rd, imm(rs1)`  | I | load the tryte at `rs1 + imm`; upper trits are 0 |
 | −2 | `lw rd, imm(rs1)`  | I | load the aligned word at `rs1 + imm` |
 | −3 | `st rs2, imm(rs1)` | S | store trits 8..0 of `rs2` to the tryte at `rs1 + imm` |
 | −4 | `sw rs2, imm(rs1)` | S | store `rs2` to the aligned word at `rs1 + imm` |
 
-Filling with zero trits preserves the value, so there is one tryte load,
-not a signed and an unsigned pair.
+Filling with zero trits preserves the value, so one tryte load does the
+work of a signed and an unsigned pair.
 
-### 7.7 Control transfer (B, T, J, I)
+### 7.9 Atomics (R)
+
+The address is in `rs1` with no offset and must be word aligned. The
+`rs3` field carries the ordering: trit 14 is acquire (`aq`), trit 15 is
+release (`rl`), each `0` or `+`, and trit 16 is 0. Both together make
+the operation sequentially consistent. Assembler suffixes: `.aq`, `.rl`,
+`.aqrl`.
+
+| Op  | Mnemonic | Semantics |
+|-----|----------|-----------|
+| −20 | `lr rd, (rs1)`            | load and reserve the word |
+| −21 | `sc rd, rs2, (rs1)`       | store if the reservation holds; `rd = 0` on success, `+1` on failure |
+| −22 | `amoswap rd, rs2, (rs1)`  | `rd = mem`; `mem = rs2` |
+| −23 | `amoadd rd, rs2, (rs1)`   | `rd = mem`; `mem = rd + rs2` |
+| −24 | `amomin rd, rs2, (rs1)`   | `rd = mem`; `mem = min(rd, rs2)` |
+| −25 | `amomax rd, rs2, (rs1)`   | `rd = mem`; `mem = max(rd, rs2)` |
+| −26 | `amotlut rd, rs2, (rs1), table` | `rd = mem`; `mem = tlut(rd, rs2, table)`, table in `fn[8:0]` |
+| −27 | `cas rd, rs2, (rs1)`      | if `mem = rd` then `mem = rs2`; `rd = ` the old `mem` |
+
+`amotlut` is one atomic instruction for every tritwise update: with
+`tmax` it sets trits, with `tmin` it clears them, with `tsum` it cycles
+them, which covers what RISC-V spreads across `amoand`, `amoor` and
+`amoxor`. Every integer is signed, so `amomin`/`amomax` need no
+unsigned variants. `cas` reads its expected value from `rd` (as x86's
+`cmpxchg` does) so that it fits a three-register format.
+
+### 7.10 Control transfer (B, T, J, I)
 
 | Op  | Mnemonic | Format | Semantics |
 |-----|----------|--------|-----------|
-| −10 | `jal rd, label`       | J | `rd = pc + 3`; `pc = pc + 3 × off` |
-| −11 | `jalr rd, imm(rs1)`   | I | `rd = pc + 3`; `pc = rs1 + imm` (must be aligned) |
+| −10 | `jal rd, label`           | J | `rd = pc + 3`; `pc = pc + 3 × off` |
+| −11 | `jalr rd, imm(rs1)`       | I | `rd = pc + 3`; `pc = rs1 + imm`, which must be aligned |
 | −12 | `b<cond> rs1, rs2, label` | B | if `cmp(rs1, rs2)` satisfies `cond`, `pc = pc + 3 × off` |
-| −13 | `br3 rs1, Lneg, Lpos` | T | `rs1 < 0`: `pc += 3 × offN`; `rs1 > 0`: `pc += 3 × offP`; `rs1 = 0`: fall through |
+| −13 | `br3 rs1, Lneg, Lpos`     | T | `rs1 < 0`: `pc += 3 × offN`; `rs1 > 0`: `pc += 3 × offP`; `rs1 = 0`: fall through |
 
 The `cond` field of `b<cond>`:
 
@@ -291,68 +420,125 @@ The `cond` field of `b<cond>`:
 | −2     | `ble`    | −1, 0  |
 | −3, ±4 | reserved |        |
 
-The ordered conditions are arranged so that negating `cond` mirrors the
-comparison, which is the same as swapping the operands.
+Negating an ordered `cond` mirrors the comparison, which is the same as
+swapping the operands.
 
-**Static prediction hints.** Formats B and T carry one spare trit used
-as a hint, which costs nothing in a 27-trit word. In `b<cond>` the hint
-is −1 for "unlikely taken", 0 for no hint, +1 for "likely taken". In
-`br3` the hint is the predicted sign of `rs1`. Hints never change
-behaviour. Assembler syntax: an optional `.likely` / `.unlikely` suffix
-on `b<cond>`, and `.n` / `.z` / `.p` on `br3`.
+**Static prediction hints.** Formats B and T have a spare trit, used as
+a hint at no cost. In `b<cond>` it is −1 for unlikely, 0 for no hint,
++1 for likely, written `.unlikely` / `.likely`. In `br3` it is the
+predicted sign of `rs1`, written `.n` / `.z` / `.p`. Hints never change
+behaviour.
 
 `br3` is the instruction Setun's design points at: one compare, one
-branch, three destinations. Its offsets are short, so a far target goes
+branch, three destinations. Its offsets are short; a far target goes
 through a `jal` trampoline.
 
-### 7.8 Atomics (R)
+### 7.11 Floating point (R)
 
-All take the address in `rs1` with no offset, and it must be word
-aligned. Each is a single indivisible read-modify-write.
+| Op | Mnemonic | Semantics |
+|----|----------|-----------|
+| 40 | `fadd rd, rs1, rs2`       | `rs1 + rs2` |
+| 41 | `fsub rd, rs1, rs2`       | `rs1 − rs2` |
+| 42 | `fmul rd, rs1, rs2`       | `rs1 × rs2` |
+| 43 | `fdiv rd, rs1, rs2`       | `rs1 / rs2` |
+| 44 | `fsqrt rd, rs1`           | `√rs1` |
+| 45 | `fma rd, rs1, rs2, rs3`   | `rs1 × rs2 + rs3`, rounded once |
+| 46 | `fmin rd, rs1, rs2`       | minimum; a NaN operand is ignored |
+| 47 | `fmax rd, rs1, rs2`       | maximum; a NaN operand is ignored |
+| 48 | `fcmp rd, rs1, rs2`       | −1, 0 or +1, or 3 if unordered (below) |
+| 49 | `fclass rd, rs1`          | class code (below) |
+| 50 | `fcvt.f.i rd, rs1`        | integer to float |
+| 51 | `fcvt.i.f rd, rs1`        | float to integer; out of range saturates, NaN gives 0 |
+
+Arithmetic and conversion instructions take a rounding mode in
+`fn[1:0]`: 0 nearest, +1 toward +∞, −1 toward −∞, +3 toward zero, −3
+dynamic (from `fcsr`), others reserved. The common case, nearest, is the
+all-zero field.
+
+**Format.** A float is one word: exponent `E = x[26:21]` (6 trits) and
+significand `M = x[20:0]` (21 trits).
+
+| `E` | Meaning |
+|-----|---------|
+| −363 .. +363 | normal: value = `M / 3²⁰ × 3^E`, with `M[20] ≠ 0`, or zero when `M = 0` |
+| −364 | subnormal: value = `M / 3²⁰ × 3^−363`, `M[20]` may be 0 |
+| +364 | `M = +3²⁰`: +∞; `M = −3²⁰`: −∞; any other `M`: NaN |
+
+The sign is the sign of the significand, so there is no sign bit and no
+negative zero. The all-zero word is integer 0 and float 0.0 at once.
+Negation is `fsub rd, zero, rs`. A normalised significand has magnitude
+between ½ and 1½, so the format holds about 9.5 decimal digits over a
+range of about 10^±173.
+
+**Rounding.** Round-to-nearest is truncation of the significand. A tie
+needs a remainder of exactly half a unit in the last place, which has
+an infinite ternary expansion (½ = `0.+++…`), so the exact result of an
+add, subtract, multiply or `fma`, which always has a finite expansion,
+never ties. Only `fdiv` and `fsqrt` can, and they break ties toward
+zero.
+
+**`fcmp`.** An ordered compare yields the usual trit. An unordered one
+(a NaN operand) yields 3, which is trit 1 set: it equals none of −1, 0
+and +1, so `beq`/`bne` against constants test correctly, but `br3` on
+the result needs an unordered check first.
+
+**`fclass`.** Returns one of: −4 −∞, −3 negative normal, −2 negative
+subnormal, 0 zero, +2 positive subnormal, +3 positive normal, +4 +∞,
++1 NaN. The sign of the class is the sign of the value.
+
+**Flags.** `fcsr` (8.2) records invalid, divide-by-zero, overflow,
+underflow and inexact, as `+` trits that stay set until cleared, plus
+the dynamic rounding mode.
+
+### 7.12 System (I, R)
 
 | Op  | Mnemonic | Semantics |
 |-----|----------|-----------|
-| −20 | `amoswap rd, rs2, (rs1)` | `rd = mem[rs1]`; `mem[rs1] = rs2` |
-| −21 | `amoadd rd, rs2, (rs1)`  | `rd = mem[rs1]`; `mem[rs1] = wrap(rd + rs2)` |
-| −22 | `amomin rd, rs2, (rs1)`  | `rd = mem[rs1]`; `mem[rs1] = min(rd, rs2)` |
-| −23 | `amomax rd, rs2, (rs1)`  | `rd = mem[rs1]`; `mem[rs1] = max(rd, rs2)` |
-| −24 | `cas rd, rs2, rs3, (rs1)` | `rd = mem[rs1]`; if `rd = rs2` then `mem[rs1] = rs3` |
+| −30 | `sys`                     | trap with cause +4 (system call) |
+| −31 | `tret`                    | return from trap (8.4) |
+| −32 | `csrrw rd, csr, rs1`      | `rd = csr`; `csr = rs1` |
+| −33 | `csrrtmax rd, csr, rs1`   | `rd = csr`; `csr = tmax(csr, rs1)`, tritwise |
+| −34 | `csrrtmin rd, csr, rs1`   | `rd = csr`; `csr = tmin(csr, rs1)`, tritwise |
+| −35 | `fence pred, succ`        | order the `pred` accesses before the `succ` accesses |
+| −36 | `fence.i`                 | make earlier stores visible to instruction fetch |
+| −37 | `fence.vm rs1, rs2`       | flush translations for address `rs1` and address space `rs2`; `r0` means all |
+| −38 | `wfi`                     | wait for an interrupt (may be a no-op) |
+| −39 | `brk`                     | trap with cause +5 (breakpoint) |
+| −40 | `cclean rs1`              | write back the cache line holding `rs1` |
+| −41 | `cflush rs1`              | write back and invalidate the line |
+| −42 | `cinval rs1`              | invalidate the line without writing back (ring 0 and above) |
 
-Because every integer is signed, `amomin` and `amomax` need no unsigned
-variants.
+CSR instructions use format I with the CSR number in `imm[8:0]`. When
+the `rs1` field names `r0`, the CSR is read and not written, which gives
+the read form `csrr rd, csr`; to write zero, use another register that
+holds 0.
 
-### 7.9 System (I, R)
+Interrupt-enable and similar CSR fields use `+` for on and `-` for off,
+so `csrrtmax` with a mask of `+` on the chosen trits and `-` elsewhere
+sets them, and `csrrtmin` with `-` on the chosen trits and `+` elsewhere
+clears them, both atomically.
 
-| Op  | Mnemonic | Semantics |
-|-----|----------|-----------|
-| −30 | `sys`               | trap with cause 4 (system call) |
-| −31 | `tret`              | return from trap (section 8) |
-| −32 | `csrrw rd, csr, rs1` | `rd = csr`; `csr = rs1` (I format, CSR number in `imm[8:0]`) |
-| −33 | `fence`             | order all earlier memory accesses before all later ones |
-| −34 | `wfi`               | wait for an interrupt (may be a no-op) |
-| −35 | `brk`               | trap with cause 5 (breakpoint) |
+`fence` takes `pred` in `imm[3:0]` and `succ` in `imm[7:4]`, one trit
+each for RAM reads, RAM writes, MMIO input and MMIO output, `+` to
+include. A bare `fence` orders everything. `fence.i` is what a loader or
+JIT runs before executing code it just wrote. The cache instructions are
+for drivers that share buffers with devices.
 
-The trits of `imm` above the CSR number must be 0. When the `rs1`
-field names `r0`, the CSR is read and not written, which gives the read
-form `csrr rd, csr`; to write zero, use any other register holding 0.
-
-### 7.10 Pseudo-instructions
+### 7.13 Pseudo-instructions
 
 | Pseudo | Expansion |
 |--------|-----------|
-| `nop`            | `addi r0, r0, 0` |
-| `mv rd, rs`      | `addi rd, rs, 0` |
-| `li rd, imm`     | `addi rd, r0, imm`, or `lui` + `addi` for large values |
+| `nop`             | `addi r0, r0, 0` |
+| `mv rd, rs`       | `addi rd, rs, 0` |
+| `li rd, imm`      | `addi`, or `lui` + `addi` |
+| `la rd, symbol`   | `auipc` + `addi` |
 | `neg rd, rs` / `not rd, rs` | `sub rd, r0, rs` (the same operation) |
-| `sgn rd, rs`     | `cmp rd, rs, r0` |
-| `j label`        | `jal r0, label` |
-| `call label`     | `jal ra, label` |
-| `ret`            | `jalr r0, 0(ra)` |
-| `tmin` etc.      | `tlut` with the table from 7.4 |
-
-Numeric `min` needs a scratch register, so it is an idiom rather than a
-pseudo-instruction: `cmp t, a, b` ; `mv rd, a` ; `sel rd, t, a, b`. When
-`a < b` or `a = b` the result stays `a`, and when `a > b` it becomes `b`.
+| `sgn rd, rs`      | `cmp rd, rs, r0` |
+| `j label`         | `jal r0, label` |
+| `call label`      | `auipc` + `jalr ra`, or `jal ra` when in reach |
+| `ret`             | `jalr r0, 0(ra)` |
+| `csrr rd, csr`    | `csrrw rd, csr, r0` |
+| `tmin` etc.       | `tlut` with the table from 7.5 |
 
 ## 8. Privilege, traps and interrupts
 
@@ -363,75 +549,185 @@ Privilege is a single trit, the **ring**:
 | Ring | Role |
 |------|------|
 | −1   | user |
-| 0    | supervisor (kernel) |
-| +1   | machine / hypervisor |
+| 0    | supervisor: the kernel |
+| +1   | machine: firmware or hypervisor |
 
-Three levels is roughly where x86 and ARM ended up in practice, and here
-it is the natural width of the field. In version 0.1 every trap is taken
-into ring +1; delegating traps to ring 0 is open question 3.
+The current ring is internal state, not a CSR. Ring +1 always runs with
+translation off. Rings 0 and −1 run translated when `ptbr` enables it.
 
 ### 8.2 CSRs
 
-A CSR number is 9 trits, and its top two trits encode the access rule,
-so no table is needed to check a CSR access:
-
-- trit 8: the minimum ring allowed to access it.
-- trit 7: `+` read/write, `-` read-only, `0` reserved.
-
-Writing a read-only CSR, or accessing one from too low a ring, is an
+A CSR number is 9 trits: `number = 6561 × ring + 2187 × access + index`,
+where `ring` (trit 8) is the lowest ring allowed to access it, `access`
+(trit 7) is `+` for read/write and `-` for read-only, and `index` is the
+low 7 trits. Access rights fall out of the number, with no lookup table.
+Writing a read-only CSR, or touching one from too low a ring, is an
 illegal instruction.
+
+Rings 0 and +1 each have their own **trap bank**, the same indices at a
+different ring trit. That is how one trap handler can run in the kernel
+while the firmware's state stays untouched.
+
+| Index | Name      | Contents |
+|-------|-----------|----------|
+| 0     | `tstatus` | trap state for this ring (below) |
+| 1     | `tvec`    | trap handler address and mode |
+| 2     | `tpc`     | `pc` at the trap |
+| 3     | `tcause`  | trap cause |
+| 4     | `tval`    | faulting address or instruction |
+| 5     | `scratch` | free for the handler |
+| 6     | `ie`      | interrupt enables: trit `i` enables cause −`i` |
+| 7     | `ip`      | interrupts pending: trit `i` for cause −`i` |
+| 8     | `timecmp` | timer compare value |
+
+Ring +1 bank numbers are 8748 + index (8748 .. 8756); ring 0 bank
+numbers are 2187 + index (2187 .. 2195).
+
+Other CSRs:
 
 | CSR       | Number | Ring | Access | Contents |
 |-----------|--------|------|--------|----------|
-| `status`  | 8748   | +1   | rw | ring and interrupt state (below) |
-| `tvec`    | 8749   | +1   | rw | trap handler address |
-| `tpc`     | 8750   | +1   | rw | `pc` at the trap |
-| `tcause`  | 8751   | +1   | rw | trap cause |
-| `tval`    | 8752   | +1   | rw | faulting address or instruction |
-| `scratch` | 8753   | +1   | rw | free for the trap handler |
+| `edeleg`  | 8768   | +1   | rw | exception delegation, trit `i` for cause +`i` |
+| `ideleg`  | 8769   | +1   | rw | interrupt delegation, trit `i` for cause −`i` |
+| `hartid`  | 4374   | +1   | ro | this hart's number |
+| `ptbr`    | 2197   | 0    | rw | page-table base and mode (9.2) |
+| `entropy` | −2187  | 0    | ro | fresh random trits from a hardware source |
 | `cycle`   | −8748  | −1   | ro | cycles since reset |
-| `instret` | −8747  | −1   | ro | instructions retired since reset |
+| `time`    | −8747  | −1   | ro | wall-clock ticks, rate set by the platform |
+| `instret` | −8746  | −1   | ro | instructions retired |
+| `fcsr`    | −4374  | −1   | rw | float flags (trits 4..0: invalid, divide-by-zero, overflow, underflow, inexact) and rounding mode (trits 6..5) |
 
-`status` fields:
+`tstatus` fields:
 
-| Trit | Name | Meaning |
-|------|------|---------|
-| 0    | `CR`  | current ring |
-| 1    | `PR`  | ring before the last trap |
-| 2    | `IE`  | interrupts: `+` enabled, `-` disabled, `0` reserved |
-| 3    | `PIE` | `IE` before the last trap |
+| Trit | Name  | Meaning |
+|------|-------|---------|
+| 0    | `PR`  | ring before the last trap into this ring |
+| 1    | `IE`  | interrupts for this ring: `+` enabled, `-` disabled |
+| 2    | `PIE` | `IE` before the last trap |
+| 3    | `SUA` | ring 0 bank only: `+` lets the kernel access user pages |
 
-### 8.3 Trap entry and return
+`tvec` trit 0 selects the mode, and the rest is the handler address
+with that trit taken as 0:
 
-On a trap: `tpc` = address of the trapping instruction (for interrupts,
-of the next instruction to run); `tcause` and `tval` are set; `PR = CR`;
-`CR = +1`; `PIE = IE`; `IE = -`; `pc = tvec`. A `sys` handler resumes
-after the call by adding 3 to `tpc`.
+- `0`, direct: every trap goes to the address.
+- `+`, vectored: a trap goes to `address + 3 × cause`. Exceptions land
+  above the address and interrupts below it, one instruction slot each,
+  so one table centred on the address serves both kinds.
 
-`tret` sets `pc = tpc`, `CR = PR`, `IE = PIE`. It is legal only in ring
-+1.
+### 8.3 Delegation
 
-### 8.4 Causes
+Every trap starts targeted at ring +1. A delegation trit of `+` for its
+cause sends it to ring 0 instead. `0` keeps it at ring +1, and `-` is
+reserved, perhaps for user-level handlers later. Reset leaves both
+delegation CSRs zero, so firmware sees everything until it hands traps
+to the kernel. A trap never goes to a ring below the current one: a
+delegated trap raised in ring +1 stays in ring +1.
 
-The sign of `tcause` distinguishes the kind of trap, the job RISC-V
-gives the top bit of `mcause`:
+### 8.4 Trap entry and return
+
+On a trap into ring `r`, using ring `r`'s bank:
+
+1. `tpc` = the trapping instruction (for an interrupt, the next one to
+   run); `tcause` and `tval` are set.
+2. `PR` = the current ring; `PIE` = `IE`; `IE` = `-`.
+3. The current ring becomes `r`, and `pc` comes from `tvec`.
+
+A `sys` handler resumes after the call by adding 3 to `tpc`.
+
+`tret` returns using the bank of the current ring: `pc = tpc`,
+`IE = PIE`, current ring = `PR`. It is legal in rings 0 and +1.
+
+An interrupt with cause −`i` is taken into its target ring `r` when
+`ip[i]` and `ie[i]` are both `+` in `r`'s bank, and either the current
+ring is below `r`, or it equals `r` with `IE = +`. Ring `r`'s timer
+interrupt is pending whenever `time ≥ timecmp`; software clears it by
+moving `timecmp` forward.
+
+### 8.5 Causes
+
+The sign of the cause separates interrupts from exceptions, the job
+RISC-V gives the top bit of `mcause`.
 
 | Cause | Kind |
 |-------|------|
 | +1 | illegal instruction |
 | +2 | misaligned access |
-| +3 | access fault |
-| +4 | system call (`sys`), ring in `status.PR` |
-| +5 | breakpoint (`brk`) |
+| +3 | access fault (nothing at that physical address, or a forbidden region) |
+| +4 | system call, ring in `tstatus.PR` |
+| +5 | breakpoint |
+| +6 | instruction page fault |
+| +7 | load page fault |
+| +8 | store page fault |
 | −1 | timer interrupt |
 | −2 | external interrupt |
-| −3 | software interrupt |
+| −3 | software interrupt (interprocessor signal) |
 
-How the timer and devices are reached (memory-mapped registers, their
-addresses) belongs to the platform description, not to the ISA, and is
-left to the emulator for now.
+## 9. Virtual memory
 
-## 9. Example: binary search with a three-way branch
+### 9.1 Address split
+
+A virtual address splits by cutting trits, with no arithmetic:
+
+```
+trit:  26 25 | 24 ....... 17 | 16 ........ 9 | 8 ........ 0
+       root  | mid index (8) | leaf index (8)| page offset (9)
+```
+
+A page is 3⁹ = 19,683 trytes, centred on a multiple of 3⁹. Mid and leaf
+tables hold 3⁸ = 6,561 one-word entries and so fill exactly one page
+each. The root table has only 9 entries, 27 trytes: it fits in a single
+cache line, which sits at the centre of the page `ptbr` names. The rest
+of that page is free for the kernel, for example to hold the process's
+own bookkeeping, so an address space costs very little until it maps
+something.
+
+Indices are signed, and a table is centred like everything else: entry
+`i` is the word at `table + 3 × i`. A walk takes three steps, root, mid,
+leaf, and the TLB hides them.
+
+The sign of the root index gives a natural split, with the kernel in
+negative addresses and user space in positive ones. Virtual page 0 is
+left unmapped, so a null pointer (or anything within 9,841 trytes of one)
+faults.
+
+### 9.2 `ptbr`
+
+| Trits  | Field | Meaning |
+|--------|-------|---------|
+| 0      | mode  | `0`: no translation; `+`: two-level paging; `-`: reserved |
+| 8..1   | ASID  | address-space identifier (3⁸ of them), tags TLB entries |
+| 26..9  | root  | physical page number of the page whose centre holds the root table |
+
+### 9.3 Page-table entries
+
+| Trits  | Field | Meaning |
+|--------|-------|---------|
+| 0      | `V`   | `0` invalid, `-` points to the next-level table, `+` maps a page |
+| 1      | `R`   | `+` readable |
+| 2      | `W`   | `+` writable |
+| 3      | `X`   | `+` executable |
+| 4      | `U`   | `+` user-accessible; `0` kernel only |
+| 5      | `G`   | `+` global: present in every address space |
+| 6      | `A`   | `+` accessed |
+| 7      | `D`   | `+` dirty |
+| 8      | `S`   | free for the operating system |
+| 26..9  | `PPN` | physical page number |
+
+One trit says both whether an entry is valid and whether it is a leaf
+or a pointer, where RISC-V needs a valid bit plus the convention that
+`R = W = X = 0` means "pointer". A zeroed table is all invalid entries.
+
+A `+` entry in a mid table maps a superpage of 3¹⁷ trytes, and one in the
+root table maps 3²⁵ trytes.
+
+The hardware does not set `A` or `D`. An access to a page whose `A` is
+not `+`, or a store to one whose `D` is not `+`, takes a page fault, and
+the kernel sets the trit. That keeps the walker simple and gives the
+kernel exact working-set information.
+
+After changing an entry, the kernel runs `fence.vm`.
+
+## 10. Example: binary search with a three-way branch
 
 ```asm
 # a0 = address of a sorted array of words, a1 = length, a2 = key.
@@ -460,69 +756,59 @@ notfound:
         ret
 ```
 
-The example shows both sides of the trade: the three-way outcome of the
-key comparison costs one `cmp` and one `br3`, but the midpoint costs a
+This shows both sides of the trade. The three-way outcome of the key
+comparison costs one `cmp` and one `br3`, but the midpoint costs a
 `div`, which a binary machine does with a shift. A ternary search that
-splits the range in thirds would turn that division into a shift.
+splits the range in thirds would make that division a shift.
 
-## 10. Sketches (not yet normative)
+## 11. Living with binary
 
-### 10.1 Virtual memory
+Files, networks and peripherals are binary. The ISA's part:
 
-A page is 3⁹ = 19,683 trytes (6,561 words). A page-table entry is one
-word, so a page holds 3⁸ entries. A 27-trit virtual address splits as a
-10-trit root index, an 8-trit leaf index and a 9-trit page offset. The
-root table is three contiguous pages (3¹⁰ entries), the same trick
-RISC-V's hypervisor extension uses for its 16 KiB root. A natural
-convention puts the kernel in negative addresses and user space in
-positive ones, decided by the sign of the address.
+- The binary operations of 7.6 handle bit-specified algorithms.
+- A device moves data as one byte per tryte (values 0..255), through
+  MMIO in the negative page range. This wastes about 44% of each tryte
+  and keeps drivers simple.
+- For storage and transport, 5 trits pack into a byte (3⁵ = 243 ≤ 256),
+  which wastes about 5%. Packing is done in software for now.
 
-### 10.2 Floating point
+## 12. Sketches (not yet normative)
 
-A balanced-ternary float needs no sign bit: the sign is the sign of the
-significand. A 27-trit format might use a 6-trit exponent (±364) and a
-21-trit significand normalised so its leading trit is nonzero. Rounding
-to nearest is truncation. The open design work is the encoding of
-infinities and NaN.
+### 12.1 Vectors
 
-### 10.3 Vectors
+A scalable vector extension in the style of RISC-V V or Arm SVE, with
+packed trytes or words per lane. The third trit of a mask lane means
+"inactive, leave unchanged", distinct from false.
 
-Packed trytes in wide registers, with the third trit state of a mask
-lane meaning "inactive, leave unchanged", distinct from "false".
+### 12.2 Text
 
-### 10.4 Text
-
-A tryte has 19,683 values, not enough for all of Unicode (1,114,112 code
+A tryte has 19,683 values, too few for all of Unicode (1,114,112 code
 points) in one unit. A variable-length encoding can use the sign of the
 first tryte: a non-negative tryte is a code point from 0 to 9,841
-directly (covering ASCII, Latin, Greek, Cyrillic, Hebrew, Arabic and the
-main Indic scripts), and a negative tryte starts a two-tryte sequence,
-whose 18 trits cover every code point with room to spare.
+directly, which covers ASCII, Latin, Greek, Cyrillic, Hebrew, Arabic and
+the main Indic scripts, and a negative tryte starts a two-tryte
+sequence, whose 18 trits cover every code point with room to spare.
 
-## 11. Open questions
+### 12.3 Platform
 
-1. **Division rounding.** `div` truncates toward zero for C
-   compatibility. Round-to-nearest is what ternary does natively and
-   would give a remainder in the balanced range. Add a `divn`?
-2. **`sel` reads `rd`.** Four register reads per instruction is costly
-   in hardware. The alternative is a zero middle case, which breaks the
-   `min`/`max` idiom.
-3. **Trap delegation.** How traps reach ring 0 without a duplicate set
-   of CSRs per ring.
-4. **`br3` reach.** Eight-trit offsets (±3,280 instructions) suit local
-   dispatch. Is that enough, or should one offset be longer than the
-   other?
-5. **Compressed instructions.** A 9-trit or 18-trit short form, the way
+The emulator's platform description will fix the MMIO devices: a
+console, an interrupt controller, a block device and a way to signal
+other harts, all at negative page numbers.
+
+## 13. Open questions
+
+1. **Word width.** 27 trits gives about 43 bits of address. A 36-trit
+   word (57 bits) would match modern 64-bit address spaces at the cost
+   of the power-of-three sizes.
+2. **`fcmp` unordered result.** 3 is clean for equality tests and
+   awkward for `br3`.
+3. **`br3` reach.** Eight-trit offsets (±3,280 instructions) suit local
+   dispatch; one longer offset may be worth more.
+4. **Compressed instructions.** A 9-trit or 18-trit short form, as
    RISC-V has its C extension.
-6. **Binary interoperability.** See section 12.
-
-## 12. Living with binary
-
-Files, networks and every peripheral are binary. Some options to settle
-before the emulator does real I/O:
-
-- Pack 5 trits into a byte (3⁵ = 243 ≤ 256) for storage and transport.
-- Give devices a binary data path and convert at the boundary, with
-  conversion instructions or a conversion unit.
-- Define how a binary byte stream maps to trytes for things like file
-  reads (one byte per tryte is simple and wastes about 44%).
+5. **Formal memory model.** An axiomatic definition, before multiple
+   harts are emulated.
+6. **Hypervisor support.** Ring +1 can host a hypervisor only by
+   trap-and-emulate. Two-stage translation would need another
+   `ptbr`-like CSR.
+7. **Debug.** Hardware breakpoints and watchpoints beyond `brk`.
