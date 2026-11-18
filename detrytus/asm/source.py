@@ -30,6 +30,7 @@ class Statement:
     addr: int = 0
     size: int = 0  # words, or trytes for tryte data
     kind: str = "word"  # 'word', 'tryte', or 'none'
+    shift: int = 0  # load address minus run address, from its section
 
 
 def strip_comment(line: str) -> str:

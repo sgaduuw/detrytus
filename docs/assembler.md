@@ -53,8 +53,9 @@ reset address.
 | `.string "..."` | one code point per tryte, then a 0 tryte |
 | `.ascii "..."` | the same without the terminator |
 | `.zero N` | N zero trytes |
+| `.words N` | N zero words, word aligned: a label on it names the first word's centre |
 | `.equ NAME, E` / `.set` | define a constant |
-| `.section NAME[, ADDR]` | switch sections (below) |
+| `.section NAME[, LOAD[, RUN]]` | switch sections (below) |
 | `.include "PATH"` | assemble another file here (below) |
 
 String escapes: `\n`, `\t`, `\0`, `\\`, `\"`. Code points above 9,841
@@ -93,7 +94,26 @@ greeting: .string "hello"
 ```
 
 Like `.org`, a section address names where the next word is centred, so
-tryte data placed there starts one tryte below it. A label written
+tryte data placed there starts one tryte below it.
+
+### Running somewhere other than where it loads
+
+`.section NAME, LOAD, RUN` puts the section's trytes into the image at
+`LOAD`, but lays it out at `RUN`: labels, branch offsets and `la` all use
+the run address, the one the code executes at once paging maps it there.
+A kernel loaded into physical memory and run at a virtual address gets
+virtual labels this way, so `li label` and the debugger work in its own
+terms:
+
+```asm
+        .section kernel, 1 * 19683, -3 * 19683   # load at page 1, run at page -3
+kentry: ...
+```
+
+The two addresses must differ by a multiple of 3, so words are aligned in
+both. `.org` and `.align` inside the section use run addresses. Overlaps
+are checked where trytes load. The listing shows both addresses as
+`RUN@LOAD` for such a section. A label written
 before a `.section` line names the end of the section being left.
 Sections do not move to make room for each other: give them addresses
 that keep them apart, or the assembler reports the overlap.

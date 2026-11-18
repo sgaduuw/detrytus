@@ -45,7 +45,7 @@ start:
         csrw  ptbr, t0
         la    t0, trap
         csrw  mtvec, t0
-        li    t0, PAGE                   # user entry: centre of virtual page 1
+        li    t0, user                   # a virtual address: see .section below
         csrw  mtpc, t0
         li    t0, -1                     # tret drops to ring -1
         csrw  mtstatus, t0
@@ -77,7 +77,9 @@ back:   .string "firmware: system call from ring -1\n"
 
 # --- the user program: ring -1, virtual page 1 -------------------------------
 
-        .org  USER_PAGE * PAGE
+        # Loaded into physical page 5, run at virtual page 1: labels below
+        # are virtual addresses, as the program sees them.
+        .section user, USER_PAGE * PAGE, PAGE
 user:
         la    t0, hello                  # pc-relative, so virtual addresses
         li    t1, 2 * PAGE               # the console, as this program sees it

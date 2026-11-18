@@ -169,9 +169,9 @@ def test_peek_has_no_side_effects_on_devices():
 def test_inspection_follows_the_programs_page_table():
     src = (EXAMPLES / "paging.s").read_text()
     dbg = Debugger(assemble(src))
-    # The user program is assembled at physical page 5 and runs at virtual
-    # page 1, so its labels are 4 pages above the addresses it runs at.
-    dbg.add_breakpoint("next - 4 * 19683")
+    # The user program is loaded at physical page 5 and runs at virtual
+    # page 1; its section's run address makes its labels virtual.
+    dbg.add_breakpoint("next")
     assert dbg.cont().reason == "breakpoint"
     assert dbg.hart.ring == -1  # precondition: translated, in user code
     tlb_before = dict(dbg.hart.mmu.tlb)
