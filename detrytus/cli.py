@@ -6,6 +6,7 @@ import sys
 from detrytus import __version__
 from detrytus.asm import AsmError, assemble
 from detrytus.cpu import Hart
+from detrytus.debug import Debugger, DebugShell
 from detrytus.disasm import disassemble
 from detrytus.isa import Decoded
 from detrytus.machine import Machine, StepLimit
@@ -69,6 +70,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+def cmd_debug(args: argparse.Namespace) -> int:
+    image = assemble(_read(args.file))
+
+    def out(ch: str) -> None:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+
+    shell = DebugShell(Debugger(image, ram_pages=args.ram_pages, out=out))
+    for expr in args.break_at:
+        shell.onecmd(f"break {expr}")
+    if args.commands:
+        with open(args.commands, encoding="utf-8") as f:
+            for line in f:
+                if shell.onecmd(shell.precmd(line.rstrip("\n"))):
+                    return 0
+    if args.batch:
+        return 0
+    shell.say(shell.intro)
+    shell.show_current()
+    shell.cmdloop(intro="")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="detrytus", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -85,6 +109,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--trace", action="store_true", help="print each instruction")
     p.add_argument("--stats", action="store_true", help="print the step count")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("debug", help="assemble a program and debug it interactively")
+    p.add_argument("file", help="assembly source")
+    p.add_argument("--ram-pages", type=int, default=729)
+    p.add_argument(
+        "-b",
+        "--break",
+        dest="break_at",
+        action="append",
+        default=[],
+        metavar="ADDR",
+        help="set a breakpoint before starting (repeatable)",
+    )
+    p.add_argument(
+        "-x", "--commands", metavar="FILE", help="run debugger commands from FILE first"
+    )
+    p.add_argument("--batch", action="store_true", help="exit after the -x commands")
+    p.set_defaults(func=cmd_debug)
 
     args = parser.parse_args(argv)
     try:

@@ -50,6 +50,7 @@ stays out of your diff.
 | `docs/isa.md` | the specification |
 | `docs/assembler.md` | assembler syntax |
 | `docs/platform.md` | the emulated memory map and devices |
+| `docs/debugger.md` | the debugger's commands |
 | `detrytus/trits.py` | balanced-ternary arithmetic on Python ints |
 | `detrytus/isa.py` | the instruction set as data: opcodes, formats, CSRs, encode and decode |
 | `detrytus/alu.py` | integer and tritwise operations as pure functions |
@@ -62,6 +63,7 @@ stays out of your diff.
 | `detrytus/expr.py` | assembler expressions |
 | `detrytus/asm/` | the assembler: `source`, `operands`, `pseudo`, `core` |
 | `detrytus/disasm.py` | the disassembler |
+| `detrytus/debug/` | the debugger: `engine` (run control, inspection), `shell` (commands) |
 | `detrytus/cli.py` | the `detrytus` command |
 | `examples/` | runnable assembly programs |
 

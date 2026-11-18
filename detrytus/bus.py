@@ -76,6 +76,14 @@ class Bus:
             raise BusFault(addr, kind)
         return device
 
+    def peek(self, addr: int, width: int) -> int | None:
+        """Read memory for a debugger: None for devices, whose reads can
+        have side effects, and for addresses with nothing behind them."""
+        try:
+            return self.read(addr, width, "walk")  # "walk" refuses devices
+        except BusFault:
+            return None
+
     def read(self, addr: int, width: int, kind: str = "load") -> int:
         """Read a tryte (width 1) or a word (width 3) centred on addr.
 

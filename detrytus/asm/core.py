@@ -43,6 +43,7 @@ class Image:
     trytes: dict[int, int] = field(default_factory=dict)
     symbols: dict[str, int] = field(default_factory=dict)
     listing: list[Listing] = field(default_factory=list)
+    labels: dict[str, int] = field(default_factory=dict)  # addresses, not .equ
 
 
 def _next_centre(loc: int, unit: int) -> int:
@@ -104,6 +105,7 @@ class Assembler:
         for s in self._pending:
             for label in s.labels:
                 self._define(label, addr, s)
+                self.image.labels[label] = addr
         self._pending.clear()
 
     def _define(self, name: str, value: int, s: Statement) -> None:
