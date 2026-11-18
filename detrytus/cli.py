@@ -4,7 +4,8 @@ import argparse
 import sys
 
 from detrytus import __version__
-from detrytus.asm import AsmError, assemble
+from detrytus import image as images
+from detrytus.asm import AsmError, Image, assemble, assemble_file
 from detrytus.cpu import Hart
 from detrytus.debug import Debugger, DebugShell
 from detrytus.disasm import disassemble
@@ -14,15 +15,25 @@ from detrytus.trap import UnhandledTrap
 from detrytus.trits import format_trits
 
 
-def _read(path: str) -> str:
+def _load_one(path: str) -> Image:
+    """An assembly source file, an image file, or - for source on stdin."""
     if path == "-":
-        return sys.stdin.read()
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+        return assemble(sys.stdin.read(), "<stdin>")
+    if images.is_image(path):
+        return images.read(path)
+    return assemble_file(path)
+
+
+def _load(paths: list[str]) -> Image:
+    return images.merge([_load_one(p) for p in paths])
 
 
 def cmd_asm(args: argparse.Namespace) -> int:
-    image = assemble(_read(args.file))
+    image = _load_one(args.file)
+    if args.output:
+        images.write(image, args.output)
+        if not args.listing:
+            return 0
     for e in image.listing:
         if e.word is None:
             print(f"{e.addr:>14}  {'':27}  {'':28}  {e.source.strip()}")
@@ -34,7 +45,7 @@ def cmd_asm(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    image = assemble(_read(args.file))
+    image = _load(args.files)
 
     def out(ch: str) -> None:
         sys.stdout.write(ch)
@@ -71,7 +82,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_debug(args: argparse.Namespace) -> int:
-    image = assemble(_read(args.file))
+    image = _load(args.files)
 
     def out(ch: str) -> None:
         sys.stdout.write(ch)
@@ -98,12 +109,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("asm", help="assemble a file and print its listing")
+    p = sub.add_parser(
+        "asm", help="assemble a file: print its listing or write an image"
+    )
     p.add_argument("file", help="assembly source, or - for stdin")
+    p.add_argument(
+        "-o", "--output", metavar="FILE", help="write the image to FILE (.dti)"
+    )
+    p.add_argument(
+        "--listing", action="store_true", help="print the listing even with -o"
+    )
     p.set_defaults(func=cmd_asm)
 
     p = sub.add_parser("run", help="assemble and run a program until it powers off")
-    p.add_argument("file", help="assembly source, or - for stdin")
+    p.add_argument(
+        "files",
+        nargs="+",
+        metavar="FILE",
+        help="assembly sources or .dti images, loaded together; - for stdin",
+    )
     p.add_argument("--max-steps", type=int, default=10_000_000)
     p.add_argument("--ram-pages", type=int, default=729)
     p.add_argument("--trace", action="store_true", help="print each instruction")
@@ -111,7 +135,12 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("debug", help="assemble a program and debug it interactively")
-    p.add_argument("file", help="assembly source")
+    p.add_argument(
+        "files",
+        nargs="+",
+        metavar="FILE",
+        help="assembly sources or .dti images, loaded together",
+    )
     p.add_argument("--ram-pages", type=int, default=729)
     p.add_argument(
         "-b",
@@ -132,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         status: int = args.func(args)
         return status
-    except AsmError as e:
+    except (AsmError, images.ImageError) as e:
         print(f"detrytus: {e}", file=sys.stderr)
         return 65
     except OSError as e:

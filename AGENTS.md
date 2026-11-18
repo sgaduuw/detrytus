@@ -61,7 +61,8 @@ stays out of your diff.
 | `detrytus/bus.py`, `devices.py` | physical memory, device routing, devices |
 | `detrytus/machine.py` | the platform wired together |
 | `detrytus/expr.py` | assembler expressions |
-| `detrytus/asm/` | the assembler: `source`, `operands`, `pseudo`, `core` |
+| `detrytus/asm/` | the assembler: `source`, `operands`, `pseudo`, `core`, `errors` |
+| `detrytus/image.py` | the `.dti` image format and merging images |
 | `detrytus/disasm.py` | the disassembler |
 | `detrytus/debug/` | the debugger: `engine` (run control, inspection), `shell` (commands) |
 | `detrytus/cli.py` | the `detrytus` command |
