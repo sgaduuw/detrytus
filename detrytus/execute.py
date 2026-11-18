@@ -151,10 +151,8 @@ def _amo_addr(h: Hart, d: isa.Decoded) -> int:
 
 def _amo(update: Binary) -> Handler:
     def run(h: Hart, d: isa.Decoded) -> None:
-        addr = _amo_addr(h, d)
-        old = h.load(addr, 3)
-        h.store(addr, 3, update(old, h.x(d.rs2)))
-        h.set_x(d.rd, old)
+        src = h.x(d.rs2)
+        h.set_x(d.rd, h.rmw(_amo_addr(h, d), lambda old: update(old, src)))
 
     return run
 
@@ -179,11 +177,10 @@ def sc(h: Hart, d: isa.Decoded) -> None:
 
 
 def cas(h: Hart, d: isa.Decoded) -> None:
-    addr = _amo_addr(h, d)
-    old = h.load(addr, 3)
-    if old == h.x(d.rd):
-        h.store(addr, 3, h.x(d.rs2))
-    h.set_x(d.rd, old)
+    expected, new = h.x(d.rd), h.x(d.rs2)
+    # A failed compare writes the old value back: it still needs write
+    # permission, as a store would, and leaves memory unchanged.
+    h.set_x(d.rd, h.rmw(_amo_addr(h, d), lambda old: new if old == expected else old))
 
 
 # --- control transfer --------------------------------------------------------
@@ -249,6 +246,13 @@ def tret(h: Hart, d: isa.Decoded) -> None:
     h.next_pc = bank[isa.TPC]
 
 
+def fence_vm(h: Hart, d: isa.Decoded) -> None:
+    _privileged(h, d)
+    va = h.x(d.rs1) if d.rs1 else None
+    asid = h.x(d.rs2) if d.rs2 else None
+    h.mmu.fence(va, asid)
+
+
 def _csr(combine: Binary | None) -> Handler:
     def run(h: Hart, d: isa.Decoded) -> None:
         number = low(d.imm, 9)
@@ -306,7 +310,7 @@ HANDLERS: dict[str, Handler] = {
     "csrrtmin": _csr(lambda old, src: alu.tlut(old, src, isa.TABLES["tmin"])),
     "fence": _nothing,
     "fence.i": _nothing,
-    "fence.vm": _privileged,
+    "fence.vm": fence_vm,
     "wfi": wfi,
     "cclean": _nothing,
     "cflush": _nothing,

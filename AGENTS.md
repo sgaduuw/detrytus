@@ -55,6 +55,7 @@ stays out of your diff.
 | `detrytus/alu.py` | integer and tritwise operations as pure functions |
 | `detrytus/execute.py` | what each instruction does: one handler per mnemonic |
 | `detrytus/trap.py` | the exceptions that carry traps |
+| `detrytus/mmu.py` | paged virtual memory: the walk, permission checks, the TLB |
 | `detrytus/cpu.py` | one hart: fetch loop, traps, interrupts, CSRs |
 | `detrytus/bus.py`, `devices.py` | physical memory, device routing, devices |
 | `detrytus/machine.py` | the platform wired together |
