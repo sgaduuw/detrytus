@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.2, **draft**. Everything here may change until the emulator
+Version 0.3, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -98,8 +98,9 @@ Integers and floats share this register file. There is no separate
 floating-point register file, which keeps context switches small: a
 microkernel saves 26 words and `pc`, nothing more.
 
-The program counter `pc` is a separate word register and always holds a
-multiple of 3.
+The program counter `pc` is a separate word register. It holds a
+multiple of 3, or one more than a multiple of 3 when it points at the
+second slot of a compressed bundle (6.1).
 
 ### 4.2 Calling convention
 
@@ -123,7 +124,10 @@ false, and `0` where a three-valued result needs "unknown".
 ### 5.1 Addressing
 
 Memory is tryte-addressable. An address is a word, so addresses are
-signed and the address space runs from −H27 to +H27, centred on 0.
+signed and run from −H27 to +H27, centred on 0. Address arithmetic wraps
+like all integer arithmetic, so the address space is a ring of 3²⁷
+trytes: one step past +H27 is −H27, and no address is the first or the
+last.
 
 ### 5.2 Centred layout
 
@@ -144,10 +148,19 @@ trits of any address are a signed offset from the nearest multiple of
 an adjustment on every translation, and the last word of a page would
 straddle the next one.
 
-A word is stored low trits first: tryte `a−1` holds trits 8..0, `a`
-holds 17..9, and `a+1` holds 26..18. A misaligned word access traps
-(cause +2). Instructions are words, so `pc` is always aligned and branch
-offsets count instructions.
+Centring and the ring fit together. Because 3²⁷ is a multiple of every
+unit size, centred units tile the ring exactly and none of them
+straddles the seam between +H27 and −H27. Under a start-based layout the
+word at the highest aligned address, H27 − 1, would cover H27 − 1 and
+H27 and then wrap round to −H27.
+
+Centring decides which trytes make up a unit; byte order decides their
+order inside it. A word is stored low trits first: tryte `a−1` holds
+trits 8..0, `a` holds 17..9, and `a+1` holds 26..18. Significance grows
+with address, the ternary form of little-endian.
+
+A misaligned word access traps (cause +2). Branch targets are always
+aligned words, and branch offsets count words.
 
 ### 5.3 Physical address map
 
@@ -173,16 +186,55 @@ that runs into zeroed memory traps instead of sliding.
 
 ### 5.5 Memory model
 
-The memory model is weak, in the style of RISC-V's RVWMO:
+The memory model is weak, modelled on RISC-V's RVWMO and simplified
+where RVWMO's extra freedom buys little: loads from the same address are
+always ordered, and only three plain kinds of dependency carry order.
 
-- A single hart always observes its own accesses in program order.
-- Between harts, accesses to RAM are ordered only by `fence` and by the
-  acquire/release annotations on atomics (7.9).
-- An aligned word access is single-copy atomic.
-- MMIO accesses are not reordered against each other and are never
-  cached or speculated.
+**Definitions.** A memory operation is a load, a store, or both at once
+(an AMO, or an `sc` that succeeds), on a set of trytes. Program order is
+the order of one hart's operations. An execution is legal when a
+**global memory order** exists: one total order over every memory
+operation of every hart, satisfying the rules below.
 
-A precise axiomatic model is open question 5.
+**Preserved program order.** If `a` comes before `b` in program order,
+`a` also comes before `b` in the global memory order when any of these
+holds:
+
+1. **Same address:** `a` and `b` share a tryte, and `b` is a store, or
+   both are loads.
+2. **Fence:** a `fence` lies between them, with `a` in its `pred` set
+   and `b` in its `succ` set.
+3. **Acquire:** `a` carries `aq`.
+4. **Release:** `b` carries `rl`.
+5. **Release then acquire:** `a` carries `rl` and `b` carries `aq`, which
+   makes annotated operations sequentially consistent with each other.
+6. **Reservation:** `a` is an `lr` and `b` is the `sc` paired with it.
+7. **Dependency:** `b`'s address is computed from the value `a`
+   loaded; or `b` is a store whose data is computed from it; or `b` is
+   a store after a branch whose condition is computed from it.
+8. **Device order:** `a` and `b` both access MMIO.
+
+**Axioms.**
+
+- **Load value.** A load of a tryte returns the value written by the
+  latest store to that tryte, taking the latest in global memory order
+  among the stores that precede the load in global memory order or in
+  its own hart's program order. A hart therefore sees its own stores at
+  once, and other harts see a store at a single point. With no such
+  store the value is 0.
+- **Atomicity.** An AMO is a single operation. For an `sc` that
+  succeeds, no store from another hart to the reserved word falls
+  between the `lr` and the `sc` in global memory order.
+- **Progress.** No store is delayed forever: each one precedes all but
+  finitely many operations in global memory order.
+
+Aligned words and single trytes are single-copy atomic. Instruction
+fetch and page-table walks are separate observers: they are guaranteed
+to see earlier stores only after `fence.i` and `fence.vm` respectively.
+
+Sequential consistency is one legal outcome, so an emulator that runs
+harts one instruction at a time with no store buffering conforms
+without further work.
 
 ## 6. Instruction encoding
 
@@ -221,6 +273,53 @@ encoding space free for later extensions.
 
 Branch and jump targets are `pc + 3 × off`, relative to the address of
 the branch itself.
+
+### 6.1 Compressed bundles
+
+A word whose opcode is +121 (`0t+++++`) is a **bundle**: two 11-trit
+compressed instructions in place of one full instruction. Slot A is
+trits 15..5 and runs first; slot B is trits 26..16. Every compressed
+instruction expands to exactly one full instruction, so bundles add
+density, not behaviour, and a decoder expands them before execution.
+
+A compressed register field is 3 trits, so it reaches all 27 registers.
+RISC-V's compressed forms reach only 8.
+
+**Addressing.** Slot A's `pc` is the bundle's address `a`; slot B's is
+`a + 1`. This uses the low trit of `pc`, which full instructions leave
+at 0: `+` names slot B, and `-` is reserved. After slot B, execution
+continues at `a + 3`. A taken branch in slot A skips slot B. Branch and
+jump targets are always word addresses; slot B is entered only by
+falling through, by `jalr` to a saved return address, or by `tret` after
+a trap in slot B. An unused slot holds `c.nop`. Compressed branch
+offsets are relative to the bundle's address, whichever slot holds them.
+
+```
+trit:  10 9 | 8   6 | 5   3 | 2   0
+CR     f[2] | rs    | rd    | op
+CI     imm[5]       | rd    | op       imm: ±121
+CJ     off[8]               | op       off: ±3,280 words
+```
+
+| Op | Format | Compressed | Expands to |
+|----|--------|-----------|------------|
+| 0  |    | (illegal; an all-zero slot traps) | |
+| 1  | CR | `c.mv` (f 0), `c.add` (+1), `c.sub` (−1), `c.cmp` (+2), `c.mul` (−2), `c.min` (+3), `c.max` (−3), `c.tmin` (+4), `c.tmax` (−4) `rd, rs` | `addi rd, rs, 0`; otherwise the op as `rd = rd op rs` |
+| 2  | CR | `c.lw` (f 0), `c.sw` (+1), `c.lt` (−1), `c.st` (+2) `rd, (rs)` | `lw rd, 0(rs)` etc.; for stores `rd` is the source |
+| 3  | CR | `c.jr rs` (f 0), `c.jalr rs` (+1) | `jalr r0, 0(rs)`; `jalr ra, 0(rs)` |
+| 4  | CI | `c.addi rd, imm` | `addi rd, rd, imm`; with `rd = r0` and `imm = 0` this is `c.nop` |
+| 5  | CI | `c.li rd, imm` | `addi rd, r0, imm` |
+| 6  | CI | `c.shi rd, imm` | `shi rd, rd, imm` |
+| 7  | CI | `c.cmpi rd, imm` | `cmpi rd, rd, imm` |
+| 8  | CI | `c.lwsp rd, imm` | `lw rd, 3·imm(sp)` |
+| 9  | CI | `c.swsp rd, imm` | `sw rd, 3·imm(sp)` |
+| 10 | CI | `c.beqz rd, imm` | `beq rd, r0, imm` |
+| 11 | CI | `c.bnez rd, imm` | `bne rd, r0, imm` |
+| 12 | CJ | `c.j off` | `jal r0, off` |
+
+`c.jr ra` is `ret`. Unlisted opcodes and `f` values are reserved.
+Which instructions deserve a slot should be revisited once the
+emulator can count instruction frequencies in real code.
 
 ## 7. Instructions
 
@@ -404,7 +503,7 @@ unsigned variants. `cas` reads its expected value from `rd` (as x86's
 | Op  | Mnemonic | Format | Semantics |
 |-----|----------|--------|-----------|
 | −10 | `jal rd, label`           | J | `rd = pc + 3`; `pc = pc + 3 × off` |
-| −11 | `jalr rd, imm(rs1)`       | I | `rd = pc + 3`; `pc = rs1 + imm`, which must be aligned |
+| −11 | `jalr rd, imm(rs1)`       | I | `rd = pc + 3`; `pc = rs1 + imm`, which must be aligned or name a slot B |
 | −12 | `b<cond> rs1, rs2, label` | B | if `cmp(rs1, rs2)` satisfies `cond`, `pc = pc + 3 × off` |
 | −13 | `br3 rs1, Lneg, Lpos`     | T | `rs1 < 0`: `pc += 3 × offN`; `rs1 > 0`: `pc += 3 × offP`; `rs1 = 0`: fall through |
 
@@ -445,10 +544,13 @@ through a `jal` trampoline.
 | 45 | `fma rd, rs1, rs2, rs3`   | `rs1 × rs2 + rs3`, rounded once |
 | 46 | `fmin rd, rs1, rs2`       | minimum; a NaN operand is ignored |
 | 47 | `fmax rd, rs1, rs2`       | maximum; a NaN operand is ignored |
-| 48 | `fcmp rd, rs1, rs2`       | −1, 0 or +1, or 3 if unordered (below) |
+| 48 | `fcmp rd, rs1, rs2`       | three-way compare in total order, NaNs included |
 | 49 | `fclass rd, rs1`          | class code (below) |
 | 50 | `fcvt.f.i rd, rs1`        | integer to float |
 | 51 | `fcvt.i.f rd, rs1`        | float to integer; out of range saturates, NaN gives 0 |
+| 52 | `feq rd, rs1, rs2`        | `rs1 = rs2`: `+` true, `-` false, `0` if unordered |
+| 53 | `flt rd, rs1, rs2`        | `rs1 < rs2`: `+` true, `-` false, `0` if unordered |
+| 54 | `fle rd, rs1, rs2`        | `rs1 ≤ rs2`: `+` true, `-` false, `0` if unordered |
 
 Arithmetic and conversion instructions take a rounding mode in
 `fn[1:0]`: 0 nearest, +1 toward +∞, −1 toward −∞, +3 toward zero, −3
@@ -477,10 +579,22 @@ add, subtract, multiply or `fma`, which always has a finite expansion,
 never ties. Only `fdiv` and `fsqrt` can, and they break ties toward
 zero.
 
-**`fcmp`.** An ordered compare yields the usual trit. An unordered one
-(a NaN operand) yields 3, which is trit 1 set: it equals none of −1, 0
-and +1, so `beq`/`bne` against constants test correctly, but `br3` on
-the result needs an unordered check first.
+**Comparisons.** IEEE 754 defines four relations between floats (less,
+equal, greater, unordered) and a trit holds three. The two questions
+programs actually ask each fit a trit:
+
+- `feq`, `flt` and `fle` are predicates returning `+` true, `-` false,
+  and `0` when an operand is NaN. Unordered is Kleene's unknown, so the
+  predicates combine correctly under `tmin`/`tmax`, and C maps exactly:
+  `if (a < b)` is `flt` then a branch when the result is above 0, and
+  `if (!(a < b))` branches when it is 0 or below, which IEEE requires to
+  be taken for NaN. `flt` and `fle` raise the invalid flag on a NaN;
+  `feq` does not.
+- `fcmp` is the three-way compare for sorting and searching. It uses the
+  IEEE 754 total order adapted to this format: NaNs with a negative
+  significand sort below −∞, other NaNs above +∞, and NaNs among
+  themselves by significand. It raises no flags and always returns −1,
+  0 or +1, so `br3` takes its result directly.
 
 **`fclass`.** Returns one of: −4 −∞, −3 negative normal, −2 negative
 subnormal, 0 zero, +2 positive subnormal, +3 positive normal, +4 +∞,
@@ -605,6 +719,7 @@ Other CSRs:
 | 1    | `IE`  | interrupts for this ring: `+` enabled, `-` disabled |
 | 2    | `PIE` | `IE` before the last trap |
 | 3    | `SUA` | ring 0 bank only: `+` lets the kernel access user pages |
+| 4    | `SS`  | single step: `+` makes `tret` run one instruction, then trap with cause +9 |
 
 `tvec` trit 0 selects the mode, and the rest is the handler address
 with that trit taken as 0:
@@ -661,6 +776,31 @@ RISC-V gives the top bit of `mcause`.
 | −1 | timer interrupt |
 | −2 | external interrupt |
 | −3 | software interrupt (interprocessor signal) |
+| +9 | single step |
+
+### 8.6 Debug
+
+The kernel can debug programs, and firmware can debug the kernel, with
+**triggers**: nine pairs of ring 0 CSRs, `tdaddr0`..`tdaddr8`
+(2207..2215) and `tdctl0`..`tdctl8` (2217..2225).
+
+| `tdctl` trit | Meaning |
+|--------------|---------|
+| 0 | `+`: match instruction fetch |
+| 1 | `+`: match loads |
+| 2 | `+`: match stores |
+| 3 | `+`: match in ring −1 |
+| 4 | `+`: match in ring 0 |
+| 5 | match size: `0` the tryte, `+` the aligned word, `-` the page |
+| 6 | action: `0` off, `+` breakpoint trap, `-` reserved for an external debugger |
+
+A matching fetch traps before the instruction runs, and a matching load
+or store traps before the access, with cause +5 and the address in
+`tval`. Together with `SS` (8.2) this is what a debugger needs:
+breakpoints without rewriting code, watchpoints, and stepping.
+
+The emulator has its own debugger as well, outside the machine, which
+needs none of this.
 
 ## 9. Virtual memory
 
@@ -797,18 +937,9 @@ other harts, all at negative page numbers.
 
 ## 13. Open questions
 
-1. **Word width.** 27 trits gives about 43 bits of address. A 36-trit
-   word (57 bits) would match modern 64-bit address spaces at the cost
-   of the power-of-three sizes.
-2. **`fcmp` unordered result.** 3 is clean for equality tests and
-   awkward for `br3`.
-3. **`br3` reach.** Eight-trit offsets (±3,280 instructions) suit local
+1. **`br3` reach.** Eight-trit offsets (±3,280 words) suit local
    dispatch; one longer offset may be worth more.
-4. **Compressed instructions.** A 9-trit or 18-trit short form, as
-   RISC-V has its C extension.
-5. **Formal memory model.** An axiomatic definition, before multiple
-   harts are emulated.
-6. **Hypervisor support.** Ring +1 can host a hypervisor only by
-   trap-and-emulate. Two-stage translation would need another
-   `ptbr`-like CSR.
-7. **Debug.** Hardware breakpoints and watchpoints beyond `brk`.
+2. **Compressed coverage.** The slot assignments in 6.1 are a first
+   guess, to be revisited against measured instruction frequencies.
+3. **Hypervisor support.** Whether ring +1 should grow two-stage
+   translation so detrytus can host detrytus guests.
