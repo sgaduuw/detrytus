@@ -6,7 +6,7 @@ Number forms: decimal (42), balanced ternary (0t+0-), hexadecimal
 
 import re
 
-from .trits import parse_trits
+from detrytus.trits import parse_trits
 
 
 class ExprError(ValueError):

@@ -3,8 +3,7 @@ import pytest
 from detrytus import isa as I
 from detrytus.cpu import UnhandledTrap
 from detrytus.trits import WORD_MAX, parse_trits, wrap
-
-from .helpers import HALT, result_of, run
+from tests.helpers import HALT, result_of, run
 
 
 @pytest.mark.parametrize(

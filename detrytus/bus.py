@@ -7,7 +7,7 @@ with no attribute table.
 
 from typing import Protocol
 
-from .trits import TRYTE_TRITS, low, split_high
+from detrytus.trits import TRYTE_TRITS, low, split_high
 
 PAGE_TRITS = 9
 

@@ -8,7 +8,7 @@ two agree.
 
 from dataclasses import dataclass
 
-from .trits import field, half, low
+from detrytus.trits import field, half, low
 
 # --- registers ---------------------------------------------------------------
 

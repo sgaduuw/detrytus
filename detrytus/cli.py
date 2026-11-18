@@ -3,13 +3,13 @@
 import argparse
 import sys
 
-from . import __version__
-from .asm import AsmError, assemble
-from .cpu import Hart, UnhandledTrap
-from .disasm import disassemble
-from .isa import Decoded
-from .machine import Machine, StepLimit
-from .trits import format_trits
+from detrytus import __version__
+from detrytus.asm import AsmError, assemble
+from detrytus.cpu import Hart, UnhandledTrap
+from detrytus.disasm import disassemble
+from detrytus.isa import Decoded
+from detrytus.machine import Machine, StepLimit
+from detrytus.trits import format_trits
 
 
 def _read(path: str) -> str:

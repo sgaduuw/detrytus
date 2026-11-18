@@ -3,10 +3,10 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .asm import Image
-from .bus import Bus
-from .cpu import Hart
-from .devices import CONSOLE_PAGE, POWER_PAGE, Console, Halt, PowerControl
+from detrytus.asm import Image
+from detrytus.bus import Bus
+from detrytus.cpu import Hart
+from detrytus.devices import CONSOLE_PAGE, POWER_PAGE, Console, Halt, PowerControl
 
 
 class StepLimit(Exception):

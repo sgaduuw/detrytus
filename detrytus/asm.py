@@ -9,9 +9,10 @@ size in pass one, taking the long form when the value is not yet known.
 import re
 from dataclasses import dataclass, field
 
-from . import isa as I
-from .expr import ExprError, Undefined, evaluate
-from .trits import TRYTE_MAX, WORD_MAX, half, low, split_high
+from detrytus import isa as I
+from detrytus.disasm import disassemble
+from detrytus.expr import ExprError, Undefined, evaluate
+from detrytus.trits import TRYTE_MAX, WORD_MAX, half, low, split_high
 
 
 class AsmError(Exception):
@@ -496,8 +497,6 @@ def assemble(source: str) -> Image:
     asm.layout(stmts)
     asm.emit(stmts)
     asm.image.symbols = dict(asm.symbols)
-    from .disasm import disassemble
-
     for entry in asm.image.listing:
         if entry.word is not None:
             entry.text = disassemble(entry.word, entry.addr)

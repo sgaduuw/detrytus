@@ -10,10 +10,10 @@ NotImplementedError rather than silently misbehaving.
 import os
 from collections.abc import Callable
 
-from . import alu
-from . import isa as I
-from .bus import Bus, BusFault
-from .trits import WORD_TRITS, field, low, sign, wrap
+from detrytus import alu
+from detrytus import isa as I
+from detrytus.bus import Bus, BusFault
+from detrytus.trits import WORD_TRITS, field, low, sign, wrap
 
 # Bank indices (8.2)
 TSTATUS, TVEC, TPC, TCAUSE, TVAL, SCRATCH, IE, IP, TIMECMP = range(9)

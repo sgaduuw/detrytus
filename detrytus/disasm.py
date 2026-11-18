@@ -1,7 +1,7 @@
 """Disassembler: one instruction word back to assembly text."""
 
-from . import isa as I
-from .trits import field, low
+from detrytus import isa as I
+from detrytus.trits import field, low
 
 _HINT_B = {1: ".likely", -1: ".unlikely", 0: ""}
 _HINT_T = {-1: ".n", 0: ".z", 1: ".p"}

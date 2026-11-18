@@ -4,8 +4,17 @@ Each function implements one rule of docs/isa.md section 7 and returns
 a value already reduced into word range.
 """
 
-from .trits import WORD_MOD, WORD_TRITS, field, from_trits, low, sign, split_high, wrap
-from .trits import to_trits as _to_trits
+from detrytus.trits import (
+    WORD_MOD,
+    WORD_TRITS,
+    field,
+    from_trits,
+    low,
+    sign,
+    split_high,
+    wrap,
+)
+from detrytus.trits import to_trits as _to_trits
 
 
 def mul_parts(a: int, b: int) -> tuple[int, int]:
