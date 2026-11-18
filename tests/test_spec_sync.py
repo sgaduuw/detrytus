@@ -8,7 +8,7 @@ test parses the spec's tables and compares them with the code.
 import re
 from pathlib import Path
 
-from detrytus import isa as I
+from detrytus import isa
 
 MINUS = "\u2212"  # the spec writes negative numbers with a true minus sign
 SPEC = (Path(__file__).parent.parent / "docs" / "isa.md").read_text(encoding="utf-8")
@@ -22,7 +22,7 @@ def spec_opcodes() -> dict[str, int]:
     end = SPEC.index("### 7.13")
     found = {}
     for value, name in ROW.findall(SPEC[start:end]):
-        if name[0] == "b" and name[1:] in I.CONDS:
+        if name[0] == "b" and name[1:] in isa.CONDS:
             continue  # the branch-condition table, not opcodes
         found[name] = int(value.replace(MINUS, "-"))
     return found
@@ -31,7 +31,7 @@ def spec_opcodes() -> dict[str, int]:
 def test_every_spec_instruction_matches_the_code():
     spec = spec_opcodes()
     spec.pop("b", None)
-    code = {n: op.opcode for n, op in I.OPS.items()}
+    code = {n: op.opcode for n, op in isa.OPS.items()}
     # The branch row is written b<cond>, so the regex cannot see it.
     code.pop("b")
     float_ops = {n for n, v in spec.items() if 40 <= v <= 54 and n.startswith("f")}
@@ -43,11 +43,11 @@ def test_every_spec_instruction_matches_the_code():
 
 def test_branch_opcode_matches():
     assert f"| {MINUS}12 | `b<cond> rs1, rs2, label` |" in SPEC
-    assert I.OPS["b"].opcode == -12
+    assert isa.OPS["b"].opcode == -12
 
 
 def test_tlut_table_values_match_the_spec():
-    for name, value in I.TABLES.items():
+    for name, value in isa.TABLES.items():
         if name == "tabs":
             assert f"`tabs` ({value})" in SPEC
         else:
@@ -68,5 +68,5 @@ def test_csr_numbers_match_the_spec():
         "instret",
         "fcsr",
     ):
-        number = str(I.CSRS[name]).replace("-", MINUS)
+        number = str(isa.CSRS[name]).replace("-", MINUS)
         assert re.search(rf"\| `{name}`\s*\|\s*{number}\s*\|", SPEC), name

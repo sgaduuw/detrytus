@@ -1,7 +1,7 @@
 import pytest
 
-from detrytus import isa as I
-from detrytus.cpu import UnhandledTrap
+from detrytus import isa
+from detrytus.trap import UnhandledTrap
 from detrytus.trits import WORD_MAX, parse_trits, wrap
 from tests.helpers import HALT, result_of, run
 
@@ -178,7 +178,7 @@ HANDLER = """
 def test_unhandled_trap_stops_with_a_readable_error():
     with pytest.raises(UnhandledTrap) as e:
         run("brk")
-    assert e.value.cause == I.BREAKPOINT
+    assert e.value.cause == isa.BREAKPOINT
 
 
 def test_illegal_instruction_traps_with_the_word():
@@ -193,7 +193,7 @@ handler:
         add   a0, a0, a2
     """
     )
-    assert result_of(body) == I.ILLEGAL
+    assert result_of(body) == isa.ILLEGAL
 
 
 def test_syscall_from_user_ring_and_return():
@@ -247,14 +247,14 @@ handler:
         + HALT
     )
     _m, code = run(body)
-    assert code == I.ILLEGAL
+    assert code == isa.ILLEGAL
 
 
 def test_misaligned_word_access_traps():
     body = (
         HANDLER + f"li t1, {3**9 + 1}\nlw a0, 0(t1)\nhandler: csrr a0, mtcause" + HALT
     )
-    assert run(body)[1] == I.MISALIGNED
+    assert run(body)[1] == isa.MISALIGNED
 
 
 def test_store_to_boot_page_and_unmapped_memory_fault():
@@ -263,7 +263,7 @@ def test_store_to_boot_page_and_unmapped_memory_fault():
         + "sw zero, 0(zero)\nhandler: csrr a0, mtcause\ncsrr a1, mtval\nadd a0, a0, a1"
         + HALT
     )
-    assert run(body)[1] == I.ACCESS_FAULT
+    assert run(body)[1] == isa.ACCESS_FAULT
 
 
 def test_vectored_mode_dispatches_by_cause():
@@ -341,8 +341,8 @@ handler:
         + HALT
     )
     m, code = run(body)
-    assert m.hart.regs[2 + 13] == I.IRQ_TIMER  # a1
-    assert m.hart.regs[3 + 13] >= 50  # a2
+    assert m.hart.reg("a1") == isa.IRQ_TIMER
+    assert m.hart.reg("a2") >= 50
     assert code > 0
 
 
@@ -363,7 +363,7 @@ handler:
         + HALT
     )
     _m, code = run(body, max_steps=100)
-    assert code == I.IRQ_TIMER
+    assert code == isa.IRQ_TIMER
 
 
 def test_single_step_traps_after_one_user_instruction():
@@ -383,7 +383,7 @@ handler:
 """
         + HALT
     )
-    assert run(body)[1] == I.SINGLE_STEP * 7
+    assert run(body)[1] == isa.SINGLE_STEP * 7
 
 
 def test_entropy_and_counters_read():
@@ -424,7 +424,7 @@ shandler:
         + HALT
     )
     m, code = run(body)
-    assert m.hart.banks[1][3] == I.SYSCALL  # the call reached the machine bank
+    assert m.hart.read_csr(isa.CSRS["mtcause"]) == isa.SYSCALL
     assert code == 1
 
 

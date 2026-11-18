@@ -36,12 +36,12 @@ class Console:
     def feed(self, text: str) -> None:
         self.input.extend(ord(c) for c in text)
 
-    def read(self, addr: int, width: int) -> int:
+    def read(self, addr: int, _width: int, /) -> int:
         if addr == CONSOLE_IN:
             return self.input.popleft() if self.input else -1
         return 0
 
-    def write(self, addr: int, width: int, value: int) -> None:
+    def write(self, addr: int, _width: int, value: int, /) -> None:
         if addr == CONSOLE_OUT and 0 <= value <= 0x10FFFF:
             ch = chr(value)
             self.output.append(ch)
@@ -56,9 +56,9 @@ class Console:
 class PowerControl:
     """Writing any value to POWER_OFF stops the machine with that exit code."""
 
-    def read(self, addr: int, width: int) -> int:
+    def read(self, _addr: int, _width: int, /) -> int:
         return 0
 
-    def write(self, addr: int, width: int, value: int) -> None:
+    def write(self, addr: int, _width: int, value: int, /) -> None:
         if addr == POWER_OFF:
             raise Halt(value)

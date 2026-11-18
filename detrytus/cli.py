@@ -5,10 +5,11 @@ import sys
 
 from detrytus import __version__
 from detrytus.asm import AsmError, assemble
-from detrytus.cpu import Hart, UnhandledTrap
+from detrytus.cpu import Hart
 from detrytus.disasm import disassemble
 from detrytus.isa import Decoded
 from detrytus.machine import Machine, StepLimit
+from detrytus.trap import UnhandledTrap
 from detrytus.trits import format_trits
 
 
@@ -87,7 +88,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        return args.func(args)
+        status: int = args.func(args)
+        return status
     except AsmError as e:
         print(f"detrytus: {e}", file=sys.stderr)
         return 65

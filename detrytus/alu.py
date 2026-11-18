@@ -10,11 +10,12 @@ from detrytus.trits import (
     field,
     from_trits,
     low,
+    pow3,
     sign,
     split_high,
+    to_trits,
     wrap,
 )
-from detrytus.trits import to_trits as _to_trits
 
 
 def mul_parts(a: int, b: int) -> tuple[int, int]:
@@ -48,7 +49,7 @@ def shift(x: int, n: int) -> int:
     if n >= WORD_TRITS or n <= -WORD_TRITS:
         return 0
     if n >= 0:
-        return wrap(x * 3**n)
+        return wrap(x * pow3(n))
     return split_high(x, -n)
 
 
@@ -58,7 +59,7 @@ def rotate(x: int, n: int) -> int:
     if n == 0:
         return x
     keep = WORD_TRITS - n
-    return low(x, keep) * 3**n + split_high(x, keep)
+    return low(x, keep) * pow3(n) + split_high(x, keep)
 
 
 def trit_extract(x: int, pos: int, length: int) -> int:
@@ -67,11 +68,11 @@ def trit_extract(x: int, pos: int, length: int) -> int:
 
 def trit_insert(dest: int, src: int, pos: int, length: int) -> int:
     old = field(dest, pos, length)
-    return dest + (low(src, length) - old) * 3**pos
+    return dest + (low(src, length) - old) * pow3(pos)
 
 
 def leading_zero_trits(x: int) -> int:
-    trits = _to_trits(x)
+    trits = to_trits(x)
     n = 0
     for t in reversed(trits):
         if t:
@@ -91,16 +92,16 @@ def trailing_zero_trits(x: int) -> int:
 
 
 def nonzero_trits(x: int) -> int:
-    return sum(1 for t in _to_trits(x) if t)
+    return sum(1 for t in to_trits(x) if t)
 
 
 def tlut(a: int, b: int, table: int) -> int:
     """Apply a 9-trit truth table to each trit pair of a and b."""
-    entries = _to_trits(table, 9)
+    entries = to_trits(table, 9)
     return from_trits(
         [
             entries[3 * (ta + 1) + (tb + 1)]
-            for ta, tb in zip(_to_trits(a), _to_trits(b), strict=True)
+            for ta, tb in zip(to_trits(a), to_trits(b), strict=True)
         ]
     )
 

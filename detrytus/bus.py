@@ -7,14 +7,14 @@ with no attribute table.
 
 from typing import Protocol
 
-from detrytus.trits import TRYTE_TRITS, low, split_high
+from detrytus.trits import TRYTE_MOD, TRYTE_TRITS, low, split_high
 
 PAGE_TRITS = 9
 
 
 class Device(Protocol):
-    def read(self, addr: int, width: int) -> int: ...
-    def write(self, addr: int, width: int, value: int) -> None: ...
+    def read(self, addr: int, width: int, /) -> int: ...
+    def write(self, addr: int, width: int, value: int, /) -> None: ...
 
 
 class BusFault(Exception):
@@ -80,7 +80,9 @@ class Bus:
         if width == 1:
             return m.get(addr, 0)
         return (
-            m.get(addr - 1, 0) + m.get(addr, 0) * 19683 + m.get(addr + 1, 0) * 387420489
+            m.get(addr - 1, 0)
+            + m.get(addr, 0) * TRYTE_MOD
+            + m.get(addr + 1, 0) * TRYTE_MOD**2
         )
 
     def write(self, addr: int, width: int, value: int) -> None:
@@ -92,8 +94,8 @@ class Bus:
             self.mem[addr] = low(value, TRYTE_TRITS)
             return
         lo = low(value, TRYTE_TRITS)
-        rest = (value - lo) // 19683
+        rest = (value - lo) // TRYTE_MOD
         mid = low(rest, TRYTE_TRITS)
         self.mem[addr - 1] = lo
         self.mem[addr] = mid
-        self.mem[addr + 1] = (rest - mid) // 19683
+        self.mem[addr + 1] = (rest - mid) // TRYTE_MOD

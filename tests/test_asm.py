@@ -1,6 +1,6 @@
 import pytest
 
-from detrytus import isa as I
+from detrytus import isa
 from detrytus.asm import AsmError, assemble
 
 
@@ -82,8 +82,8 @@ def test_named_tables_and_csrs():
 def test_tmap_builds_a_unary_table():
     # f maps -,0,+ to +,0,+ : the trit magnitude, which is tabs.
     img = assemble("tmap a0, a1, 0t+0+")
-    assert img.listing[0].word == I.encode(
-        I.OPS["tlut"], rd=1, rs1=2, fn=I.make_table(lambda a, b: abs(a))
+    assert img.listing[0].word == isa.encode(
+        isa.OPS["tlut"], rd=1, rs1=2, fn=isa.make_table(lambda a, _b: abs(a))
     )
 
 

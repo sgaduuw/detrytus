@@ -6,9 +6,10 @@ table mirrors docs/isa.md section 7; tests/test_spec_sync.py checks the
 two agree.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from detrytus.trits import field, half, low
+from detrytus.trits import field, half, low, pow3
 
 # --- registers ---------------------------------------------------------------
 
@@ -63,7 +64,7 @@ FORMAT_FIELDS: dict[str, dict[str, tuple[int, int]]] = {
     "I": {"rd": RD, "rs1": RS1, "imm": IMM_I},
     "S": {"rs2": RD, "rs1": RS1, "imm": IMM_I},
     "B": {"cond": COND, "hint": HINT_B, "rs1": RS1, "rs2": RS2, "off": OFF_B},
-    "T": {"hint": HINT_T, "zero": ZERO_T, "rs1": RS1, "offn": OFFN, "offp": OFFP},
+    "T": {"hint": HINT_T, "pad": ZERO_T, "rs1": RS1, "offn": OFFN, "offp": OFFP},
     "U": {"rd": RD, "imm": IMM_U},
     "J": {"rd": RD, "imm": IMM_U},
 }
@@ -183,16 +184,17 @@ OPS: dict[str, Op] = {
     for name, code, fmt, syn in _TABLE
 }
 BY_OPCODE: dict[int, Op] = {op.opcode: op for op in OPS.values()}
-assert len(BY_OPCODE) == len(OPS), "duplicate opcode"
+if len(BY_OPCODE) != len(OPS):
+    raise RuntimeError("two instructions share an opcode")
 
 BUNDLE_OPCODE = 121  # 6.1; recognised but not yet executed
 
 # --- tritwise truth tables (7.5) ---------------------------------------------
 
 
-def make_table(fn) -> int:
+def make_table(fn: Callable[[int, int], int]) -> int:
     """Encode a two-input trit function as the 9-trit tlut table."""
-    return sum(fn(k // 3 - 1, k % 3 - 1) * 3**k for k in range(9))
+    return sum(fn(k // 3 - 1, k % 3 - 1) * pow3(k) for k in range(9))
 
 
 def _sum3(a: int, b: int) -> int:
@@ -206,7 +208,7 @@ TABLES: dict[str, int] = {
     "tsum": make_table(_sum3),
     "tcons": make_table(lambda a, b: a if a == b else 0),
     "tany": make_table(lambda a, b: (a + b > 0) - (a + b < 0)),
-    "tabs": make_table(lambda a, b: abs(a)),
+    "tabs": make_table(lambda a, _b: abs(a)),
 }
 
 # --- CSRs (8.2) --------------------------------------------------------------
@@ -228,25 +230,25 @@ BANK = [
     "timecmp",
 ]
 
-CSRS: dict[str, int] = {}
-for _prefix, _ring in (("m", 1), ("s", 0)):
-    for _i, _name in enumerate(BANK):
-        CSRS[_prefix + _name] = csr_number(_ring, 1, _i)
-CSRS.update(
-    {
-        "edeleg": csr_number(1, 1, 20),
-        "ideleg": csr_number(1, 1, 21),
-        "hartid": csr_number(1, -1, 0),
-        "ptbr": csr_number(0, 1, 10),
-        "entropy": csr_number(0, -1, 0),
-        "cycle": csr_number(-1, -1, 0),
-        "time": csr_number(-1, -1, 1),
-        "instret": csr_number(-1, -1, 2),
-        "fcsr": csr_number(-1, 1, 0),
-        **{f"tdaddr{i}": csr_number(0, 1, 20 + i) for i in range(9)},
-        **{f"tdctl{i}": csr_number(0, 1, 30 + i) for i in range(9)},
-    }
-)
+# Positions within a trap bank, and trits of tstatus.
+TSTATUS, TVEC, TPC, TCAUSE, TVAL, SCRATCH, IE, IP, TIMECMP = range(len(BANK))
+ST_PR, ST_IE, ST_PIE, ST_SUA, ST_SS = range(5)
+
+CSRS: dict[str, int] = {
+    **{"m" + name: csr_number(1, 1, i) for i, name in enumerate(BANK)},
+    **{"s" + name: csr_number(0, 1, i) for i, name in enumerate(BANK)},
+    "edeleg": csr_number(1, 1, 20),
+    "ideleg": csr_number(1, 1, 21),
+    "hartid": csr_number(1, -1, 0),
+    "ptbr": csr_number(0, 1, 10),
+    "entropy": csr_number(0, -1, 0),
+    "cycle": csr_number(-1, -1, 0),
+    "time": csr_number(-1, -1, 1),
+    "instret": csr_number(-1, -1, 2),
+    "fcsr": csr_number(-1, 1, 0),
+    **{f"tdaddr{i}": csr_number(0, 1, 20 + i) for i in range(9)},
+    **{f"tdctl{i}": csr_number(0, 1, 30 + i) for i in range(9)},
+}
 CSR_NAMES = {v: k for k, v in CSRS.items()}
 
 
@@ -287,7 +289,7 @@ def put(value: int, spec: tuple[int, int], name: str) -> int:
         raise EncodingError(
             f"{name} = {value} does not fit {width} trits (±{half(width)})"
         )
-    return value * 3**lo
+    return value * pow3(lo)
 
 
 def encode(op: Op, **fields: int) -> int:
@@ -302,7 +304,11 @@ def encode(op: Op, **fields: int) -> int:
 
 
 class Decoded:
-    """One decoded instruction: the Op plus every field of its format."""
+    """One decoded instruction: the Op plus every field of its format.
+
+    Fields the format lacks read as 0, so executors can use any of them
+    without checking the format first.
+    """
 
     __slots__ = (
         "cond",
@@ -313,6 +319,7 @@ class Decoded:
         "offn",
         "offp",
         "op",
+        "pad",
         "rd",
         "rs1",
         "rs2",
@@ -324,14 +331,68 @@ class Decoded:
         self.op = op
         self.word = word
         self.rd = self.rs1 = self.rs2 = self.rs3 = 0
-        self.fn = self.imm = self.cond = self.hint = 0
+        self.fn = self.imm = self.cond = self.hint = self.pad = 0
         self.off = self.offn = self.offp = 0
         for name, (lo, width) in FORMAT_FIELDS[op.fmt].items():
-            setattr(self, name if name != "zero" else "off", field(word, lo, width))
+            setattr(self, name, field(word, lo, width))
 
 
 class IllegalInstruction(Exception):
     pass
+
+
+def _zero(value: int, used: bool, name: str) -> None:
+    if not used and value != 0:
+        raise IllegalInstruction(f"{name} must be zero")
+
+
+def _check_r(d: Decoded, syn: set[str]) -> None:
+    _zero(d.rd, "d" in syn, "rd")
+    _zero(d.rs1, bool(syn & {"s", "a"}), "rs1")
+    _zero(d.rs2, "t" in syn, "rs2")
+    if d.op.atomic:
+        # rs3 carries the ordering: trit 0 aq, trit 1 rl, trit 2 zero.
+        if field(d.rs3, 0, 1) < 0 or field(d.rs3, 1, 1) < 0:
+            raise IllegalInstruction("ordering trits must be 0 or +")
+        _zero(field(d.rs3, 2, 1), False, "rs3[2]")
+    else:
+        _zero(d.rs3, "u" in syn, "rs3")
+    if "x" in syn:
+        _zero(field(d.fn, 9, 1), False, "fn[9]")
+    else:
+        _zero(d.fn, False, "fn")
+
+
+def _check_i(d: Decoded, syn: set[str]) -> None:
+    _zero(d.rd, "d" in syn, "rd")
+    _zero(d.rs1, bool(syn & {"s", "m"}), "rs1")
+    if "c" in syn:
+        _zero(d.imm - low(d.imm, 9), False, "imm above the CSR number")
+    elif "pos" in syn or "F" in syn:
+        _zero(d.imm - low(d.imm, 8), False, "imm above trit 7")
+    else:
+        _zero(d.imm, bool(syn & {"i", "m"}), "imm")
+
+
+def _check_b(d: Decoded, _syn: set[str]) -> None:
+    if d.cond not in COND_TAKEN:
+        raise IllegalInstruction(f"reserved branch condition {d.cond}")
+
+
+def _check_t(d: Decoded, _syn: set[str]) -> None:
+    _zero(d.pad, False, "trits 7..6")
+
+
+def _check_none(_d: Decoded, _syn: set[str]) -> None:
+    pass
+
+
+_CHECKS: dict[str, Callable[[Decoded, set[str]], None]] = {
+    "R": _check_r,
+    "I": _check_i,
+    "B": _check_b,
+    "T": _check_t,
+}
 
 
 def decode(word: int) -> Decoded:
@@ -346,39 +407,5 @@ def decode(word: int) -> Decoded:
     if op is None:
         raise IllegalInstruction(f"opcode {opcode}")
     d = Decoded(op, word)
-    syn = set(op.syntax)
-    if op.fmt == "R":
-        _zero(d.rd, "d" in syn, "rd")
-        _zero(d.rs1, bool(syn & {"s", "a"}), "rs1")
-        _zero(d.rs2, "t" in syn, "rs2")
-        if op.atomic:
-            # rs3 carries the ordering: trit 0 aq, trit 1 rl, trit 2 zero.
-            if any(t not in (0, 1) for t in (field(d.rs3, 0, 1), field(d.rs3, 1, 1))):
-                raise IllegalInstruction("ordering trits must be 0 or +")
-            _zero(field(d.rs3, 2, 1), False, "rs3")
-        else:
-            _zero(d.rs3, "u" in syn, "rs3")
-        if "x" in syn:
-            _zero(field(d.fn, 9, 1), False, "fn[9]")
-        else:
-            _zero(d.fn, False, "fn")
-    elif op.fmt == "I":
-        _zero(d.rd, "d" in syn, "rd")
-        _zero(d.rs1, bool(syn & {"s", "m"}), "rs1")
-        if "c" in syn:
-            _zero(d.imm - low(d.imm, 9), False, "imm above the CSR number")
-        elif "pos" in syn or "F" in syn:
-            _zero(d.imm - low(d.imm, 8), False, "imm above trit 7")
-        else:
-            _zero(d.imm, bool(syn & {"i", "m"}), "imm")
-    elif op.fmt == "B":
-        if d.cond not in COND_TAKEN:
-            raise IllegalInstruction(f"reserved branch condition {d.cond}")
-    elif op.fmt == "T":
-        _zero(d.off, False, "trits 7..6")
+    _CHECKS.get(op.fmt, _check_none)(d, set(op.syntax))
     return d
-
-
-def _zero(value: int, used: bool, name: str) -> None:
-    if not used and value != 0:
-        raise IllegalInstruction(f"{name} must be zero")

@@ -49,8 +49,23 @@ and its disassembly.
   devices.
 - [`examples/`](examples/): runnable programs.
 
-Development: `uv run pytest`, `uv run ruff check detrytus tests` and
-`uv run ruff format --check detrytus tests`.
+Development checks, all run in CI:
+
+```bash
+uv run pytest
+```
+
+```bash
+uv run mypy
+```
+
+```bash
+uv run ruff check detrytus tests
+```
+
+```bash
+uv run ruff format --check detrytus tests
+```
 
 ## Layout
 
@@ -59,11 +74,14 @@ Development: `uv run pytest`, `uv run ruff check detrytus tests` and
 | `trits.py` | balanced-ternary arithmetic on Python ints |
 | `isa.py` | the instruction set as data: opcodes, formats, CSRs, encode and decode |
 | `alu.py` | integer and tritwise operations as pure functions |
+| `execute.py` | what each instruction does: one handler per mnemonic, in one table |
+| `trap.py` | the exceptions that carry traps |
+| `cpu.py` | one hart: fetch loop, traps, interrupts, CSRs |
 | `bus.py` | physical memory and device routing |
 | `devices.py` | console and power control |
-| `cpu.py` | one hart: execution, traps, interrupts, CSRs |
 | `machine.py` | the platform wired together |
-| `expr.py`, `asm.py` | the assembler |
+| `expr.py` | assembler expressions |
+| `asm/` | the assembler: `source` parsing, `operands`, `pseudo`-instructions, `core` passes |
 | `disasm.py` | the disassembler |
 | `cli.py` | the `detrytus` command |
 
