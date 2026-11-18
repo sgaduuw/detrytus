@@ -14,10 +14,58 @@ The name is detritus with a tryte in it.
 
 ## Status
 
-Design stage. The instruction set is specified as a draft in
-[`docs/isa.md`](docs/isa.md). Next up is a Python emulator and
-assembler written against that spec; a Rust implementation may follow
-once the design settles.
+The instruction set is a draft, specified in [`docs/isa.md`](docs/isa.md).
+A Python emulator and assembler implement its integer core: every
+integer, tritwise, memory, atomic, control and system instruction, plus
+traps, delegation, interrupts, the timer and single step. Floating point,
+compressed bundles, paging and debug triggers are specified but not
+implemented yet. A Rust implementation may follow once the design
+settles.
+
+## Usage
+
+Requires [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+```
+
+```bash
+uv run detrytus run examples/hello.s
+```
+
+```bash
+uv run detrytus asm examples/bsearch.s
+```
+
+`run` assembles a program, loads it at address 0 and runs it until it
+writes to the power-off device. `--trace` prints every instruction and
+`--stats` the step count. `asm` prints a listing with each word's trits
+and its disassembly.
+
+- [`docs/assembler.md`](docs/assembler.md): source syntax, directives
+  and pseudo-instructions.
+- [`docs/platform.md`](docs/platform.md): the emulated memory map and
+  devices.
+- [`examples/`](examples/): runnable programs.
+
+Development: `uv run pytest`, `uv run ruff check detrytus tests` and
+`uv run ruff format --check detrytus tests`.
+
+## Layout
+
+| Module | Job |
+|--------|-----|
+| `trits.py` | balanced-ternary arithmetic on Python ints |
+| `isa.py` | the instruction set as data: opcodes, formats, CSRs, encode and decode |
+| `alu.py` | integer and tritwise operations as pure functions |
+| `bus.py` | physical memory and device routing |
+| `devices.py` | console and power control |
+| `cpu.py` | one hart: execution, traps, interrupts, CSRs |
+| `machine.py` | the platform wired together |
+| `expr.py`, `asm.py` | the assembler |
+| `disasm.py` | the disassembler |
+| `cli.py` | the `detrytus` command |
 
 ## The shape of it
 

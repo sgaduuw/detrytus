@@ -695,7 +695,8 @@ while the firmware's state stays untouched.
 | 8     | `timecmp` | timer compare value |
 
 Ring +1 bank numbers are 8748 + index (8748 .. 8756); ring 0 bank
-numbers are 2187 + index (2187 .. 2195).
+numbers are 2187 + index (2187 .. 2195). Assembly names them with an `m` prefix for
+ring +1 and `s` for ring 0: `mtvec`, `stvec`, and so on.
 
 Other CSRs:
 
