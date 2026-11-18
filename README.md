@@ -17,9 +17,9 @@ The name is detritus with a tryte in it.
 The instruction set is a draft, specified in [`docs/isa.md`](docs/isa.md).
 A Python emulator and assembler implement its integer core: every
 integer, tritwise, memory, atomic, control and system instruction, plus
-traps, delegation, interrupts, the timer and single step. Floating point,
-compressed bundles, paging and debug triggers are specified but not
-implemented yet. A Rust implementation may follow once the design
+traps, delegation, interrupts, the timer, single step and paged virtual
+memory. Floating point, compressed bundles and debug triggers are
+specified but not implemented yet. A Rust implementation may follow once the design
 settles.
 
 ## Usage
@@ -76,6 +76,7 @@ uv run ruff format --check detrytus tests
 | `alu.py` | integer and tritwise operations as pure functions |
 | `execute.py` | what each instruction does: one handler per mnemonic, in one table |
 | `trap.py` | the exceptions that carry traps |
+| `mmu.py` | paged virtual memory: the walk, permission checks, the TLB |
 | `cpu.py` | one hart: fetch loop, traps, interrupts, CSRs |
 | `bus.py` | physical memory and device routing |
 | `devices.py` | console and power control |

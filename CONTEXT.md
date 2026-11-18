@@ -153,6 +153,36 @@ made the root nine pages per address space, too heavy for a microkernel
 with many processes. Accessed and dirty marks are set by the kernel on
 a page fault, which keeps the walker simple.
 
+### 2026-11-18 · Paging rules filled in from RISC-V (spec 0.4)
+
+Implementing the walker showed that section 9 left the permission
+rules, reserved encodings, superpage alignment, page-fault causes and
+TLB caching unstated, and still called the walk "two-level". The gaps
+were filled with RISC-V's answers, adapted to trits, because they are
+well tested and a kernel written against them holds no surprises:
+
+- loads need `R`, stores `W`, fetches `X`, and atomics both `R` and `W`,
+  faulting as stores;
+- ring 0 never executes user pages and reads them only with `SUA`;
+- a superpage's physical page number must be aligned to its size;
+- a pointer carries no permissions, a pointer at leaf level is invalid,
+  and `-` in a flag trit is reserved, all of which fault, keeping those
+  encodings free for later use as the instruction encoding does;
+- page faults report the virtual address; walks read physical memory
+  and may not read page tables from devices;
+- a TLB may keep any successful translation until `fence.vm`, and a
+  `fence.vm` that names an ASID leaves global entries alone;
+- writing the reserved `ptbr` mode leaves `ptbr` unchanged.
+
+These were proposed in the pull request that implemented paging, for
+the owner to accept or change.
+
+### 2026-11-18 · The emulator's TLB never evicts
+
+It keeps every successful translation until `fence.vm`. That is the
+strictest legal behaviour, chosen so a kernel's missing `fence.vm`
+shows up immediately rather than on a machine with a smaller TLB.
+
 ### 2026-11-18 · Trap banks per ring, named with `m` and `s` prefixes
 
 Rings 0 and +1 each have their own trap CSRs, so the kernel handles

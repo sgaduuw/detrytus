@@ -2,10 +2,10 @@
 
 Implemented: every integer, logic, memory, atomic, control and system
 instruction of docs/isa.md section 7 (their semantics live in
-execute.py), the trap and interrupt model of section 8, and single step.
-Not yet: floating point (7.11), compressed bundles (6.1), paging (9) and
-debug triggers (8.6). Those raise NotImplementedError rather than
-silently misbehaving.
+execute.py), the trap and interrupt model of section 8, single step,
+and paged virtual memory (section 9, in mmu.py). Not yet: floating point
+(7.11), compressed bundles (6.1) and debug triggers (8.6). Those raise
+NotImplementedError rather than silently misbehaving.
 
 Single-hart assumptions, in one place: there is no store buffer, so
 fences are no-ops; nothing can wake a waiting hart except its timer, so
@@ -20,6 +20,7 @@ from collections.abc import Callable
 from detrytus import isa
 from detrytus.bus import Bus, BusFault
 from detrytus.execute import BY_OPCODE
+from detrytus.mmu import Access, Mmu, Ptbr
 from detrytus.trap import Trap, UnhandledTrap
 from detrytus.trits import field, low, set_trit, wrap
 
@@ -54,6 +55,7 @@ class Hart:
         self.reservation: int | None = None
         self.step_ring: int | None = None  # bank to trap into after one step
         self.trace: Tracer | None = None
+        self.mmu = Mmu(bus)
         self._entropy = _entropy_source(seed)
         self._cache: dict[int, isa.Decoded | isa.IllegalInstruction] = {}
 
@@ -93,10 +95,8 @@ class Hart:
     def _execute(self, pc: int) -> None:
         if low(pc, 1) != 0:
             raise NotImplementedError("compressed bundles (slot B) are not implemented")
-        if self.ring <= 0 and low(self.csrs[isa.CSRS["ptbr"]], 1) == 1:
-            raise NotImplementedError("paged virtual memory is not implemented")
         try:
-            word = self.bus.read(pc, 3, "fetch")
+            word = self.bus.read(self.translate(pc, Access.FETCH), 3, "fetch")
         except BusFault as f:
             raise Trap(isa.ACCESS_FAULT, f.addr) from None
         d = self._decode(word)
@@ -205,6 +205,8 @@ class Hart:
             raise Trap(isa.ILLEGAL)
         slot = self._bank_slot(number)
         if slot is None:
+            if number == isa.CSRS["ptbr"] and low(value, 1) == -1:
+                return  # a reserved mode is not stored (9.2)
             self.csrs[number] = value
             return
         ring, i = slot
@@ -214,23 +216,54 @@ class Hart:
             value = set_trit(self.banks[ring][isa.IP], 3, field(value, 3, 1))
         self.banks[ring][i] = value
 
-    # --- memory ------------------------------------------------------------
+    # --- memory ---------------------------------------------------------
+
+    def translate(self, addr: int, access: Access) -> int:
+        """Virtual to physical. Ring +1 is never translated (8.1)."""
+        if self.ring > 0:
+            return addr
+        ptbr = Ptbr.decode(self.csrs[isa.CSRS["ptbr"]])
+        if ptbr.mode != 1:
+            return addr
+        status = self.banks[0][isa.TSTATUS]
+        sua = field(status, isa.ST_SUA, 1) == 1
+        return self.mmu.translate(addr, access, self.ring, sua, ptbr)
+
+    @staticmethod
+    def _aligned(addr: int, width: int) -> None:
+        if width == 3 and low(addr, 1) != 0:
+            raise Trap(isa.MISALIGNED, addr)
 
     def load(self, addr: int, width: int) -> int:
-        if width == 3 and low(addr, 1) != 0:
-            raise Trap(isa.MISALIGNED, addr)
+        self._aligned(addr, width)
+        physical = self.translate(addr, Access.LOAD)
         try:
-            return self.bus.read(addr, width)
-        except BusFault as f:
-            raise Trap(isa.ACCESS_FAULT, f.addr) from None
+            return self.bus.read(physical, width)
+        except BusFault:
+            raise Trap(isa.ACCESS_FAULT, addr) from None
 
     def store(self, addr: int, width: int, value: int) -> None:
-        if width == 3 and low(addr, 1) != 0:
-            raise Trap(isa.MISALIGNED, addr)
+        self._aligned(addr, width)
+        physical = self.translate(addr, Access.STORE)
         try:
-            self.bus.write(addr, width, value)
-        except BusFault as f:
-            raise Trap(isa.ACCESS_FAULT, f.addr) from None
+            self.bus.write(physical, width, value)
+        except BusFault:
+            raise Trap(isa.ACCESS_FAULT, addr) from None
+
+    def rmw(self, addr: int, update: Callable[[int], int]) -> int:
+        """Atomic read-modify-write of a word; returns the old value.
+
+        One translation covers both halves and needs read and write
+        permission, so a read-only page faults as a store would.
+        """
+        self._aligned(addr, 3)
+        physical = self.translate(addr, Access.AMO)
+        try:
+            old = self.bus.read(physical, 3)
+            self.bus.write(physical, 3, update(old))
+        except BusFault:
+            raise Trap(isa.ACCESS_FAULT, addr) from None
+        return old
 
 
 def _entropy_source(seed: int | None) -> Callable[[], int]:

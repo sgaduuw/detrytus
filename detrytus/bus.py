@@ -52,6 +52,14 @@ class Bus:
         """Write memory without access checks: for loaders, not the CPU."""
         self.mem[addr] = low(tryte, TRYTE_TRITS)
 
+    def poke_word(self, addr: int, word: int) -> None:
+        """Write a word centred on addr without access checks."""
+        lo = low(word, TRYTE_TRITS)
+        rest = split_high(word, TRYTE_TRITS)
+        self.poke(addr - 1, lo)
+        self.poke(addr, low(rest, TRYTE_TRITS))
+        self.poke(addr + 1, split_high(rest, TRYTE_TRITS))
+
     def _check(self, addr: int, kind: str) -> Device | None:
         page = page_of(addr)
         if page == 0:
@@ -63,7 +71,8 @@ class Bus:
                 raise BusFault(addr, kind)
             return None
         device = self.devices.get(page)
-        if device is None or kind == "fetch":
+        # Devices hold neither code nor page tables.
+        if device is None or kind in ("fetch", "walk"):
             raise BusFault(addr, kind)
         return device
 

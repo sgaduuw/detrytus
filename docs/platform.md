@@ -38,5 +38,13 @@ has nothing else to wait for.
 - `run` gives up after `--max-steps` steps (default 10 million, exit
   status 124).
 - Features not implemented yet stop the emulator with a message (exit
-  status 69): floating point, compressed bundles, paging and debug
-  triggers.
+  status 69): floating point, compressed bundles and debug triggers.
+
+## Paging
+
+The TLB keeps every successful translation until `fence.vm` removes it
+and never evicts one on its own, the strictest behaviour `isa.md` 9.7
+allows. A kernel that forgets a `fence.vm` after changing an entry sees
+the stale translation at once, rather than on a machine whose TLB
+happens to evict sooner. `examples/paging.s` builds a page table and
+runs a user program through it.

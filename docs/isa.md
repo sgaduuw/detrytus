@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.3, **draft**. Everything here may change until the emulator
+Version 0.4, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -615,7 +615,7 @@ the dynamic rounding mode.
 | −34 | `csrrtmin rd, csr, rs1`   | `rd = csr`; `csr = tmin(csr, rs1)`, tritwise |
 | −35 | `fence pred, succ`        | order the `pred` accesses before the `succ` accesses |
 | −36 | `fence.i`                 | make earlier stores visible to instruction fetch |
-| −37 | `fence.vm rs1, rs2`       | flush translations for address `rs1` and address space `rs2`; `r0` means all |
+| −37 | `fence.vm rs1, rs2`       | flush translations for address `rs1` and address space `rs2`; `r0` means all (9.7) |
 | −38 | `wfi`                     | wait for an interrupt (may be a no-op) |
 | −39 | `brk`                     | trap with cause +5 (breakpoint) |
 | −40 | `cclean rs1`              | write back the cache line holding `rs1` |
@@ -835,9 +835,11 @@ faults.
 
 | Trits  | Field | Meaning |
 |--------|-------|---------|
-| 0      | mode  | `0`: no translation; `+`: two-level paging; `-`: reserved |
+| 0      | mode  | `0`: no translation; `+`: three-level paging; `-`: reserved |
 | 8..1   | ASID  | address-space identifier (3⁸ of them), tags TLB entries |
 | 26..9  | root  | physical page number of the page whose centre holds the root table |
+
+A write that would set the reserved mode leaves `ptbr` unchanged.
 
 ### 9.3 Page-table entries
 
@@ -858,15 +860,82 @@ One trit says both whether an entry is valid and whether it is a leaf
 or a pointer, where RISC-V needs a valid bit plus the convention that
 `R = W = X = 0` means "pointer". A zeroed table is all invalid entries.
 
-A `+` entry in a mid table maps a superpage of 3¹⁷ trytes, and one in the
-root table maps 3²⁵ trytes.
+### 9.4 The walk
+
+A walk reads the root entry, then the mid entry, then the leaf entry,
+stopping at the first `+` entry, which is the leaf. Page-table reads are
+physical: they must land in RAM or the boot page, and one that lands in
+device memory, or nowhere, is an access fault (cause +3).
+
+A `+` entry in a mid table maps a superpage of 3¹⁷ trytes (3⁸ pages),
+and one in the root table maps 3²⁵ trytes. A superpage's `PPN` must be
+aligned to its size: its low 8 trits are 0 for a mid-level leaf, its low
+16 for a root-level one. Virtual page `vpn` within the superpage maps to
+physical page `PPN + k`, where `k` is the part of `vpn` the leaf does not
+index.
+
+These entries are reserved and make the walk fault:
+
+- a `-` (pointer) entry in a leaf table, which has no level below it;
+- a pointer with any of trits 1..7 nonzero: permissions belong to leaves;
+- a leaf with `-` in any of trits 1..7;
+- a superpage whose `PPN` is not aligned.
+
+The `S` trit is never checked.
+
+### 9.5 Permissions
+
+An access needs, from its leaf:
+
+| Access | Needs |
+|--------|-------|
+| instruction fetch | `X` |
+| load, `lr` | `R` |
+| store, `sc` | `W` |
+| AMO, `cas` | `R` and `W` |
+
+and in every case `A = +`, plus `D = +` for anything that writes.
+
+The `U` trit divides the rings. Ring −1 may only touch pages with `U = +`.
+Ring 0 never executes a `U = +` page, and loads or stores to one only
+when `SUA` is set in its `tstatus`, so the kernel cannot follow a user
+pointer by accident. Ring +1 is never translated.
 
 The hardware does not set `A` or `D`. An access to a page whose `A` is
 not `+`, or a store to one whose `D` is not `+`, takes a page fault, and
 the kernel sets the trit. That keeps the walker simple and gives the
 kernel exact working-set information.
 
-After changing an entry, the kernel runs `fence.vm`.
+### 9.6 Page faults
+
+A failed walk or permission check is a page fault: cause +6 for an
+instruction fetch, +7 for a load or `lr`, and +8 for a store, `sc`, AMO
+or `cas` (an AMO faults as a store even when it lacks only `R`). `tval`
+holds the faulting virtual address. An access fault (cause +3) also
+reports the virtual address.
+
+Alignment is checked before translation. Since a word never crosses a
+page (5.2), one translation always covers a whole access.
+
+### 9.7 TLB and `fence.vm`
+
+An implementation may cache the leaf entry of any translation that
+succeeded, tagged with the current ASID, or with no ASID when `G = +`,
+and may keep it until `fence.vm` removes it. It never caches a walk that
+faulted. So after changing an entry the kernel runs `fence.vm`, and
+switching `ptbr` to a different ASID needs none.
+
+`fence.vm rs1, rs2` removes cached translations:
+
+| `rs1` | `rs2` | Removes |
+|-------|-------|---------|
+| `r0` | `r0` | everything |
+| address | `r0` | that page, in every address space, global entries included |
+| `r0` | ASID | that address space's entries; global entries stay |
+| address | ASID | that page in that address space; global entries stay |
+
+`r0` here means the register field names `r0`, not a register holding 0:
+ASID 0 is named with a register that holds 0.
 
 ## 10. Example: binary search with a three-way branch
 
