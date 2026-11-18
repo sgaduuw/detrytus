@@ -101,6 +101,14 @@ class Mmu:
             self._check(leaf.pte, va, access, ring, sua)
         return leaf.page_centre + low(va, PAGE_TRITS)
 
+    def probe(self, va: int, ptbr: Ptbr) -> int | None:
+        """Translate without checking permissions or touching the TLB."""
+        try:
+            leaf = self._walk(va, Access.LOAD, ptbr)
+        except Trap:
+            return None
+        return leaf.page_centre + low(va, PAGE_TRITS)
+
     def fence(self, va: int | None, asid: int | None) -> None:
         """fence.vm: va and asid are None when their register field is r0."""
         vpn = None if va is None else page_number(va)

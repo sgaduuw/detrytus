@@ -38,6 +38,10 @@ STORED_CSRS = (
 )
 
 Tracer = Callable[["Hart", isa.Decoded], None]
+# Debugger hooks: (virtual address, width, "r" | "w" | "rw") after a
+# completed data access, and (cause, tval, tpc) as a trap is entered.
+AccessHook = Callable[[int, int, str], None]
+TrapHook = Callable[[int, int, int], None]
 
 
 class Hart:
@@ -55,6 +59,8 @@ class Hart:
         self.reservation: int | None = None
         self.step_ring: int | None = None  # bank to trap into after one step
         self.trace: Tracer | None = None
+        self.on_access: AccessHook | None = None
+        self.on_trap: TrapHook | None = None
         self.mmu = Mmu(bus)
         self._entropy = _entropy_source(seed)
         self._cache: dict[int, isa.Decoded | isa.IllegalInstruction] = {}
@@ -123,6 +129,8 @@ class Hart:
     # --- traps and interrupts ----------------------------------------------
 
     def _trap(self, cause: int, tval: int, tpc: int, target: int | None = None) -> None:
+        if self.on_trap is not None:
+            self.on_trap(cause, tval, tpc)
         if target is None:
             delegated = (
                 cause > 0 and field(self.csrs[isa.CSRS["edeleg"]], cause, 1) == 1
@@ -229,6 +237,17 @@ class Hart:
         sua = field(status, isa.ST_SUA, 1) == 1
         return self.mmu.translate(addr, access, self.ring, sua, ptbr)
 
+    def probe(self, addr: int) -> int | None:
+        """Where addr points for the current ring, without side effects.
+
+        For debuggers: no permission check, nothing cached in the TLB, and
+        None where nothing is mapped.
+        """
+        if self.ring > 0:
+            return addr
+        ptbr = Ptbr.decode(self.csrs[isa.CSRS["ptbr"]])
+        return addr if ptbr.mode != 1 else self.mmu.probe(addr, ptbr)
+
     @staticmethod
     def _aligned(addr: int, width: int) -> None:
         if width == 3 and low(addr, 1) != 0:
@@ -238,9 +257,12 @@ class Hart:
         self._aligned(addr, width)
         physical = self.translate(addr, Access.LOAD)
         try:
-            return self.bus.read(physical, width)
+            value = self.bus.read(physical, width)
         except BusFault:
             raise Trap(isa.ACCESS_FAULT, addr) from None
+        if self.on_access is not None:
+            self.on_access(addr, width, "r")
+        return value
 
     def store(self, addr: int, width: int, value: int) -> None:
         self._aligned(addr, width)
@@ -249,6 +271,8 @@ class Hart:
             self.bus.write(physical, width, value)
         except BusFault:
             raise Trap(isa.ACCESS_FAULT, addr) from None
+        if self.on_access is not None:
+            self.on_access(addr, width, "w")
 
     def rmw(self, addr: int, update: Callable[[int], int]) -> int:
         """Atomic read-modify-write of a word; returns the old value.
@@ -263,6 +287,8 @@ class Hart:
             self.bus.write(physical, 3, update(old))
         except BusFault:
             raise Trap(isa.ACCESS_FAULT, addr) from None
+        if self.on_access is not None:
+            self.on_access(addr, 3, "rw")
         return old
 
 

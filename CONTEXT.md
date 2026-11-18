@@ -243,3 +243,22 @@ errors.
 CI pins `actions/checkout@v7` and `astral-sh/setup-uv@v10.3.3`, both on
 Node.js 24. setup-uv stopped publishing floating major tags after v7,
 so it has to be pinned to an exact release and bumped by hand.
+
+### 2026-11-18 · The debugger lives in the emulator, not in GDB
+
+GDB and LLDB know nothing of a ternary machine, and teaching them
+(register layouts, disassembly, address arithmetic) is far more work
+than a debugger of our own. `detrytus debug` has an engine with no user
+interface, which tests drive directly, and a shell on the standard
+library's `cmd` module. It reaches the hart through two hooks, one on
+data accesses and one on trap entry, which cost one `None` check each
+when no debugger is attached.
+
+Inspection is kept free of side effects: memory reads go through the
+page table without filling the TLB (`Hart.probe`) and never touch device
+registers (`Bus.peek`). A debugger whose looking changes the program
+would hide exactly the TLB and device bugs a kernel author needs it for.
+
+The ISA's own debug triggers (spec 8.6) are separate: they are for the
+OS's debugger and remain unimplemented.
+

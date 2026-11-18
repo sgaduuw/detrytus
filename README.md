@@ -38,8 +38,13 @@ uv run detrytus run examples/hello.s
 uv run detrytus asm examples/bsearch.s
 ```
 
+```bash
+uv run detrytus debug examples/bsearch.s
+```
+
 `run` assembles a program, loads it at address 0 and runs it until it
-writes to the power-off device. `--trace` prints every instruction and
+writes to the power-off device. `debug` stops before the first
+instruction for stepping, breakpoints, watchpoints and inspection. `--trace` prints every instruction and
 `--stats` the step count. `asm` prints a listing with each word's trits
 and its disassembly.
 
@@ -47,6 +52,7 @@ and its disassembly.
   and pseudo-instructions.
 - [`docs/platform.md`](docs/platform.md): the emulated memory map and
   devices.
+- [`docs/debugger.md`](docs/debugger.md): the debugger's commands.
 - [`examples/`](examples/): runnable programs.
 
 Development checks, all run in CI:
@@ -84,6 +90,7 @@ uv run ruff format --check detrytus tests
 | `expr.py` | assembler expressions |
 | `asm/` | the assembler: `source` parsing, `operands`, `pseudo`-instructions, `core` passes |
 | `disasm.py` | the disassembler |
+| `debug/` | the debugger: `engine` runs and inspects, `shell` is the front end |
 | `cli.py` | the `detrytus` command |
 
 ## The shape of it
