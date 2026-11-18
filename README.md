@@ -43,7 +43,8 @@ uv run detrytus debug examples/bsearch.s
 ```
 
 `run` assembles a program, loads it at address 0 and runs it until it
-writes to the power-off device. `debug` stops before the first
+writes to the power-off device. It takes several files, sources or
+`.dti` images written by `asm -o`, and loads them together. `debug` stops before the first
 instruction for stepping, breakpoints, watchpoints and inspection. `--trace` prints every instruction and
 `--stats` the step count. `asm` prints a listing with each word's trits
 and its disassembly.
@@ -88,7 +89,8 @@ uv run ruff format --check detrytus tests
 | `devices.py` | console and power control |
 | `machine.py` | the platform wired together |
 | `expr.py` | assembler expressions |
-| `asm/` | the assembler: `source` parsing, `operands`, `pseudo`-instructions, `core` passes |
+| `image.py` | the `.dti` image file format, and merging images |
+| `asm/` | the assembler: `source` (parsing, includes, local labels), `operands`, `pseudo`-instructions, `core` passes |
 | `disasm.py` | the disassembler |
 | `debug/` | the debugger: `engine` runs and inspects, `shell` is the front end |
 | `cli.py` | the `detrytus` command |

@@ -8,9 +8,11 @@ long form when the value is not yet known.
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from detrytus import isa
 from detrytus.asm import pseudo
+from detrytus.asm.errors import AsmError
 from detrytus.asm.operands import OperandError, Operands, encode_instruction
 from detrytus.asm.source import Statement, parse
 from detrytus.disasm import disassemble
@@ -21,14 +23,6 @@ TRYTE_DIRECTIVES = (".tryte", ".string", ".ascii", ".zero")
 STRING_ESCAPES = {"n": "\n", "t": "\t", "0": "\0"}
 
 
-class AsmError(Exception):
-    def __init__(self, message: str, line: int | None = None, source: str = "") -> None:
-        where = f"line {line}: " if line is not None else ""
-        context = f"\n    {source.strip()}" if source else ""
-        super().__init__(f"{where}{message}{context}")
-        self.line = line
-
-
 @dataclass
 class Listing:
     addr: int
@@ -36,6 +30,7 @@ class Listing:
     line: int
     source: str
     text: str = ""  # disassembly of the emitted word
+    file: str | None = None  # where the line came from, for included files
 
 
 @dataclass
@@ -74,6 +69,9 @@ class Assembler:
         self.image = Image()
         self._loc = -1  # next free tryte, so the first word centres on 0
         self._pending: list[Statement] = []
+        # Next free tryte of each section other than the current one.
+        self._section = "text"
+        self._sections: dict[str, int] = {}
 
     # --- pass one: layout ----------------------------------------------------
 
@@ -83,6 +81,7 @@ class Assembler:
             ".set": self._lay_equ,
             ".org": self._lay_org,
             ".align": self._lay_align,
+            ".section": self._lay_section,
         }
         for s in stmts:
             if s.labels:
@@ -98,7 +97,7 @@ class Assembler:
                 else:
                     self._lay_words(s)
             except (ExprError, OperandError) as e:
-                raise AsmError(str(e), s.line, s.source) from None
+                raise AsmError(str(e), s.line, s.source, s.file) from None
         self._bind(self._loc)
 
     def _bind(self, addr: int) -> None:
@@ -110,12 +109,14 @@ class Assembler:
 
     def _define(self, name: str, value: int, s: Statement) -> None:
         if name in self.symbols:
-            raise AsmError(f"symbol {name!r} defined twice", s.line, s.source)
+            raise AsmError(f"symbol {name!r} defined twice", s.line, s.source, s.file)
         self.symbols[name] = value
 
     def _expect(self, s: Statement, n: int) -> list[str]:
         if len(s.operands) != n:
-            raise AsmError(f"{s.mnemonic} takes {n} operand(s)", s.line, s.source)
+            raise AsmError(
+                f"{s.mnemonic} takes {n} operand(s)", s.line, s.source, s.file
+            )
         return s.operands
 
     def _constant(self, text: str) -> int:
@@ -129,9 +130,54 @@ class Assembler:
         target = self._constant(self._expect(s, 1)[0])
         if low(target, 1) != 0:
             raise AsmError(
-                ".org needs a word-aligned address (a multiple of 3)", s.line, s.source
+                ".org needs a word-aligned address (a multiple of 3)",
+                s.line,
+                s.source,
+                s.file,
             )
         self._loc = target - 1
+
+    def _lay_section(self, s: Statement) -> None:
+        """Switch sections. A section is placed once, on first use, and
+        resumes where it left off after that."""
+        if not 1 <= len(s.operands) <= 2:
+            raise AsmError(
+                ".section takes NAME or NAME, ADDR", s.line, s.source, s.file
+            )
+        name = s.operands[0].strip()
+        if name == self._section and len(s.operands) == 1:
+            return
+        known = name == self._section or name in self._sections
+        if len(s.operands) == 2:
+            if known:
+                raise AsmError(
+                    f"section {name!r} is already placed", s.line, s.source, s.file
+                )
+            target = self._constant(s.operands[1])
+            if low(target, 1) != 0:
+                raise AsmError(
+                    "a section starts at a word-aligned address (a multiple of 3)",
+                    s.line,
+                    s.source,
+                    s.file,
+                )
+            start = target - 1
+        elif not known:
+            raise AsmError(
+                f"section {name!r} needs an address the first time: "
+                f".section {name}, ADDR",
+                s.line,
+                s.source,
+                s.file,
+            )
+        else:
+            start = self._sections[name]
+        # Labels written before the switch name the end of the old section.
+        self._bind(self._loc)
+        self._sections[self._section] = self._loc
+        self._section = name
+        self._loc = start
+        self._sections.pop(name, None)
 
     def _lay_align(self, s: Statement) -> None:
         unit = 3 ** self._constant(self._expect(s, 1)[0])
@@ -164,7 +210,7 @@ class Assembler:
     def _string(self, s: Statement) -> str:
         (lit,) = self._expect(s, 1)
         if len(lit) < 2 or lit[0] != '"' or lit[-1] != '"':
-            raise AsmError("expected a double-quoted string", s.line, s.source)
+            raise AsmError("expected a double-quoted string", s.line, s.source, s.file)
         return re.sub(r"\\(.)", lambda m: STRING_ESCAPES.get(m[1], m[1]), lit[1:-1])
 
     # --- pass two: emit ------------------------------------------------------
@@ -177,11 +223,11 @@ class Assembler:
                 elif s.kind == "word":
                     self._emit_words(s)
             except (ExprError, OperandError, isa.EncodingError) as e:
-                raise AsmError(str(e), s.line, s.source) from None
+                raise AsmError(str(e), s.line, s.source, s.file) from None
 
     def _put(self, addr: int, tryte: int, s: Statement) -> None:
         if addr in self.image.trytes:
-            raise AsmError(f"address {addr} assembled twice", s.line, s.source)
+            raise AsmError(f"address {addr} assembled twice", s.line, s.source, s.file)
         self.image.trytes[addr] = tryte
 
     def _emit_words(self, s: Statement) -> None:
@@ -197,7 +243,9 @@ class Assembler:
             addr = s.addr + 3 * i
             for offset, tryte in zip((-1, 0, 1), _split_word(word), strict=True):
                 self._put(addr + offset, tryte, s)
-            self.image.listing.append(Listing(addr, word, s.line, s.source))
+            self.image.listing.append(
+                Listing(addr, word, s.line, s.source, file=s.file)
+            )
 
     def _emit_trytes(self, s: Statement) -> None:
         if s.mnemonic == ".zero":
@@ -209,9 +257,9 @@ class Assembler:
             values += [0] if s.mnemonic == ".string" else []
         for i, v in enumerate(values):
             if abs(v) > TRYTE_MAX:
-                raise AsmError(f"{v} does not fit a tryte", s.line, s.source)
+                raise AsmError(f"{v} does not fit a tryte", s.line, s.source, s.file)
             self._put(s.addr + i, v, s)
-        self.image.listing.append(Listing(s.addr, None, s.line, s.source))
+        self.image.listing.append(Listing(s.addr, None, s.line, s.source, file=s.file))
 
     def _words(self, s: Statement) -> list[int]:
         pc = s.addr
@@ -232,9 +280,11 @@ class Assembler:
         ]
 
 
-def assemble(source: str) -> Image:
+def assemble(source: str, file: str | None = None) -> Image:
+    """Assemble source text. file, if given, names it in error messages
+    and is where .include paths start from."""
     asm = Assembler()
-    stmts = parse(source)
+    stmts = parse(source, file)
     asm.layout(stmts)
     asm.emit(stmts)
     asm.image.symbols = dict(asm.symbols)
@@ -242,3 +292,7 @@ def assemble(source: str) -> Image:
         if entry.word is not None:
             entry.text = disassemble(entry.word, entry.addr)
     return asm.image
+
+
+def assemble_file(path: str | Path) -> Image:
+    return assemble(Path(path).read_text(encoding="utf-8"), str(path))

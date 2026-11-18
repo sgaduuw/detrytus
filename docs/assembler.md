@@ -1,7 +1,7 @@
 # detrytus assembler
 
-`detrytus asm FILE` prints a listing; `detrytus run FILE` assembles and
-runs. The instruction set is in [`isa.md`](isa.md); this page covers the
+`detrytus asm FILE` prints a listing, or with `-o OUT.dti` writes an
+image; `detrytus run FILE...` assembles and runs. The instruction set is in [`isa.md`](isa.md); this page covers the
 source syntax.
 
 ## Lines
@@ -54,10 +54,76 @@ reset address.
 | `.ascii "..."` | the same without the terminator |
 | `.zero N` | N zero trytes |
 | `.equ NAME, E` / `.set` | define a constant |
+| `.section NAME[, ADDR]` | switch sections (below) |
+| `.include "PATH"` | assemble another file here (below) |
 
 String escapes: `\n`, `\t`, `\0`, `\\`, `\"`. Code points above 9,841
 do not fit a tryte and are rejected until the text encoding (`isa.md`
 12.2) is settled.
+
+## Local labels
+
+A label that is only digits can be defined any number of times. `1b`
+refers to the nearest `1:` at or before the current line, so
+`1: j 1b` jumps to itself, and `1f` to the nearest one after it:
+
+```asm
+puts:   li    t1, CONSOLE_OUT
+1:      lt    t0, 0(a0)
+        beqz  t0, 2f
+        sw    t0, 0(t1)
+        addi  a0, a0, 1
+        j     1b
+2:      ret
+```
+
+## Sections
+
+Each section keeps its own place, so code and data can be written side
+by side and land apart. Assembly starts in the section `text`, placed so
+its first word is centred on 0. A new section needs an address the first
+time it appears, and resumes where it left off after that:
+
+```asm
+        .section data, 2 * 19683   # placed once, here
+greeting: .string "hello"
+        .section text              # back to the code
+        ...
+        .section data              # and to the data
+```
+
+Like `.org`, a section address names where the next word is centred, so
+tryte data placed there starts one tryte below it. A label written
+before a `.section` line names the end of the section being left.
+Sections do not move to make room for each other: give them addresses
+that keep them apart, or the assembler reports the overlap.
+
+## Includes
+
+`.include "PATH"` assembles another file in place, as if its text were
+pasted there. The path is relative to the file that contains the
+directive. An included file can include others; including a file that
+is already being included is an error. Errors name the file and line
+they come from, as `lib/console.s:12: ...`.
+
+Everything shares one symbol table, so an included file's labels and
+constants are visible after the include, and a label used twice is
+still an error.
+
+## Images
+
+`detrytus asm FILE -o OUT.dti` writes the assembled program as an image
+file, with its labels and constants so the debugger can still name
+addresses. `run` and `debug` take any mix of sources and images and load
+them together. That lets a kernel and its programs be built separately:
+they share no symbols, so they agree on addresses by convention (an
+`.equ` in a shared include file is the natural place). Images that
+overlap are refused. A name defined differently by two images, such as
+two programs that each have a `start`, is left out of the merged symbol
+table rather than resolved to the wrong one.
+
+The format packs five trits into each byte; the layout is described at
+the top of `detrytus/image.py`.
 
 ## Operand forms
 

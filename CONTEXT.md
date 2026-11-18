@@ -262,3 +262,29 @@ would hide exactly the TLB and device bugs a kernel author needs it for.
 The ISA's own debug triggers (spec 8.6) are separate: they are for the
 OS's debugger and remain unimplemented.
 
+### 2026-11-18 · Sections are placed explicitly; no linker yet
+
+A section gets its address the first time it is used and never moves.
+Letting one section follow the end of another would make addresses, and
+so the sizes of instructions like `li`, depend on layout, which the
+two-pass assembler is built to avoid. Separately built images share no
+symbols; they agree on addresses by convention, typically constants in a
+shared include file. A linker with relocations can come if that stops
+scaling.
+
+### 2026-11-18 · Images pack five trits to a byte
+
+The `.dti` format stores trytes as packed trits, 5 to a byte (3⁵ = 243 ≤
+256), which wastes about 5% instead of the 44% of a byte per tryte. It
+carries labels and constants so the debugger can still name addresses.
+When images are merged, overlapping trytes are an error, and a name
+defined differently in two images is dropped rather than guessed.
+
+### 2026-11-18 · Numeric local labels follow the GNU assembler
+
+`1:` may be defined repeatedly; `1b` is the nearest at or before the
+line (a label on the same line counts) and `1f` the nearest after. The
+convention is familiar from other assemblers, and the assembler renames
+each one to a unique `.L` name before layout, so nothing downstream had
+to change.
+
