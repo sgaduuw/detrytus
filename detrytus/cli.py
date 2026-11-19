@@ -35,12 +35,10 @@ def cmd_asm(args: argparse.Namespace) -> int:
         if not args.listing:
             return 0
     for e in image.listing:
-        if e.word is None:
-            print(f"{e.addr:>14}  {'':27}  {'':28}  {e.source.strip()}")
-        else:
-            print(
-                f"{e.addr:>14}  {format_trits(e.word)}  {e.text:28}  {e.source.strip()}"
-            )
+        # A section that runs somewhere other than where it loads shows both.
+        where = str(e.addr) if e.load in (None, e.addr) else f"{e.addr}@{e.load}"
+        trits = "" if e.word is None else format_trits(e.word)
+        print(f"{where:>22}  {trits:27}  {e.text:28}  {e.source.strip()}")
     return 0
 
 

@@ -31,6 +31,7 @@ class Listing:
     source: str
     text: str = ""  # disassembly of the emitted word
     file: str | None = None  # where the line came from, for included files
+    load: int | None = None  # where it sits in the image, if not at addr
 
 
 @dataclass
@@ -69,9 +70,11 @@ class Assembler:
         self.image = Image()
         self._loc = -1  # next free tryte, so the first word centres on 0
         self._pending: list[Statement] = []
-        # Next free tryte of each section other than the current one.
+        # The current section, and its load address minus run address.
         self._section = "text"
-        self._sections: dict[str, int] = {}
+        self._shift = 0
+        # (next free tryte, shift) of each section other than the current one.
+        self._sections: dict[str, tuple[int, int]] = {}
 
     # --- pass one: layout ----------------------------------------------------
 
@@ -140,28 +143,20 @@ class Assembler:
     def _lay_section(self, s: Statement) -> None:
         """Switch sections. A section is placed once, on first use, and
         resumes where it left off after that."""
-        if not 1 <= len(s.operands) <= 2:
+        if not 1 <= len(s.operands) <= 3:
             raise AsmError(
-                ".section takes NAME or NAME, ADDR", s.line, s.source, s.file
+                ".section takes NAME, or NAME, LOAD[, RUN]", s.line, s.source, s.file
             )
         name = s.operands[0].strip()
         if name == self._section and len(s.operands) == 1:
             return
         known = name == self._section or name in self._sections
-        if len(s.operands) == 2:
+        if len(s.operands) > 1:
             if known:
                 raise AsmError(
                     f"section {name!r} is already placed", s.line, s.source, s.file
                 )
-            target = self._constant(s.operands[1])
-            if low(target, 1) != 0:
-                raise AsmError(
-                    "a section starts at a word-aligned address (a multiple of 3)",
-                    s.line,
-                    s.source,
-                    s.file,
-                )
-            start = target - 1
+            start, shift = self._place(s)
         elif not known:
             raise AsmError(
                 f"section {name!r} needs an address the first time: "
@@ -171,13 +166,37 @@ class Assembler:
                 s.file,
             )
         else:
-            start = self._sections[name]
+            start, shift = self._sections[name]
         # Labels written before the switch name the end of the old section.
         self._bind(self._loc)
-        self._sections[self._section] = self._loc
-        self._section = name
-        self._loc = start
+        self._sections[self._section] = (self._loc, self._shift)
+        self._section, self._loc, self._shift = name, start, shift
         self._sections.pop(name, None)
+
+    def _place(self, s: Statement) -> tuple[int, int]:
+        """(first free tryte, shift) for a new section's LOAD and RUN.
+
+        Layout, labels and pc-relative encoding all use the run address,
+        where the code executes; only emission adds the shift. They must
+        differ by a multiple of 3 so words are aligned in both places.
+        """
+        load = self._constant(s.operands[1])
+        run = self._constant(s.operands[2]) if len(s.operands) == 3 else load
+        if low(run, 1) != 0:
+            raise AsmError(
+                "a section starts at a word-aligned address (a multiple of 3)",
+                s.line,
+                s.source,
+                s.file,
+            )
+        if (load - run) % 3:
+            raise AsmError(
+                "a section's load and run addresses must differ by a multiple of 3",
+                s.line,
+                s.source,
+                s.file,
+            )
+        return run - 1, load - run
 
     def _lay_align(self, s: Statement) -> None:
         unit = 3 ** self._constant(self._expect(s, 1)[0])
@@ -185,6 +204,7 @@ class Assembler:
 
     def _lay_trytes(self, s: Statement) -> None:
         s.kind = "tryte"
+        s.shift = self._shift
         s.addr = self._loc
         s.size = self._tryte_count(s)
         self._bind(s.addr)
@@ -192,8 +212,15 @@ class Assembler:
 
     def _lay_words(self, s: Statement) -> None:
         s.kind = "word"
+        s.shift = self._shift
         if s.mnemonic == ".word":
             s.size = len(s.operands)
+        elif s.mnemonic == ".words":
+            s.size = self._constant(self._expect(s, 1)[0])
+            if s.size < 0:
+                raise AsmError(
+                    ".words needs a count of 0 or more", s.line, s.source, s.file
+                )
         else:
             s.size = pseudo.size(_split_suffix(s.mnemonic)[0], s.operands, self.symbols)
         s.addr = _next_centre(self._loc, 3)
@@ -226,6 +253,8 @@ class Assembler:
                 raise AsmError(str(e), s.line, s.source, s.file) from None
 
     def _put(self, addr: int, tryte: int, s: Statement) -> None:
+        """Place a tryte at its load address: addr (a run address) + shift."""
+        addr += s.shift
         if addr in self.image.trytes:
             raise AsmError(f"address {addr} assembled twice", s.line, s.source, s.file)
         self.image.trytes[addr] = tryte
@@ -244,7 +273,7 @@ class Assembler:
             for offset, tryte in zip((-1, 0, 1), _split_word(word), strict=True):
                 self._put(addr + offset, tryte, s)
             self.image.listing.append(
-                Listing(addr, word, s.line, s.source, file=s.file)
+                Listing(addr, word, s.line, s.source, file=s.file, load=addr + s.shift)
             )
 
     def _emit_trytes(self, s: Statement) -> None:
@@ -259,12 +288,16 @@ class Assembler:
             if abs(v) > TRYTE_MAX:
                 raise AsmError(f"{v} does not fit a tryte", s.line, s.source, s.file)
             self._put(s.addr + i, v, s)
-        self.image.listing.append(Listing(s.addr, None, s.line, s.source, file=s.file))
+        self.image.listing.append(
+            Listing(s.addr, None, s.line, s.source, file=s.file, load=s.addr + s.shift)
+        )
 
     def _words(self, s: Statement) -> list[int]:
         pc = s.addr
         if s.mnemonic == ".word":
             return [self.operands.value(op, pc) for op in s.operands]
+        if s.mnemonic == ".words":
+            return [0] * s.size
         name, suffix = _split_suffix(s.mnemonic)
         if name in pseudo.PSEUDOS:
             expansions = pseudo.PSEUDOS[name](self.operands, s.operands, pc, s.size)

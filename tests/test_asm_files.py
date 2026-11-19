@@ -181,3 +181,83 @@ def test_listing_entries_name_the_file_they_came_from(tmp_path):
     assert included.word is None  # the string
     assert included.text == ""  # no disassembly, and not a file name either
     assert by_file[str(main)].text == "addi zero, zero, 0"
+
+
+# --- run addresses -----------------------------------------------------------------
+
+
+RUN_ELSEWHERE = """
+boot:   li    t0, entry          # another section's label: its run address
+        jalr  zero, 0(t0)
+        .section moved, 300, -3000
+entry:  la    a0, data           # pc-relative within the section
+        j     entry
+data:   .word 7
+"""
+
+
+def test_a_section_runs_at_its_run_address_and_loads_at_its_load_address():
+    image = assemble(RUN_ELSEWHERE)
+    assert image.labels["entry"] == -3000
+    assert image.labels["data"] == -3000 + 9  # la (2 words) and j (1)
+    # The trytes sit at the load address; nothing is placed at the run address.
+    assert {300 - 1, 300, 301} <= image.trytes.keys()
+    assert not image.trytes.keys() & set(range(-3002, -2990))
+    texts_by_addr = {e.addr: e.text for e in image.listing if e.word is not None}
+    assert texts_by_addr[-3000 + 6] == "jal zero, -3000"  # branch encoded for -3000
+    assert {e.load for e in image.listing if e.addr == -3000} == {300}
+
+
+def test_li_of_a_label_gives_its_run_address():
+    image = assemble(RUN_ELSEWHERE)
+    # A forward reference takes li's long form; -3000 fits its low 8 trits.
+    assert texts(image)[:2] == ["lui t0, 0", "addi t0, t0, -3000"]
+
+
+def test_a_resumed_section_keeps_its_run_address():
+    image = assemble(
+        ".section k, 300, -3000\na: nop\n.section text\nnop\n.section k\nb: nop"
+    )
+    assert (image.labels["a"], image.labels["b"]) == (-3000, -2997)
+    assert 303 in image.trytes  # b loaded right after a
+
+
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        (".section k, 301, -3000", "must differ by a multiple of 3"),
+        (".section k, 300, -2999", "starts at a word-aligned address"),
+    ],
+)
+def test_run_addresses_must_keep_words_aligned(line, message):
+    with pytest.raises(AsmError, match=message):
+        assemble(line)
+
+
+def test_overlap_is_checked_where_trytes_load():
+    with pytest.raises(AsmError, match="assembled twice"):
+        assemble("nop\n.section k, 0, 600\nnop")  # runs at 600, loads over 0
+
+
+def test_the_paging_example_runs_with_virtual_labels():
+    image = assemble_file(EXAMPLES / "paging.s")
+    assert image.labels["user"] == 19683  # virtual page 1
+    m = Machine()
+    m.load(image)
+    assert m.run(10_000).exit_code == 0
+
+
+# --- .words ------------------------------------------------------------------------
+
+
+def test_words_reserves_zeroed_aligned_words():
+    image = assemble(".org 30\n.tryte 5\ntable: .words 4\nafter: nop")
+    assert image.labels["table"] % 3 == 0  # a word centre, unlike .zero
+    assert image.labels["table"] == 33
+    assert image.labels["after"] == 33 + 12
+    assert all(image.trytes[a] == 0 for a in range(32, 44))
+
+
+def test_words_needs_a_count():
+    with pytest.raises(AsmError, match="count of 0 or more"):
+        assemble(".words -1")

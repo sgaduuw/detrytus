@@ -288,3 +288,14 @@ convention is familiar from other assemblers, and the assembler renames
 each one to a unique `.L` name before layout, so nothing downstream had
 to change.
 
+### 2026-11-18 · Sections can run somewhere other than where they load
+
+`.section NAME, LOAD, RUN` emits a section at its load address but lays
+it out, labels included, at its run address, like a linker's separate
+load and virtual addresses. trylobite's kernel needed it: loaded into
+physical pages and run four pages lower, its labels were physical, so
+code had to reach its own data pc-relatively and the debugger could not
+name kernel addresses. The two addresses must differ by a multiple of 3
+to keep words aligned in both. `.words N` arrived with it, for the
+kernel's process table: unlike `.zero`, it starts at a word centre.
+
