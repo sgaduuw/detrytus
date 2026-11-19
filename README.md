@@ -19,8 +19,8 @@ A Python emulator and assembler implement its integer core: every
 integer, tritwise, memory, atomic, control and system instruction, plus
 traps, delegation, interrupts, the timer, single step and paged virtual
 memory. Floating point, compressed bundles and debug triggers are
-specified but not implemented yet. A Rust implementation may follow once the design
-settles; [`docs/rust-plan.md`](docs/rust-plan.md) lays out how.
+specified but not implemented yet. The implementation is moving to
+Rust, in steps laid out in [`docs/rust-plan.md`](docs/rust-plan.md).
 
 ## Usage
 
