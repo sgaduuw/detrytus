@@ -1,18 +1,22 @@
-//! One hart: registers, the fetch loop and the unprivileged instructions.
+//! One hart: registers, the fetch loop and what each instruction does.
+//! Traps, CSRs and interrupts are in `privileged.rs`.
 //!
-//! Mirrors `detrytus/cpu.py` and `detrytus/execute.py`. This is phase 2
-//! of docs/rust-plan.md: the integer, tritwise, memory, atomic and
-//! control instructions. Privilege arrives in phase 3; until then the
-//! hart stays in ring +1, has no CSRs, and so no trap handler can be
-//! installed, which makes every trap unhandled (as it is for any program
-//! that leaves `tvec` at 0). Instructions that need CSRs or other rings
-//! stop the machine as [`Stop::Unsupported`] rather than approximating.
+//! Mirrors `detrytus/cpu.py` and `detrytus/execute.py`: every integer,
+//! logic, memory, atomic, control and system instruction. Not yet:
+//! floating point and compressed bundles, which stop the machine as
+//! [`Stop::Unsupported`] rather than being approximated.
+//!
+//! Single-hart assumptions, as in Python: fences are no-ops, `wfi` skips
+//! time ahead to the next timer, and an `lr` reservation is lost only to
+//! a trap or a later `sc`.
 
 use std::collections::HashMap;
 
 use crate::alu;
 use crate::bus::{Access, Bus, BusError};
+use crate::entropy::Entropy;
 use crate::isa::{self, Decoded, Kind};
+use crate::mmu::{self, Mmu, Ptbr};
 use crate::trits::{TRYTE_TRITS, WORD_TRITS, field, low, pow3, wrap};
 
 /// Why the hart stopped running.
@@ -27,14 +31,14 @@ pub enum Stop {
 }
 
 /// What interrupts an instruction.
-enum Exception {
+pub(crate) enum Exception {
     Trap { cause: i64, tval: i64 },
     Stop(Stop),
 }
 
-type Exec = Result<(), Exception>;
+pub(crate) type Exec = Result<(), Exception>;
 
-fn trap(cause: i64, tval: i64) -> Exception {
+pub(crate) fn trap(cause: i64, tval: i64) -> Exception {
     Exception::Trap { cause, tval }
 }
 
@@ -45,22 +49,27 @@ fn unsupported(what: &str) -> Exception {
 pub struct Hart {
     regs: [i64; 27],
     pub pc: i64,
-    next_pc: i64,
+    pub(crate) next_pc: i64,
     pub ring: i64,
     pub instret: i64,
     pub time: i64,
-    reservation: Option<i64>,
+    pub hartid: i64,
+    /// The trap banks of rings 0 and +1, indexed by ring.
+    pub(crate) banks: [[i64; 9]; 2],
+    /// CSRs that are plain storage.
+    pub(crate) csrs: HashMap<i64, i64>,
+    pub(crate) ptbr: Ptbr,
+    pub(crate) mmu: Mmu,
+    pub(crate) reservation: Option<i64>,
+    /// The bank to trap into after one more instruction (single step).
+    pub(crate) step_ring: Option<i64>,
+    pub(crate) entropy: Entropy,
     cache: HashMap<i64, Result<Decoded, isa::Illegal>>,
 }
 
-impl Default for Hart {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Hart {
-    pub fn new() -> Self {
+    /// A hart at reset: ring +1, pc 0. `seed` seeds the entropy CSR.
+    pub fn new(seed: u32) -> Self {
         Hart {
             regs: [0; 27],
             pc: 0,
@@ -68,7 +77,14 @@ impl Hart {
             ring: 1,
             instret: 0,
             time: 0,
+            hartid: 0,
+            banks: [[0; 9]; 2],
+            csrs: isa::stored_csrs().map(|n| (n, 0)).collect(),
+            ptbr: Ptbr::decode(0),
+            mmu: Mmu::default(),
             reservation: None,
+            step_ring: None,
+            entropy: Entropy::new(seed),
             cache: HashMap::new(),
         }
     }
@@ -94,29 +110,30 @@ impl Hart {
 
     pub fn step(&mut self, bus: &mut Bus) -> Result<(), Stop> {
         self.time += 1;
-        // No interrupt can be pending: they need ie, a CSR (phase 3).
+        let stepping = self.step_ring.take();
+        if self.take_interrupt()? {
+            return Ok(());
+        }
         let pc = self.pc;
         match self.execute(bus, pc) {
             Ok(()) => {
                 self.instret += 1;
-                Ok(())
+                match stepping {
+                    Some(ring) => self.enter_trap(isa::SINGLE_STEP, self.pc, self.pc, Some(ring)),
+                    None => Ok(()),
+                }
             }
-            Err(Exception::Trap { cause, tval }) => self.enter_trap(cause, tval, pc),
+            Err(Exception::Trap { cause, tval }) => self.enter_trap(cause, tval, pc, None),
             Err(Exception::Stop(stop)) => Err(stop),
         }
-    }
-
-    fn enter_trap(&mut self, cause: i64, tval: i64, pc: i64) -> Result<(), Stop> {
-        // Without CSRs no bank has a tvec, so no handler is installed.
-        self.reservation = None;
-        Err(Stop::Unhandled { cause, tval, pc, ring: self.ring })
     }
 
     fn execute(&mut self, bus: &mut Bus, pc: i64) -> Exec {
         if low(pc, 1) != 0 {
             return Err(unsupported("compressed bundles (slot B)"));
         }
-        let word = bus.read(pc, 3, Access::Fetch).map_err(|e| match e {
+        let physical = self.translate(bus, pc, mmu::Access::Fetch)?;
+        let word = bus.read(physical, 3, Access::Fetch).map_err(|e| match e {
             BusError::Fault(addr) => trap(isa::ACCESS_FAULT, addr),
             BusError::Halt(code) => Exception::Stop(Stop::Halt(code)),
         })?;
@@ -139,10 +156,19 @@ impl Hart {
 
     // --- memory ------------------------------------------------------------
 
-    /// Virtual to physical. Ring +1 is never translated (docs/isa.md
-    /// 8.1), and this core has no other ring yet.
-    fn translate(&self, addr: i64) -> i64 {
-        addr
+    /// Virtual to physical. Ring +1 is never translated (docs/isa.md 8.1).
+    fn translate(
+        &mut self,
+        bus: &mut Bus,
+        addr: i64,
+        access: mmu::Access,
+    ) -> Result<i64, Exception> {
+        if self.ring > 0 || self.ptbr.mode != 1 {
+            return Ok(addr);
+        }
+        let sua = field(self.banks[0][isa::TSTATUS], isa::ST_SUA, 1) == 1;
+        let (ring, ptbr) = (self.ring, self.ptbr);
+        self.mmu.translate(bus, addr, access, ring, sua, ptbr).map_err(|(c, v)| trap(c, v))
     }
 
     fn aligned(addr: i64, width: u32) -> Exec {
@@ -161,15 +187,19 @@ impl Hart {
 
     fn load(&mut self, bus: &mut Bus, addr: i64, width: u32) -> Result<i64, Exception> {
         Self::aligned(addr, width)?;
-        bus.read(self.translate(addr), width, Access::Load).map_err(Self::bus_error(addr))
+        let physical = self.translate(bus, addr, mmu::Access::Load)?;
+        bus.read(physical, width, Access::Load).map_err(Self::bus_error(addr))
     }
 
     fn store(&mut self, bus: &mut Bus, addr: i64, width: u32, value: i64) -> Exec {
         Self::aligned(addr, width)?;
-        bus.write(self.translate(addr), width, value).map_err(Self::bus_error(addr))
+        let physical = self.translate(bus, addr, mmu::Access::Store)?;
+        bus.write(physical, width, value).map_err(Self::bus_error(addr))
     }
 
-    /// Atomic read-modify-write of a word; returns the old value.
+    /// Atomic read-modify-write of a word; returns the old value. One
+    /// translation covers both halves and needs read and write
+    /// permission, so a read-only page faults as a store would.
     fn rmw(
         &mut self,
         bus: &mut Bus,
@@ -177,7 +207,7 @@ impl Hart {
         update: impl Fn(i64) -> i64,
     ) -> Result<i64, Exception> {
         Self::aligned(addr, 3)?;
-        let physical = self.translate(addr);
+        let physical = self.translate(bus, addr, mmu::Access::Amo)?;
         let old = bus.read(physical, 3, Access::Load).map_err(Self::bus_error(addr))?;
         bus.write(physical, 3, update(old)).map_err(Self::bus_error(addr))?;
         Ok(old)
@@ -357,9 +387,34 @@ impl Hart {
             // A lone hart with no caches already satisfies these: nothing
             // is reordered and the decode cache is keyed by word value.
             Kind::Fence | Kind::FenceI | Kind::Cclean | Kind::Cflush => Ok(()),
-            Kind::Cinval if self.ring < 0 => Err(trap(isa::ILLEGAL, 0)),
-            Kind::Cinval => Ok(()),
+            Kind::Cinval => self.privileged(),
+            Kind::Tret => self.tret(d),
+            Kind::FenceVm => {
+                self.privileged()?;
+                let va = (d.rs1 != 0).then(|| self.x(d.rs1));
+                let asid = (d.rs2 != 0).then(|| self.x(d.rs2));
+                self.mmu.fence(va, asid);
+                Ok(())
+            }
+            Kind::Csrrw => self.csr_op(d, |_, src| src),
+            Kind::Csrrtmax => self.csr_op(d, |old, src| alu::tlut(old, src, isa::TMAX)),
+            Kind::Csrrtmin => self.csr_op(d, |old, src| alu::tlut(old, src, isa::TMIN)),
+            Kind::Wfi => {
+                self.wfi();
+                Ok(())
+            }
             _ => Err(unsupported(d.op.name)),
         }
+    }
+
+    fn csr_op(&mut self, d: &Decoded, combine: fn(i64, i64) -> i64) -> Exec {
+        let number = low(d.imm, 9);
+        let old = self.read_csr(number)?;
+        if d.rs1 != 0 {
+            let src = self.x(d.rs1);
+            self.write_csr(number, combine(old, src))?;
+        }
+        self.set_x(d.rd, old);
+        Ok(())
     }
 }

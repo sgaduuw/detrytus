@@ -21,8 +21,10 @@ traps, delegation, interrupts, the timer, single step and paged virtual
 memory. Floating point, compressed bundles and debug triggers are
 specified but not implemented yet. The implementation is moving to
 Rust, in steps laid out in [`docs/rust-plan.md`](docs/rust-plan.md):
-the Rust core in [`rust/core/`](rust/core/) runs the unprivileged
-instructions so far, and the Python one stays the reference.
+the Rust core in [`rust/core/`](rust/core/) now implements everything
+the Python one does and passes the whole conformance suite, about 16
+times faster on trylobite. It has no command line yet; the Python tools
+remain the way to use detrytus, and the Python core the reference.
 
 ## Usage
 
@@ -117,7 +119,10 @@ cargo fmt --check
 
 The Rust core, `rust/core/src/`, mirrors the machine half of that:
 `trits.rs`, `isa.rs`, `alu.rs`, `bus.rs` (memory and the built-in
-devices), `image.rs` (reading `.dti`), `hart.rs` and `machine.rs`.
+devices), `image.rs` (reading `.dti`), `hart.rs` (the fetch loop and
+instructions), `privileged.rs` (traps, interrupts, CSRs), `mmu.rs`,
+`entropy.rs` and `machine.rs`. `cargo run --release --example run --
+--ram-pages 40 demo.dti` runs an image on it.
 
 ## The shape of it
 

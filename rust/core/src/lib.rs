@@ -4,15 +4,20 @@
 //! (docs/rust-plan.md); the Python core stays the reference until the
 //! two agree on everything.
 //!
-//! Phase 2 status: the unprivileged instructions. Traps without a
-//! handler stop the machine; CSRs, rings and paging come in phase 3.
+//! Status: everything the Python core implements: the integer core,
+//! traps, delegation, interrupts, the timer, single step and paged
+//! virtual memory. Floating point, compressed bundles and debug triggers
+//! are specified but implemented in neither core yet.
 
 pub mod alu;
 pub mod bus;
+pub mod entropy;
 pub mod hart;
 pub mod image;
 pub mod isa;
 pub mod machine;
+pub mod mmu;
+mod privileged;
 pub mod trits;
 
 pub use machine::{Machine, Outcome};

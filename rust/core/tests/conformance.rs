@@ -14,11 +14,6 @@ use detrytus_core::image;
 use detrytus_core::{Machine, Outcome};
 use toml::{Table, Value};
 
-/// Cases the core may report as unsupported until phase 3 of
-/// docs/rust-plan.md (privilege and paging), by id prefix. Anything else
-/// must pass.
-const PHASE_3: &[&str] = &["traps/", "paging/", "examples/examples::paging"];
-
 const DEFAULT_RAM_PAGES: i64 = 729;
 const DEFAULT_MAX_STEPS: i64 = 100_000;
 
@@ -89,12 +84,6 @@ fn load(file: &Path) -> Vec<Case> {
         .collect()
 }
 
-enum Verdict {
-    Pass,
-    Fail(Vec<String>),
-    Unsupported(String),
-}
-
 fn outcome_failure(expect: &Table, outcome: &Outcome) -> Option<String> {
     let int = |key: &str| expect[key].as_integer().unwrap();
     let ok = if expect.contains_key("exit_code") {
@@ -113,6 +102,12 @@ fn named_checks(machine: &mut Machine, expect: &Table, failures: &mut Vec<String
             t.iter().map(|(k, v)| (k.clone(), v.as_integer().unwrap())).collect()
         })
     };
+    for (name, value) in entries("csrs") {
+        let got = machine.hart.csr(&name).unwrap_or_else(|| panic!("no CSR {name}"));
+        if got != value {
+            failures.push(format!("csr {name}: wanted {value}, got {got}"));
+        }
+    }
     for (name, value) in entries("registers") {
         let got = machine.hart.reg(&name).unwrap_or_else(|| panic!("no register {name}"));
         if got != value {
@@ -129,20 +124,15 @@ fn named_checks(machine: &mut Machine, expect: &Table, failures: &mut Vec<String
     }
 }
 
-fn run(case: &Case) -> Verdict {
-    if case.expect.contains_key("csrs") {
-        return Verdict::Unsupported("CSR checks need CSRs".into());
-    }
+/// Run a case; the failures, empty if it passed.
+fn run(case: &Case) -> Vec<String> {
     let data = fs::read(&case.image).unwrap_or_else(|e| {
         panic!("{}: {e}; run `uv run python -m detrytus.conformance`", case.image.display())
     });
-    let mut machine = Machine::new(case.ram_pages);
+    let mut machine = Machine::new(case.ram_pages, 1);
     machine.load(&image::parse(&data).unwrap());
     machine.bus.console.feed(&case.input);
     let outcome = machine.run(case.max_steps as u64);
-    if let Outcome::Unsupported(what) = outcome {
-        return Verdict::Unsupported(what);
-    }
     let e = &case.expect;
     let mut failures: Vec<String> = outcome_failure(e, &outcome).into_iter().collect();
     if let Some(want) = e.get("console").and_then(Value::as_str) {
@@ -157,7 +147,7 @@ fn run(case: &Case) -> Verdict {
         failures.push(format!("ring: wanted {want}, got {}", machine.hart.ring));
     }
     named_checks(&mut machine, e, &mut failures);
-    if failures.is_empty() { Verdict::Pass } else { Verdict::Fail(failures) }
+    failures
 }
 
 #[test]
@@ -166,22 +156,14 @@ fn conformance_suite() {
     case_files(&root(), &mut files);
     let cases: Vec<Case> = files.iter().flat_map(|f| load(f)).collect();
     assert!(cases.len() > 80, "found only {} cases", cases.len());
-    let (mut passed, mut deferred, mut problems) = (0, 0, Vec::new());
+    let mut problems = Vec::new();
     for case in &cases {
-        match run(case) {
-            Verdict::Pass => passed += 1,
-            Verdict::Unsupported(_) if PHASE_3.iter().any(|p| case.id.starts_with(p)) => {
-                deferred += 1
-            }
-            Verdict::Unsupported(what) => {
-                problems.push(format!("{}: unsupported: {what}", case.id))
-            }
-            Verdict::Fail(failures) => {
-                problems.push(format!("{}:\n    {}", case.id, failures.join("\n    ")))
-            }
+        let failures = run(case);
+        if !failures.is_empty() {
+            problems.push(format!("{}:\n    {}", case.id, failures.join("\n    ")));
         }
     }
-    println!("{passed} passed, {deferred} deferred to phase 3, {} failed", problems.len());
+    println!("{} passed, {} failed", cases.len() - problems.len(), problems.len());
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
 }
 

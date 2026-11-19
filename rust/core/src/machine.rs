@@ -23,8 +23,9 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new(ram_pages: i64) -> Self {
-        Machine { bus: Bus::new(ram_pages), hart: Hart::new() }
+    /// A machine with `ram_pages` pages of RAM; `seed` seeds the entropy CSR.
+    pub fn new(ram_pages: i64, seed: u32) -> Self {
+        Machine { bus: Bus::new(ram_pages), hart: Hart::new(seed) }
     }
 
     pub fn load(&mut self, segments: &[Segment]) {

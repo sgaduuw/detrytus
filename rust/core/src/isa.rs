@@ -275,6 +275,97 @@ pub const MISALIGNED: i64 = 2;
 pub const ACCESS_FAULT: i64 = 3;
 pub const SYSCALL: i64 = 4;
 pub const BREAKPOINT: i64 = 5;
+pub const INSTR_PAGE_FAULT: i64 = 6;
+pub const LOAD_PAGE_FAULT: i64 = 7;
+pub const STORE_PAGE_FAULT: i64 = 8;
+pub const SINGLE_STEP: i64 = 9;
+
+// --- CSRs (8.2) --------------------------------------------------------------
+
+/// A CSR's number: trit 8 is the lowest ring that may access it, trit 7
+/// is + where it is writable.
+pub const fn csr_number(ring: i64, access: i64, index: i64) -> i64 {
+    6561 * ring + 2187 * access + index
+}
+
+/// Lowest ring allowed to access a CSR.
+pub const fn csr_ring(number: i64) -> i64 {
+    field(number, 8, 1)
+}
+
+pub const fn csr_writable(number: i64) -> bool {
+    field(number, 7, 1) == 1
+}
+
+/// The trap bank each of rings +1 and 0 has, in order; the CSR names add
+/// an `m` or `s` prefix.
+pub const BANK: [&str; 9] =
+    ["tstatus", "tvec", "tpc", "tcause", "tval", "scratch", "ie", "ip", "timecmp"];
+pub const TSTATUS: usize = 0;
+pub const TVEC: usize = 1;
+pub const TPC: usize = 2;
+pub const TCAUSE: usize = 3;
+pub const TVAL: usize = 4;
+pub const IE: usize = 6;
+pub const IP: usize = 7;
+pub const TIMECMP: usize = 8;
+
+/// Trits of tstatus.
+pub const ST_PR: u32 = 0;
+pub const ST_IE: u32 = 1;
+pub const ST_PIE: u32 = 2;
+pub const ST_SUA: u32 = 3;
+pub const ST_SS: u32 = 4;
+
+pub const EDELEG: i64 = csr_number(1, 1, 20);
+pub const IDELEG: i64 = csr_number(1, 1, 21);
+pub const HARTID: i64 = csr_number(1, -1, 0);
+pub const PTBR: i64 = csr_number(0, 1, 10);
+pub const ENTROPY: i64 = csr_number(0, -1, 0);
+pub const CYCLE: i64 = csr_number(-1, -1, 0);
+pub const TIME: i64 = csr_number(-1, -1, 1);
+pub const INSTRET: i64 = csr_number(-1, -1, 2);
+pub const FCSR: i64 = csr_number(-1, 1, 0);
+
+/// CSRs that are plain storage; the others are computed or live in a
+/// trap bank.
+pub fn stored_csrs() -> impl Iterator<Item = i64> {
+    let debug = (0..9).flat_map(|i| [csr_number(0, 1, 20 + i), csr_number(0, 1, 30 + i)]);
+    [EDELEG, IDELEG, PTBR, FCSR].into_iter().chain(debug)
+}
+
+/// A CSR's number from its name.
+pub fn csr_by_name(name: &str) -> Option<i64> {
+    let banked = |prefix: char, ring: i64| -> Option<i64> {
+        let rest = name.strip_prefix(prefix)?;
+        BANK.iter().position(|b| *b == rest).map(|i| csr_number(ring, 1, i as i64))
+    };
+    let debug = |prefix: &str, base: i64| -> Option<i64> {
+        let i: i64 = name.strip_prefix(prefix)?.parse().ok()?;
+        (0..9).contains(&i).then(|| csr_number(0, 1, base + i))
+    };
+    let fixed = match name {
+        "edeleg" => Some(EDELEG),
+        "ideleg" => Some(IDELEG),
+        "hartid" => Some(HARTID),
+        "ptbr" => Some(PTBR),
+        "entropy" => Some(ENTROPY),
+        "cycle" => Some(CYCLE),
+        "time" => Some(TIME),
+        "instret" => Some(INSTRET),
+        "fcsr" => Some(FCSR),
+        _ => None,
+    };
+    fixed
+        .or_else(|| banked('m', 1))
+        .or_else(|| banked('s', 0))
+        .or_else(|| debug("tdaddr", 20))
+        .or_else(|| debug("tdctl", 30))
+}
+
+/// The truth tables `csrrtmax` and `csrrtmin` combine with (7.5).
+pub const TMAX: i64 = 9728;
+pub const TMIN: i64 = 5792;
 
 // --- decoding ----------------------------------------------------------------
 
@@ -442,6 +533,17 @@ mod tests {
     fn unknown_opcodes_are_illegal() {
         assert!(decode(0).is_err());
         assert!(decode(100).is_err());
+    }
+
+    #[test]
+    fn csr_numbers_follow_the_layout() {
+        assert_eq!(csr_by_name("mtvec"), Some(6561 + 2187 + 1));
+        assert_eq!(csr_by_name("stimecmp"), Some(2187 + 8));
+        assert_eq!(csr_by_name("tdctl8"), Some(2187 + 38));
+        assert_eq!(csr_by_name("mtnothing"), None);
+        assert_eq!(csr_ring(TIME), -1);
+        assert!(csr_writable(PTBR) && !csr_writable(ENTROPY));
+        assert_eq!(stored_csrs().count(), 22);
     }
 
     #[test]
