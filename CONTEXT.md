@@ -313,3 +313,26 @@ behaviour is unchanged. Measured on trylobite's `demo.s`, three runs
 each, same machine: 3.07 to 3.20 s before, 1.21 to 1.28 s after; an
 unpaged loop is unchanged.
 
+### 2026-11-19 · The implementation moves to Rust, built for an all-Rust end
+
+Speed is now the limit on trylobite, and the design has held up under a
+real kernel, so the emulator moves to Rust (`docs/rust-plan.md`). The
+owner's aim is to end with Rust alone, so the plan is shaped to make
+Python removable rather than permanent:
+
+- **A pure Rust core crate**, with no Python dependency: the part that
+  survives.
+- **PyO3 bindings in a separate crate**, as scaffolding that lets the
+  Python tools and tests drive the Rust core until each is ported, then
+  deleted. A Rust core used only through Python would have left the
+  tools and tests to rewrite at the end; a standalone Rust tool from day
+  one would have meant porting the assembler and debugger before
+  anything was usable.
+- **A conformance suite stored as data** (assembly plus expected
+  results), so tests outlive the language they were first written for.
+- **Both cores compared**, by the suite and by differential runs of the
+  full machine state, while both exist.
+
+The work stays in this repository, and the Python core remains the
+reference until the switchover.
+

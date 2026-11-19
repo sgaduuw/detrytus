@@ -1,0 +1,126 @@
+# Rust implementation plan
+
+The Python emulator has done its job: it pinned the ISA down while a
+real kernel (trylobite) was written against it. It is now the
+bottleneck: even after the translation speed-up in sgaduuw/detrytus#8,
+trylobite's demo (293,537 instructions, paging on) takes about 1.25 s
+including start-up, and its 21 tests take 24 s (measured 2026-11-19,
+down from about 60 s before #8). This plan
+moves detrytus to Rust in steps that each leave a working tool, and is
+shaped by one goal: **the end state is all Rust**. Python stays only
+until each part has a Rust replacement that passes the same tests.
+
+Decisions behind it are logged in `CONTEXT.md`.
+
+## Principles
+
+- **The core is plain Rust.** The machine (hart, MMU, bus, devices,
+  image loading) is a library crate with no Python dependency. It is the
+  part that survives unchanged.
+- **Python bindings are scaffolding.** A separate thin crate exposes the
+  core to the existing Python tools and tests while they still exist,
+  and is deleted at the switchover.
+- **Tests outlive their language.** Machine behaviour is tested by a
+  conformance suite stored as data, assembly programs with expected
+  results, which both implementations run. Python unit tests of Python
+  tools retire with the tools; tests of machine behaviour migrate into
+  the suite.
+- **Two implementations are compared, not trusted.** As with the spec
+  sync test, the Python and Rust cores run side by side and disagree
+  loudly: the conformance suite on both, plus differential runs that
+  compare full machine state.
+- **The spec stays the source of truth.** Rust reads the same
+  instruction table data where it can; where it cannot, a test parses
+  `docs/isa.md` as `tests/test_spec_sync.py` already does.
+
+## Layout
+
+```
+detrytus/                 the repository
+  Cargo.toml              cargo workspace
+  rust/core/              detrytus-core: the machine, no dependencies
+  rust/py/                detrytus-py: PyO3 bindings, temporary
+  rust/cli/               detrytus-cli: the Rust command line, grows
+  conformance/            the conformance suite (data)
+  detrytus/               the Python package, shrinking
+  docs/, tests/, examples/
+```
+
+The Python package becomes a mixed Python/Rust project built with
+maturin, so `uv sync` builds the extension and `Machine(backend="rust")`
+selects it.
+
+## The conformance suite
+
+Each case is an assembly file plus a small TOML file of expectations:
+
+```toml
+# conformance/paging/user_fault.toml
+source = "user_fault.s"
+ram_pages = 20
+max_steps = 100000
+exit_code = 7
+console = "..."
+[registers]
+a1 = 984153
+```
+
+A case may also give several sources to load together, or expect the
+step limit. Both implementations get a runner: a pytest plugin over the
+directory for Python, a cargo test for Rust. The first cases are drawn
+from the existing CPU, MMU and example tests, which are already mostly
+"assemble this, run it, check the result".
+
+The assembler stays in Python until phase 5, so for Rust the suite runs
+on `.dti` images assembled by Python and committed under
+`conformance/build/`, refreshed by a script and checked by CI to be up
+to date.
+
+## Phases
+
+Each phase is one or more pull requests, and each ends with everything
+green.
+
+1. **Conformance suite.** Create `conformance/` and its Python runner,
+   and move the machine-behaviour tests into it as data. Python only;
+   this pays off whatever happens next.
+2. **Core crate: decode and integers.** Cargo workspace, `detrytus-core`
+   with trit arithmetic, the instruction table, decoding, the integer
+   and tritwise instructions, the bus and devices. Rust unit tests for
+   the arithmetic; the conformance cases that need no traps pass.
+3. **Core crate: privilege and paging.** Traps, CSRs, the timer,
+   single step, the MMU and TLB with the same never-evicting behaviour.
+   The whole conformance suite passes on Rust.
+4. **Bindings and differential testing.** `detrytus-py` exposes the
+   core; `Machine(backend="rust")` passes the full Python test suite and
+   trylobite's tests. A differential runner executes random programs on
+   both cores and compares registers, CSRs and memory after every step;
+   it runs in CI.
+5. **Rust command line.** `detrytus-cli run` for `.dti` images, then the
+   assembler ported to Rust with the assembler tests moved into the
+   conformance suite where they can be, then the debugger. Each tool
+   switches over when it passes the same cases as its Python version.
+6. **Switchover.** Rust becomes the default; the Python core, bindings
+   and tools are removed once nothing depends on them. trylobite moves
+   to the Rust command line.
+
+## Design notes for the core
+
+- **Words are `i64`.** 3²⁷ ≈ 7.6 × 10¹² fits easily, and a full
+  54-trit product fits in `i128`. Trit operations are integer
+  arithmetic, as in Python.
+- **The run loop lives in Rust.** No call into Python per instruction.
+  Decoded instructions are cached, as in Python.
+- **Debugging is native.** Breakpoints, watchpoints and trap catching
+  are part of the core, which returns a stop reason. Calling back into
+  Python on every access would cost the speed this is for.
+- **Same observable behaviour, exactly.** Deterministic time, the TLB
+  that never evicts, `tvec = 0` meaning unhandled, the device map: the
+  conformance suite and the differential runner enforce it.
+
+## Open questions
+
+- Whether the instruction table should become a data file (TOML) read
+  by both implementations, or stay in code with a sync test.
+- Whether a JIT is worth it after the interpreter; decide by measuring
+  trylobite on the Rust interpreter first.
