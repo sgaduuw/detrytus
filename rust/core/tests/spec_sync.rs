@@ -62,3 +62,14 @@ fn the_branch_opcode_matches() {
     assert!(spec().contains("| \u{2212}12 | `b<cond> rs1, rs2, label` |"));
     assert_eq!(OPS.iter().find(|op| op.name == "b").unwrap().opcode, -12);
 }
+
+#[test]
+fn csr_combining_tables_match_the_spec() {
+    use detrytus_core::isa::{TMAX, TMIN};
+    let text = spec();
+    for (name, value) in [("tmax", TMAX), ("tmin", TMIN)] {
+        let row = text.lines().find(|l| l.starts_with(&format!("| `{name}`"))).unwrap();
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        assert!(cells.contains(&value.to_string().as_str()), "{name}: {row}");
+    }
+}

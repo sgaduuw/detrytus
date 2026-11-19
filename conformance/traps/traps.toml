@@ -293,3 +293,37 @@ prelude = ""
 max_steps = 50
 program = "spin: j spin"
 expect.step_limit = true
+
+[[case]]
+name = "only the software trit of ip is writable"
+# Writing + to trits 0 to 3 keeps only trit 3 (software). The timer trit
+# follows timecmp, set far ahead here, and ie is 0, so nothing is taken.
+program = '''
+        li    t0, 1000000
+        csrw  mtimecmp, t0
+        li    t0, 0t++++
+        csrw  mip, t0
+        csrr  a0, mip
+        li    t6, -39366
+        sw    a0, 0(t6)
+handler:
+        li    a0, 99
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 27
+
+[[case]]
+name = "writing a read-only CSR is illegal"
+program = '''
+        li    t0, 5
+        csrw  time, t0
+        li    a0, 0
+        li    t6, -39366
+        sw    a0, 0(t6)
+handler:
+        csrr  a0, mtcause
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 1

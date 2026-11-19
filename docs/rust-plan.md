@@ -92,12 +92,16 @@ green.
    `detrytus-core` with trit arithmetic, the instruction table, decoding,
    the integer and tritwise instructions, the bus and devices. Rust unit
    tests for the arithmetic; the conformance cases that need no traps
-   pass. The Rust runner lists the cases it may defer to phase 3
-   (`PHASE_3` in `rust/core/tests/conformance.rs`): anything it reports
-   as unsupported outside that list, or gets wrong anywhere, fails.
-3. **Core crate: privilege and paging.** Traps, CSRs, the timer,
+   pass. The Rust runner listed the cases it could defer to phase 3;
+   anything unsupported outside that list, or wrong anywhere, failed.
+3. **Core crate: privilege and paging** (done). Traps, CSRs, the timer,
    single step, the MMU and TLB with the same never-evicting behaviour.
-   The whole conformance suite passes on Rust.
+   The whole conformance suite passes on Rust, with no deferral list
+   left. Measured 2026-11-19 on trylobite's demo, three runs each,
+   whole process: Python 1.14 to 1.20 s, Rust 0.066 to 0.082 s, with
+   identical output and step counts. The interpreter is unoptimised
+   (hash-mapped pages, a decode cache keyed by word), so that is a
+   floor, not a ceiling.
 4. **Bindings and differential testing.** `detrytus-py` exposes the
    core; `Machine(backend="rust")` passes the full Python test suite and
    trylobite's tests. A differential runner executes random programs on

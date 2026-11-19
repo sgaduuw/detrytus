@@ -80,7 +80,8 @@ stays out of your diff.
 | `detrytus/cli.py` | the `detrytus` command |
 | `conformance/` | the conformance suite: machine behaviour as data |
 | `conformance/build/` | its cases assembled, for the Rust runner: generated, committed |
-| `rust/core/src/` | the Rust core: `trits`, `isa`, `alu`, `bus`, `image`, `hart`, `machine` |
+| `rust/core/src/` | the Rust core: `trits`, `isa`, `alu`, `bus`, `image`, `hart`, `privileged`, `mmu`, `entropy`, `machine` |
+| `rust/core/examples/run.rs` | runs `.dti` images on the Rust core, for trying and timing it |
 | `rust/core/tests/` | the Rust conformance runner and spec sync test |
 | `examples/` | runnable assembly programs |
 
