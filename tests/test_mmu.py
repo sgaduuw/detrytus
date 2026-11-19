@@ -350,3 +350,57 @@ def test_paging_example_runs_user_code_through_its_page_table():
     assert machine.console.text == (
         "user: hello from virtual page 1\nfirmware: system call from ring -1\n"
     )
+
+
+# --- the checked-translation cache ---------------------------------------------
+# Translations are cached per (page, access, ring, SUA) once checked. These
+# make sure a check done for one of those never answers for another.
+
+
+def test_a_cached_sua_read_does_not_survive_turning_sua_off(m, space):
+    space.map(CODE, CODE, "rxa")
+    space.map(50, 60, "rwuad")
+    program = f"""
+        li    t0, {50 * PAGE}
+        lw    a2, 0(t0)               # allowed: SUA is on
+        li    t1, 0t-000              # ststatus with SUA = -: off
+        csrw  ststatus, t1
+        lw    a3, 0(t0)               # the same page, now refused
+        sys
+    """
+    assert run(m, space, program, ring=0, setup=SUA_ON) == isa.LOAD_PAGE_FAULT
+
+
+def test_a_cached_load_does_not_let_a_store_through(m, space):
+    space.map(50, 60, "ruad")  # readable, not writable
+    program = f"""
+        li    t0, {50 * PAGE}
+        lw    a2, 0(t0)
+        sw    a2, 0(t0)
+        sys
+    """
+    assert run(m, space, program) == isa.STORE_PAGE_FAULT
+
+
+def test_a_cached_kernel_read_does_not_answer_for_the_user_ring(m, space):
+    # Ring 0 reads a kernel page (cached), then drops to ring -1, running
+    # from a user page, and reads the same page, which it must not.
+    space.map(CODE, CODE, "rxa")
+    space.map(51, 51, "rxua")
+    space.map(50, 60, "rwad")  # kernel only
+    m.bus.poke_word(60 * PAGE, 5)
+    program = f"""
+        li    t0, {50 * PAGE}
+        lw    a2, 0(t0)               # ring 0: allowed
+        li    t1, {51 * PAGE}
+        csrw  stpc, t1
+        li    t1, -1
+        csrw  ststatus, t1            # PR = -1
+        tret
+        .org  {51 * PAGE}
+        lw    a3, 0(t0)               # ring -1: refused
+        sys
+    """
+    assert run(m, space, program, ring=0) == isa.LOAD_PAGE_FAULT
+    assert m.hart.reg("a2") == 5  # precondition: the ring 0 read happened
+    assert m.hart.ring == 1  # and the fault came from user mode, into the handler

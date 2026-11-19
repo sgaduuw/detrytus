@@ -62,6 +62,7 @@ class Hart:
         self.on_access: AccessHook | None = None
         self.on_trap: TrapHook | None = None
         self.mmu = Mmu(bus)
+        self._ptbr = Ptbr.decode(0)  # ptbr, decoded once per write
         self._entropy = _entropy_source(seed)
         self._cache: dict[int, isa.Decoded | isa.IllegalInstruction] = {}
 
@@ -213,8 +214,10 @@ class Hart:
             raise Trap(isa.ILLEGAL)
         slot = self._bank_slot(number)
         if slot is None:
-            if number == isa.CSRS["ptbr"] and low(value, 1) == -1:
-                return  # a reserved mode is not stored (9.2)
+            if number == isa.CSRS["ptbr"]:
+                if low(value, 1) == -1:
+                    return  # a reserved mode is not stored (9.2)
+                self._ptbr = Ptbr.decode(value)
             self.csrs[number] = value
             return
         ring, i = slot
@@ -230,7 +233,7 @@ class Hart:
         """Virtual to physical. Ring +1 is never translated (8.1)."""
         if self.ring > 0:
             return addr
-        ptbr = Ptbr.decode(self.csrs[isa.CSRS["ptbr"]])
+        ptbr = self._ptbr
         if ptbr.mode != 1:
             return addr
         status = self.banks[0][isa.TSTATUS]
@@ -245,7 +248,7 @@ class Hart:
         """
         if self.ring > 0:
             return addr
-        ptbr = Ptbr.decode(self.csrs[isa.CSRS["ptbr"]])
+        ptbr = self._ptbr
         return addr if ptbr.mode != 1 else self.mmu.probe(addr, ptbr)
 
     @staticmethod

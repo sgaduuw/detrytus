@@ -13,7 +13,7 @@ from enum import Enum
 from detrytus import isa
 from detrytus.bus import PAGE_TRITS, Bus, BusFault
 from detrytus.trap import Trap
-from detrytus.trits import field, low, pow3, split_high
+from detrytus.trits import field, low, pow3, split_high, to_trits
 
 LEVEL_TRITS = 8  # index width of mid and leaf tables
 ROOT_LEVEL = 2
@@ -61,11 +61,13 @@ class Ptbr:
 
 @dataclass(frozen=True)
 class Leaf:
-    """A cached translation: the leaf PTE and the physical centre of the
-    base page the virtual page maps to."""
+    """A cached translation: the leaf PTE, its flag trits (index by V, R,
+    W, ...) and the physical centre of the base page the virtual page maps
+    to."""
 
     pte: int
     page_centre: int
+    flags: tuple[int, ...]
 
 
 def page_number(addr: int) -> int:
@@ -84,21 +86,31 @@ class Mmu:
         self.bus = bus
         self.tlb: dict[tuple[int, int], Leaf] = {}  # (asid, virtual page)
         self.global_tlb: dict[int, Leaf] = {}  # virtual page
+        # Translations already checked for one kind of access from one
+        # ring: (asid, virtual page, access, ring, sua) -> page centre. It
+        # is derived from the TLB and cleared with it by fence(), so it
+        # never outlives a TLB entry; it only skips repeating the check.
+        self._checked: dict[tuple[int, int, Access, int, bool], int] = {}
 
     def translate(
         self, va: int, access: Access, ring: int, sua: bool, ptbr: Ptbr
     ) -> int:
-        vpn = page_number(va)
+        vpn = split_high(va, PAGE_TRITS)
+        key = (ptbr.asid, vpn, access, ring, sua)
+        centre = self._checked.get(key)
+        if centre is not None:
+            return centre + low(va, PAGE_TRITS)
         leaf = self.global_tlb.get(vpn) or self.tlb.get((ptbr.asid, vpn))
         if leaf is None:
             leaf = self._walk(va, access, ptbr)
-            self._check(leaf.pte, va, access, ring, sua)
-            if field(leaf.pte, G, 1) == 1:
+            self._check(leaf.flags, va, access, ring, sua)
+            if leaf.flags[G] == 1:
                 self.global_tlb[vpn] = leaf
             else:
                 self.tlb[(ptbr.asid, vpn)] = leaf
         else:
-            self._check(leaf.pte, va, access, ring, sua)
+            self._check(leaf.flags, va, access, ring, sua)
+        self._checked[key] = leaf.page_centre
         return leaf.page_centre + low(va, PAGE_TRITS)
 
     def probe(self, va: int, ptbr: Ptbr) -> int | None:
@@ -111,6 +123,7 @@ class Mmu:
 
     def fence(self, va: int | None, asid: int | None) -> None:
         """fence.vm: va and asid are None when their register field is r0."""
+        self._checked.clear()  # cheaper to rebuild than to filter
         vpn = None if va is None else page_number(va)
         if asid is None:
             self.tlb = {k: v for k, v in self.tlb.items() if vpn not in (None, k[1])}
@@ -152,7 +165,8 @@ class Mmu:
 
     @staticmethod
     def _leaf(pte: int, va: int, level: int, fault: Trap) -> Leaf:
-        if any(field(pte, t, 1) == -1 for t in range(R, S)):
+        flags = tuple(to_trits(pte, PAGE_TRITS))
+        if any(flags[t] == -1 for t in range(R, S)):
             raise fault  # '-' in a flag trit is reserved
         span = LEVEL_TRITS * level  # trits of virtual page number the leaf covers
         ppn = page_number(pte)
@@ -160,21 +174,20 @@ class Mmu:
             raise fault  # a superpage must be aligned to its own size
         # The base page this va falls in, within a possibly larger leaf.
         within = split_high(low(va, PAGE_TRITS + span), PAGE_TRITS)
-        return Leaf(pte, (ppn + within) * pow3(PAGE_TRITS))
+        return Leaf(pte, (ppn + within) * pow3(PAGE_TRITS), flags)
 
     @staticmethod
-    def _check(pte: int, va: int, access: Access, ring: int, sua: bool) -> None:
-        def has(t: int) -> bool:
-            return field(pte, t, 1) == 1
-
-        fault = Trap(FAULT_CAUSE[access], va)
-        if not all(has(t) for t in NEEDS[access]):
-            raise fault
-        if ring < 0 and not has(U):
-            raise fault
-        if ring >= 0 and has(U) and (access is Access.FETCH or not sua):
-            raise fault  # the kernel never runs user code, and reads it only with SUA
-        if not has(A):
-            raise fault
-        if access in (Access.STORE, Access.AMO) and not has(D):
-            raise fault
+    def _check(
+        flags: tuple[int, ...], va: int, access: Access, ring: int, sua: bool
+    ) -> None:
+        user = flags[U] == 1
+        allowed = (
+            all(flags[t] == 1 for t in NEEDS[access])
+            and (ring >= 0 or user)
+            # the kernel never runs user code, and reads it only with SUA
+            and not (ring >= 0 and user and (access is Access.FETCH or not sua))
+            and flags[A] == 1
+            and not (access in (Access.STORE, Access.AMO) and flags[D] != 1)
+        )
+        if not allowed:
+            raise Trap(FAULT_CAUSE[access], va)

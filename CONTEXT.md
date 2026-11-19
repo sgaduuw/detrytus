@@ -299,3 +299,17 @@ name kernel addresses. The two addresses must differ by a multiple of 3
 to keep words aligned in both. `.words N` arrived with it, for the
 kernel's process table: unlike `.zero`, it starts at a word centre.
 
+### 2026-11-19 · Translation caches what it has already checked
+
+Paging made the emulator about six times slower: trylobite's demo ran in
+3.1 s against about 0.5 s of work unpaged, because every access decoded
+`ptbr` into a new object, re-extracted each flag trit of the leaf entry,
+and built a `Trap` whether or not it faulted. Now `ptbr` is decoded when
+written, a leaf's flags are parsed once, and the MMU keeps the result of
+each permission check keyed by (ASID, page, access, ring, `SUA`). That
+cache is derived from the TLB and cleared by every `fence.vm`, so it never
+outlives a TLB entry and the never-evicting TLB's stale-until-fenced
+behaviour is unchanged. Measured on trylobite's `demo.s`, three runs
+each, same machine: 3.07 to 3.20 s before, 1.21 to 1.28 s after; an
+unpaged loop is unchanged.
+
