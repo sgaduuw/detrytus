@@ -80,14 +80,15 @@ stays out of your diff.
 | `detrytus/debug/` | the debugger: `engine` (run control, inspection), `shell` (commands) |
 | `detrytus/conformance.py` | the conformance suite's runner |
 | `detrytus/cli.py` | the `detrytus` command |
-| `conformance/` | the conformance suite: machine behaviour as data |
-| `conformance/build/` | its cases assembled, for the Rust runner: generated, committed |
+| `conformance/` | the conformance suite: machine and assembler behaviour as data |
 | `rust/core/src/` | the Rust core: `trits`, `isa`, `alu`, `bus`, `image`, `hart`, `privileged`, `mmu`, `entropy`, `machine` |
 | `rust/core/examples/run.rs` | runs `.dti` images on the Rust core, for trying and timing it |
 | `rust/py/` | the optional `detrytus-rs` package: Python bindings for the Rust core |
-| `rust/cli/` | the Rust `detrytus` command: `run` for images so far |
+| `rust/asm/src/` | the Rust assembler: `expr`, `source`, `operands`, `pseudo`, `assembler`, `disasm` |
+| `rust/cli/` | the Rust `detrytus` command: `asm` and `run` |
+| `rust/conformance/` | the Rust conformance runner (tests only) |
 | `detrytus/rust.py` | wraps those bindings in the Python core's interface |
-| `rust/core/tests/` | the Rust conformance runner and spec sync test |
+| `rust/core/tests/` | the Rust spec sync test |
 | `examples/` | runnable assembly programs |
 
 One concern per file. If a module's job needs an "and" to describe, it
@@ -118,12 +119,12 @@ tables and fails if the code disagrees. So:
 
 ## Python and Rust move together
 
-While both cores exist, a change to machine behaviour changes both, and
-a conformance case pins it down. The Python core is the reference: when
-they disagree, Python is right until the spec says otherwise. After
-adding or changing a case, regenerate its image with
-`uv run python -m detrytus.conformance` and commit it; a Python test
-fails while `conformance/build/` is out of date.
+While both implementations exist, a change to machine or assembler
+behaviour changes both, and a conformance case pins it down. Python is
+the reference: when they disagree, Python is right until the spec says
+otherwise. The Rust assembler reproduces the Python one's output
+exactly, image bytes and error messages included, so a change to a
+message changes both.
 
 The Rust core has no dependencies; its tests may have some. It stops
 with `Stop::Unsupported` for anything it does not implement yet, as the
@@ -188,10 +189,11 @@ fail instead when `DETRYTUS_REQUIRE_RUST` is set, as in CI.
 `tests/test_differential.py` runs both cores step by step and compares
 their whole state; a change to either core that it flags is a
 disagreement to resolve, with the Python core as the reference.
-`tests/test_cli_parity.py` runs the Rust and Python `detrytus run` on
-every conformance image and wants identical stdout, stderr and exit
-status; it needs `cargo build` first, and a change to either command's
-output changes both.
+`tests/test_cli_parity.py` runs the Rust and Python `detrytus asm` and
+`detrytus run` on every conformance program, the examples and a corpus
+of broken source, and wants identical stdout, stderr, exit status and
+image bytes; it needs `cargo build` first, and a change to either
+command's output changes both.
 
 ## Git and pull requests
 

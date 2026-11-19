@@ -1,18 +1,21 @@
 //! The detrytus command line in Rust (docs/rust-plan.md, phase 5).
 //!
-//! `detrytus run` for `.dti` images so far, behaving as the Python
-//! command does: same output, same messages, same exit statuses. Sources
-//! need the assembler, which is still Python: `detrytus asm -o` (Python)
-//! turns them into images.
+//! `detrytus asm` and `detrytus run`, behaving as the Python command
+//! does: the same output, messages and exit statuses for the same files.
+//! The debugger is still Python.
 
 use std::collections::HashSet;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::ExitCode;
 
+use detrytus_asm::{AsmError, Image, assemble};
 use detrytus_core::image::{self, Segment};
+use detrytus_core::trits::low;
 use detrytus_core::{Machine, Outcome};
 
-const USAGE: &str = "usage: detrytus run [--ram-pages N] [--max-steps N] [--stats] IMAGE...";
+const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] FILE...";
+const MAGIC: &[u8] = b"DTI\x01";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
 const USAGE_ERROR: u8 = 2;
@@ -64,31 +67,83 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--ram-pages" => run.ram_pages = number(&arg, args.next())?,
             "--max-steps" => run.max_steps = number(&arg, args.next())?,
             "--stats" => run.stats = true,
-            flag if flag.starts_with("--") => return Err(usage(&format!("unknown option {flag}"))),
+            flag if flag.starts_with('-') && flag != "-" => {
+                return Err(usage(&format!("unknown option {flag}")));
+            }
             _ => run.files.push(arg),
         }
     }
     if run.files.is_empty() {
-        return Err(usage("run needs at least one image"));
+        return Err(usage("run needs at least one file"));
     }
     Ok(run)
 }
 
-/// Read every image; refuse a file that is not one, and images that
-/// overlap, as the Python command does.
+/// A file as the commands take it: assembly source, an image, or - for
+/// source on stdin.
+enum Loaded {
+    Source(Image),
+    Image(Vec<u8>, Vec<Segment>),
+}
+
+impl Loaded {
+    fn segments(&self) -> Vec<Segment> {
+        match self {
+            Loaded::Image(_, segments) => segments
+                .iter()
+                .map(|s| Segment { start: s.start, trytes: s.trytes.clone() })
+                .collect(),
+            Loaded::Source(image) => {
+                let mut runs: Vec<Segment> = Vec::new();
+                for (&addr, &tryte) in &image.trytes {
+                    match runs.last_mut() {
+                        Some(run) if run.start + run.trytes.len() as i64 == addr => {
+                            run.trytes.push(tryte)
+                        }
+                        _ => runs.push(Segment { start: addr, trytes: vec![tryte] }),
+                    }
+                }
+                runs
+            }
+        }
+    }
+}
+
+fn asm_error(e: AsmError) -> Fail {
+    Fail::new(e.to_string(), BAD_INPUT)
+}
+
+fn load_one(path: &str) -> Result<Loaded, Fail> {
+    if path == "-" {
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .map_err(|e| Fail::new(format!("<stdin>: {e}"), NO_INPUT))?;
+        return assemble(&text, Some("<stdin>")).map(Loaded::Source).map_err(asm_error);
+    }
+    let data = std::fs::read(path)
+        .map_err(|e| Fail::new(format!("{path}: {}", strerror(&e)), NO_INPUT))?;
+    if data.starts_with(MAGIC) {
+        let segments = image::parse(&data).map_err(|e| Fail::new(e, BAD_INPUT))?;
+        return Ok(Loaded::Image(data, segments));
+    }
+    let text = String::from_utf8(data)
+        .map_err(|_| Fail::new(format!("{path}: not UTF-8 text"), BAD_INPUT))?;
+    assemble(&text, Some(path)).map(Loaded::Source).map_err(asm_error)
+}
+
+fn strerror(e: &std::io::Error) -> String {
+    let text = e.to_string();
+    text.rfind(" (os error ").map_or(text.clone(), |i| text[..i].to_string())
+}
+
+/// Every file's trytes; images that overlap are refused, as the Python
+/// command does.
 fn load(files: &[String]) -> Result<Vec<Segment>, Fail> {
     let mut segments = Vec::new();
     let mut used = HashSet::new();
     for file in files {
-        let data = std::fs::read(file).map_err(|e| Fail::new(format!("{file}: {e}"), NO_INPUT))?;
-        let parsed = image::parse(&data).map_err(|e| {
-            let hint = if data.starts_with(b"DTI") {
-                String::new()
-            } else {
-                " (the Rust command runs images only: make one with `detrytus asm -o`)".into()
-            };
-            Fail::new(format!("{file}: {e}{hint}"), BAD_INPUT)
-        })?;
+        let parsed = load_one(file)?.segments();
         for s in &parsed {
             if let Some(addr) =
                 (s.start..s.start + s.trytes.len() as i64).find(|a| !used.insert(*a))
@@ -99,6 +154,63 @@ fn load(files: &[String]) -> Result<Vec<Segment>, Fail> {
         segments.extend(parsed);
     }
     Ok(segments)
+}
+
+fn format_trits(word: i64) -> String {
+    let mut x = word;
+    let mut trits = Vec::with_capacity(27);
+    for _ in 0..27 {
+        let t = low(x, 1);
+        trits.push(match t {
+            -1 => '-',
+            0 => '0',
+            _ => '+',
+        });
+        x = (x - t) / 3;
+    }
+    trits.iter().rev().collect()
+}
+
+fn cmd_asm(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
+    let (mut file, mut output, mut listing) = (None, None, false);
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-o" | "--output" => {
+                output = Some(args.next().ok_or_else(|| usage("-o needs a file"))?)
+            }
+            "--listing" => listing = true,
+            flag if flag.starts_with('-') && flag != "-" => {
+                return Err(usage(&format!("unknown option {flag}")));
+            }
+            _ if file.is_some() => return Err(usage("asm takes one file")),
+            _ => file = Some(arg),
+        }
+    }
+    let file = file.ok_or_else(|| usage("asm needs a file"))?;
+    let loaded = load_one(&file)?;
+    if let Some(out) = &output {
+        let bytes = match &loaded {
+            Loaded::Source(image) => image.to_bytes(),
+            Loaded::Image(data, _) => data.clone(),
+        };
+        std::fs::write(out, bytes)
+            .map_err(|e| Fail::new(format!("{out}: {}", strerror(&e)), NO_INPUT))?;
+        if !listing {
+            return Ok(0);
+        }
+    }
+    let Loaded::Source(image) = loaded else { return Ok(0) };
+    let mut stdout = std::io::stdout().lock();
+    for e in &image.listing {
+        // A section that runs somewhere other than where it loads shows both.
+        let at =
+            if e.load == e.addr { e.addr.to_string() } else { format!("{}@{}", e.addr, e.load) };
+        let trits = e.word.map(format_trits).unwrap_or_default();
+        let source = detrytus_asm::text::strip(&e.source);
+        let _ = writeln!(stdout, "{at:>22}  {trits:27}  {:28}  {source}", e.text);
+    }
+    Ok(0)
 }
 
 fn sign(n: i64) -> String {
@@ -156,6 +268,7 @@ fn seed() -> u32 {
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let result = match args.next().as_deref() {
+        Some("asm") => cmd_asm(args),
         Some("run") => parse_run(args).and_then(run),
         Some("--version") => {
             println!("detrytus {}", env!("CARGO_PKG_VERSION"));

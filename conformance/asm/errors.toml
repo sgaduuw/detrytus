@@ -1,0 +1,189 @@
+# Assembly errors (docs/assembler.md): the message, without its file and
+# source line, and the line it is reported at. Both assemblers must give
+# exactly these.
+
+[[case]]
+name = "an instruction needs all its operands"
+program = "add a0, a1"
+expect.asm_error = "add takes 3 operand(s), got 2"
+expect.asm_error_line = 1
+
+[[case]]
+name = "an unknown instruction"
+program = "frob a0"
+expect.asm_error = "unknown instruction 'frob'"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a symbol defined twice"
+program = "x: nop\nx: nop"
+expect.asm_error = "symbol 'x' defined twice"
+expect.asm_error_line = 2
+
+[[case]]
+name = "an undefined symbol"
+program = "addi a0, a0, nowhere"
+expect.asm_error = "undefined symbol 'nowhere'"
+expect.asm_error_line = 1
+
+[[case]]
+name = "not a register"
+program = "add a0, a1, q9"
+expect.asm_error = "not a register: 'q9'"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a tryte out of range"
+program = ".tryte 9842"
+expect.asm_error = "9842 does not fit a tryte"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a memory operand needs a register"
+program = "lw a0, 4"
+expect.asm_error = "expected imm(reg), got '4'"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a branch target off a word centre"
+program = "x: .tryte 1\nj x"
+expect.asm_error = "branch target -1 is not word aligned"
+expect.asm_error_line = 2
+
+[[case]]
+name = "an immediate too wide for its field"
+program = "addi a0, a1, 99999999"
+expect.asm_error = "imm = 99999999 does not fit 16 trits (±21523360)"
+expect.asm_error_line = 1
+
+[[case]]
+name = "li of a value wider than a word"
+program = "li a0, 3812798742494"
+expect.asm_error = "3812798742494 does not fit a word"
+expect.asm_error_line = 1
+
+[[case]]
+name = "the error names its line"
+program = "nop\nnop\nfrob"
+expect.asm_error = "unknown instruction 'frob'"
+expect.asm_error_line = 3
+
+[[case]]
+name = ".org needs a word-aligned address"
+program = ".org 31"
+expect.asm_error = ".org needs a word-aligned address (a multiple of 3)"
+expect.asm_error_line = 1
+
+[[case]]
+name = ".align takes a power from 0 to 27"
+program = ".align 28"
+expect.asm_error = ".align takes a power of 3 from 0 to 27, not 28"
+expect.asm_error_line = 1
+
+[[case]]
+name = ".words needs a count of 0 or more"
+program = ".words -1"
+expect.asm_error = ".words needs a count of 0 or more"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a missing forward local label"
+program = "j 3f"
+expect.asm_error = "no local label 3 after this line"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a missing backward local label"
+program = "j 3b\n3: nop"
+expect.asm_error = "no local label 3 before this line"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a new section needs an address"
+program = ".section data\nnop"
+expect.asm_error = "section 'data' needs an address the first time: .section data, ADDR"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a section is placed once"
+program = ".section data, 300\n.section text\n.section data, 600"
+expect.asm_error = "section 'data' is already placed"
+expect.asm_error_line = 3
+
+[[case]]
+name = "a section starts word aligned"
+program = ".section data, 301"
+expect.asm_error = "a section starts at a word-aligned address (a multiple of 3)"
+expect.asm_error_line = 1
+
+[[case]]
+name = "overlapping sections are caught"
+program = "nop\nnop\n.section data, 3\n.word 1"
+expect.asm_error = "address 2 assembled twice"
+expect.asm_error_line = 4
+
+[[case]]
+name = "load and run addresses differ by a multiple of 3"
+program = ".section k, 301, -3000"
+expect.asm_error = "a section's load and run addresses must differ by a multiple of 3"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a run address is word aligned"
+program = ".section k, 300, -2999"
+expect.asm_error = "a section starts at a word-aligned address (a multiple of 3)"
+expect.asm_error_line = 1
+
+[[case]]
+name = "overlap is checked where trytes load"
+program = "nop\n.section k, 0, 600\nnop"
+expect.asm_error = "address -1 assembled twice"
+expect.asm_error_line = 3
+
+[[case]]
+name = "atomics take no offset"
+program = "amoadd a0, a1, 3(a2)"
+expect.asm_error = "atomics take no offset: write (reg)"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a trit field must fit the word"
+program = "tex a0, a1, 26, 2"
+expect.asm_error = "trit field 26+2 is outside the word"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a suffix the instruction does not take"
+program = "add.aq a0, a1, a2"
+expect.asm_error = "add takes no suffix .aq"
+expect.asm_error_line = 1
+
+[[case]]
+name = "fence sets use r, w, i, o"
+program = "fence rx, w"
+expect.asm_error = "fence set 'rx': use letters r, w, i, o"
+expect.asm_error_line = 1
+
+[[case]]
+name = "an unterminated expression"
+program = "li a0, (1"
+expect.asm_error = "missing ')' in '(1'"
+expect.asm_error_line = 1
+
+[[case]]
+name = "division by zero"
+program = "li a0, 1 / 0"
+expect.asm_error = "division by zero in '1 / 0'"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a string must be quoted"
+program = ".string abc"
+expect.asm_error = "expected a double-quoted string"
+expect.asm_error_line = 1
+
+[[case]]
+name = "an include needs a quoted path"
+program = ".include nope.s"
+expect.asm_error = ".include takes one \"path\""
+expect.asm_error_line = 1

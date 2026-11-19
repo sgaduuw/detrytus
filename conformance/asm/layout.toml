@@ -1,0 +1,245 @@
+# How the assembler lays out a program (docs/assembler.md), observed by
+# running it: programs exit with label addresses, often several folded
+# into one number, and memory checks show where data landed. Words are
+# centred on multiples of 3; the first starts at 0.
+
+[[case]]
+name = "trytes, then a word on the next centre"
+# .org 30 leaves the next free tryte at 29: a takes it, and b, a word,
+# needs 32 free, so it centres on 33.
+program = '''
+        li    a0, b
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .org  30
+a:      .tryte 5
+b:      nop
+'''
+expect.exit_code = 33
+expect.trytes = { "29" = 5 }
+
+[[case]]
+name = ".align centres on a power of three"
+# The code ends at tryte 10; the next multiple of 27 is 27.
+program = '''
+        li    a0, here
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .align 3
+here:   nop
+'''
+expect.exit_code = 27
+
+[[case]]
+name = "li takes one word when the value fits addi"
+# 21523360 is the largest addi immediate: n1 follows one word, n2 two.
+program = '''
+        li    a1, 21523360
+n1:     li    a2, 21523361
+n2:     li    a0, n2 * 100 + n1
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 903
+expect.registers = { a1 = 21523360, a2 = 21523361 }
+
+[[case]]
+name = "li of a forward reference takes the long form"
+program = '''
+        li    a0, later
+later:  li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 6
+
+[[case]]
+name = "tmap builds a unary table"
+# f maps -, 0, + to +, 0, +: the trit magnitude.
+program = '''
+        li    a1, 0t+0-+
+        tmap  a0, a1, 0t+0+
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 31  # 0t+0++
+
+[[case]]
+name = "a string stores one code point per tryte"
+program = '''
+        li    t6, -39366
+        sw    zero, 0(t6)
+        .org  300
+s:      .string "Hé\n"
+'''
+expect.exit_code = 0
+expect.trytes = { "299" = 72, "300" = 233, "301" = 10, "302" = 0 }
+
+[[case]]
+name = "local labels: 1b is the nearest before, 1f the next after"
+program = '''
+        li    a0, 0
+        li    a1, 3
+1:      addi  a0, a0, 1
+        blt   a0, a1, 1b
+        j     1f
+        li    a0, 99
+1:      li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 3
+
+[[case]]
+name = "1f on a line that defines 1 means the next one"
+program = '''
+        li    a0, 5
+1:      j     1f
+        li    a0, 99
+1:      li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 5
+
+[[case]]
+name = "each reference picks the nearest definition"
+# The loop goes back to the second 1, adding 10 each time: 1, 11, 21.
+# Back to the first 1 it would count up by one and stop at 12.
+program = '''
+        li    a0, 0
+1:      addi  a0, a0, 1
+        j     2f
+1:      addi  a0, a0, 10
+2:      li    t1, 12
+        blt   a0, t1, 1b
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 21
+
+[[case]]
+name = "hex literals and strings are not local references"
+program = '''
+        li    a0, 0x1b
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .org  300
+        .string "1b"
+'''
+expect.exit_code = 27
+expect.trytes = { "299" = 49, "300" = 98 }
+
+[[case]]
+name = "sections place interleaved code and data apart"
+# x and y continue the data section at 300; b continues the text
+# section after the code (which ends at tryte 10).
+program = '''
+a:      li    a0, x * 1000000 + y * 1000 + b
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .section data, 300
+x:      .word 1
+        .section text
+b:      nop
+        .section data
+y:      .word 2
+'''
+expect.exit_code = 300303012
+expect.words = { "300" = 1, "303" = 2 }
+
+[[case]]
+name = "a label before a section switch names the old section's end"
+program = '''
+        li    a0, end_of_text
+        li    t6, -39366
+        sw    a0, 0(t6)
+end_of_text:
+        .section data, 300
+        .word 5
+'''
+# The last word of code centres on 9 and covers 8 to 10.
+expect.exit_code = 11  # the next free tryte of text
+
+[[case]]
+name = "a section's labels are run addresses; its trytes sit at the load address"
+program = '''
+        li    a0, data
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .section k, 300, -3000
+entry:  nop
+data:   .word 7
+'''
+expect.exit_code = -2997
+expect.words = { "303" = 7, "-2997" = 0 }
+
+[[case]]
+name = "a resumed section keeps its run address"
+program = '''
+        li    a0, b
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .section k, 300, -3000
+a:      .word 11
+        .section text
+        nop
+        .section k
+b:      .word 22
+'''
+expect.exit_code = -2997
+expect.words = { "300" = 11, "303" = 22 }
+
+[[case]]
+name = ".words reserves aligned, zeroed words"
+# Unlike .zero, .words starts on a word centre: after the tryte at 29,
+# table centres on 33, and four words later comes after, at 45.
+program = '''
+        li    a0, table * 100 + after
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .org  30
+        .tryte 5
+table:  .words 4
+after:  nop
+'''
+expect.exit_code = 3345
+expect.trytes = { "29" = 5 }
+
+[[case]]
+name = "a label on the same line counts for 1b"
+# 1: j 1b jumps to itself, forever.
+max_steps = 20
+program = "1:      j     1b"
+expect.step_limit = true
+
+[[case]]
+name = "expressions divide toward zero"
+# -7 / 2 is -3 and -7 % 2 is -1, as in C: -30 - 1.
+program = '''
+        li    a0, -7 / 2 * 10 + -7 % 2
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = -31
+
+[[case]]
+name = "suffixes set hints and ordering, which do not change results"
+program = '''
+        li    t0, 19683
+        li    t1, 4
+        sw    t1, 0(t0)
+        li    a1, 2
+        amoadd.aqrl a2, a1, (t0)   # a2 = 4, memory 6
+        li    a3, -1
+        br3.p a3, neg, pos
+        li    a0, 99
+        j     out
+pos:    li    a0, 98
+        j     out
+neg:    blt.unlikely a3, zero, done
+        li    a0, 97
+        j     out
+done:   lw    a0, 0(t0)
+out:    li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 6
+expect.registers = { a2 = 4 }
