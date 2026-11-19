@@ -20,7 +20,7 @@ integer, tritwise, memory, atomic, control and system instruction, plus
 traps, delegation, interrupts, the timer, single step and paged virtual
 memory. Floating point, compressed bundles and debug triggers are
 specified but not implemented yet. A Rust implementation may follow once the design
-settles.
+settles; [`docs/rust-plan.md`](docs/rust-plan.md) lays out how.
 
 ## Usage
 
@@ -54,6 +54,8 @@ and its disassembly.
 - [`docs/platform.md`](docs/platform.md): the emulated memory map and
   devices.
 - [`docs/debugger.md`](docs/debugger.md): the debugger's commands.
+- [`docs/rust-plan.md`](docs/rust-plan.md): the plan for moving the
+  implementation to Rust.
 - [`examples/`](examples/): runnable programs.
 
 Development checks, all run in CI:
