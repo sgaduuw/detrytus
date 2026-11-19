@@ -85,6 +85,7 @@ stays out of your diff.
 | `rust/core/src/` | the Rust core: `trits`, `isa`, `alu`, `bus`, `image`, `hart`, `privileged`, `mmu`, `entropy`, `machine` |
 | `rust/core/examples/run.rs` | runs `.dti` images on the Rust core, for trying and timing it |
 | `rust/py/` | the optional `detrytus-rs` package: Python bindings for the Rust core |
+| `rust/cli/` | the Rust `detrytus` command: `run` for images so far |
 | `detrytus/rust.py` | wraps those bindings in the Python core's interface |
 | `rust/core/tests/` | the Rust conformance runner and spec sync test |
 | `examples/` | runnable assembly programs |
@@ -187,6 +188,10 @@ fail instead when `DETRYTUS_REQUIRE_RUST` is set, as in CI.
 `tests/test_differential.py` runs both cores step by step and compares
 their whole state; a change to either core that it flags is a
 disagreement to resolve, with the Python core as the reference.
+`tests/test_cli_parity.py` runs the Rust and Python `detrytus run` on
+every conformance image and wants identical stdout, stderr and exit
+status; it needs `cargo build` first, and a change to either command's
+output changes both.
 
 ## Git and pull requests
 

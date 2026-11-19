@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "detrytus-cli"
+version = "0.1.0"
+dependencies = [
+ "detrytus-core",
+]
+
+[[package]]
 name = "detrytus-core"
 version = "0.1.0"
 dependencies = [

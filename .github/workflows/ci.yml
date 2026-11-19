@@ -46,5 +46,7 @@ jobs:
       - run: uv sync
       - name: Build the Rust backend
         run: uv pip install ./rust/py
-      - name: Both cores, case by case and step by step
-        run: uv run pytest tests/test_conformance.py tests/test_differential.py
+      - name: Build the Rust command
+        run: cargo build -p detrytus-cli
+      - name: Both cores, case by case and step by step; both commands
+        run: uv run pytest tests/test_conformance.py tests/test_differential.py tests/test_cli_parity.py

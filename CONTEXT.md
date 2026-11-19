@@ -451,3 +451,22 @@ trylobite's 21 tests pass on the Rust core through the bindings, in
 `tests/helpers.py` is gone: its users were the CPU and MMU tests that
 moved into the conformance suite.
 
+### 2026-11-19 · The Rust command starts with `run`, held to the Python one's output
+
+`rust/cli` builds a `detrytus` binary whose `run` takes `.dti` images
+(sources need the assembler, still Python, and get a message saying to
+make an image with `detrytus asm -o`). It copies the Python command's
+behaviour exactly: console output streamed as the program runs, the
+same `--ram-pages`, `--max-steps` and `--stats`, the same messages for
+traps, step limits and overlapping images, and the same exit statuses
+(the program's code, or 65, 66, 69, 70, 124, 2). Rather than a separate
+set of Rust tests, `tests/test_cli_parity.py` runs both commands on
+every conformance image and compares stdout, stderr and status, so the
+two cannot drift apart unnoticed; it caught a one-character change to a
+message when tried. The one allowed difference is the wording of an
+operating-system error, such as a missing file, which each language
+phrases its own way.
+
+It runs trylobite's demo in about 0.06 s, against about 1.15 s for the
+Python command.
+
