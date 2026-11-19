@@ -1,0 +1,56 @@
+# Loads, stores, word layout and atomics (docs/isa.md 4, 7.5, 7.6).
+
+[defaults]
+postlude = '''
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+
+[[case]]
+name = "words and trytes in RAM"
+program = '''
+        li    t0, 39366          # centre of RAM page 2
+        li    t1, 123456789
+        sw    t1, 3(t0)
+        lw    a1, 3(t0)
+        li    t2, -77
+        st    t2, 4(t0)          # overwrite the top tryte of that word
+        lt    a2, 4(t0)
+        lw    a3, 3(t0)
+        sub   a0, a1, a1
+        add   a0, a0, a2
+'''
+expect.exit_code = -77
+expect.registers = { a1 = 123456789 }
+
+[[case]]
+name = "a word is centred, low trits first"
+# value = 3 + (-7) * 3**9 + 5 * 3**18: trytes from high to low 5, -7, 3
+program = '''
+        li    t0, 19683
+        li    t1, 1936964667
+        sw    t1, 0(t0)
+        li    a0, 0
+'''
+expect.exit_code = 0
+expect.trytes = { "19682" = 3, "19683" = -7, "19684" = 5 }
+expect.words = { "19683" = 1936964667 }
+
+[[case]]
+name = "atomics"
+program = '''
+        li    t0, 19683
+        li    t1, 10
+        sw    t1, 0(t0)
+        li    t2, 5
+        amoadd a1, t2, (t0)      # a1 = 10, mem = 15
+        li    a2, 15
+        cas   a2, t1, (t0)       # expected 15 matches: mem = 10, a2 = 15
+        lr    a3, (t0)           # a3 = 10
+        sc    a4, t2, (t0)       # succeeds: a4 = 0, mem = 5
+        sc    a5, t2, (t0)       # no reservation: a5 = 1
+        lw    t3, 0(t0)
+        li    a0, 0
+'''
+expect.exit_code = 0
+expect.registers = { a1 = 10, a2 = 15, a3 = 10, a4 = 0, a5 = 1, t3 = 5 }

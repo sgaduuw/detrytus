@@ -336,3 +336,30 @@ Python removable rather than permanent:
 The work stays in this repository, and the Python core remains the
 reference until the switchover.
 
+### 2026-11-19 · Conformance cases are one TOML file per topic
+
+The plan sketched a case as an assembly file plus a TOML file of
+expectations. Most cases are a few lines, so a pair of files each would
+have meant 176 files for what fits in eight; instead a TOML
+file holds many cases, each with its program inline (or naming files to
+assemble, as the example cases do), and shared assembly lives beside
+them as includes. Choices that keep cases portable to the Rust runner:
+
+- **The whole machine state is in the source.** The paging tests used to
+  build page tables by poking memory from Python; the cases place them
+  statically with `.org` and `.word` instead, through `paging/tables.s`.
+- **Only observable state is checked**: outcome, console, ring,
+  registers by name, CSRs (read with ring +1's privilege) and physical
+  memory. Nothing about the TLB's or caches' insides; a stale
+  translation is checked by what a load returns.
+- **Strict format.** Unknown keys are errors and each case names exactly
+  one outcome, so a misspelt expectation fails rather than passing
+  unchecked.
+
+Before deleting the Python tests, the suite was checked against 25
+deliberate emulator bugs (permission checks, cache keys, fences, ASIDs,
+trap entry, the timer, vectored mode). It caught all of them once four
+cases were added; three of those bugs, vectored dispatch ignored, `PIE`
+not saved, and an ASID-scoped fence flushing every ASID, had also passed
+the old Python tests.
+

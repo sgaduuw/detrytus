@@ -1,0 +1,231 @@
+# Translation through the page tables (docs/isa.md 9). Programs start
+# from user.s or kernel.s: firmware that enables paging and drops to the
+# code page, with a handler that powers off with the trap cause, so a
+# program ending in sys exits with 4.
+
+[[case]]
+name = "a user program runs through its mapping"
+program = '''
+        .include "user.s"
+        li    a2, 7
+        sys
+'''
+expect.exit_code = 4
+expect.registers = { a2 = 7 }
+expect.ring = 1
+
+[[case]]
+name = "loads and stores reach the mapped physical page"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE
+        lw    a2, 3(t0)
+        li    t1, 99
+        sw    t1, 6(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + A + D + 60 * PAGE
+        .org  60 * PAGE + 3
+        .word 12345
+'''
+expect.exit_code = 4
+expect.registers = { a2 = 12345 }
+# Physical page 60 took the store; page 50 is not identity mapped.
+expect.words = { "1180986" = 99, "984156" = 0 }
+
+[[case]]
+name = "a load needs no dirty trit"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + A + 60 * PAGE
+'''
+expect.exit_code = 4
+
+[[case]]
+name = "the kernel cannot read user pages without SUA"
+program = '''
+        .include "kernel.s"
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + A + D + 60 * PAGE
+'''
+expect.exit_code = 7
+
+[[case]]
+name = "the kernel reads user pages with SUA"
+program = '''
+        .include "kernel.s"
+        li    t1, 0t+000         # ststatus.SUA (trit 3) = +
+        csrw  ststatus, t1
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + A + D + 60 * PAGE
+'''
+expect.exit_code = 4
+
+[[case]]
+name = "the kernel never executes user pages, even with SUA"
+program = '''
+        .include "kernel.s"
+        li    t1, 0t+000
+        csrw  ststatus, t1
+        li    t0, 50 * PAGE
+        jalr  zero, 0(t0)
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + X + U + A + 60 * PAGE
+'''
+expect.exit_code = 6
+
+[[case]]
+name = "an aligned superpage maps 3**8 pages"
+# A leaf in the mid table: virtual pages SUPER + k go to physical pages
+# SUPER + k.
+ram_pages = 6600
+program = '''
+        .include "user.s"
+        li    t0, (SUPER + 5) * PAGE + 3
+        lw    a2, 0(t0)
+        sys
+        .org  MID1
+        .word LEAF + R + W + U + A + D + SUPER * PAGE
+        .org  (SUPER + 5) * PAGE + 3
+        .word 777
+'''
+expect.exit_code = 4
+expect.registers = { a2 = 777 }
+
+[[case]]
+name = "a misaligned superpage faults"
+ram_pages = 6600
+program = '''
+        .include "user.s"
+        li    t0, (SUPER + 5) * PAGE + 3
+        lw    a2, 0(t0)
+        sys
+        .org  MID1
+        .word LEAF + R + W + U + A + D + (SUPER + 1) * PAGE
+'''
+expect.exit_code = 7
+
+# The reserved-entry cases each start from this working mapping, under
+# its own mid entry so the code page's walk is unaffected, and spoil
+# exactly one trit of it.
+
+[[case]]
+name = "a valid mapping under mid entry 1 loads"
+program = '''
+        .include "user.s"
+        li    t0, (SUPER + 50) * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  MID1
+        .word PTR + LEAF1
+        .org  LEAF1 + 3 * 50
+        .word LEAF + R + W + U + A + D + 60 * PAGE
+        .org  60 * PAGE
+        .word 31
+'''
+expect.exit_code = 4
+expect.registers = { a2 = 31 }
+
+[[case]]
+name = "a pointer at leaf level faults"
+program = '''
+        .include "user.s"
+        li    t0, (SUPER + 50) * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  MID1
+        .word PTR + LEAF1
+        .org  LEAF1 + 3 * 50
+        .word PTR + 60 * PAGE
+'''
+expect.exit_code = 7
+
+[[case]]
+name = "a reserved flag value faults"
+# X = '-' on a page the load does not need to execute: only the reserved
+# value can make this fault.
+program = '''
+        .include "user.s"
+        li    t0, (SUPER + 50) * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  MID1
+        .word PTR + LEAF1
+        .org  LEAF1 + 3 * 50
+        .word LEAF + R + W - X + U + A + D + 60 * PAGE
+'''
+expect.exit_code = 7
+expect.registers = { a1 = 130124313 }  # (SUPER + 50) * PAGE
+
+[[case]]
+name = "a pointer carrying permissions faults"
+program = '''
+        .include "user.s"
+        li    t0, (SUPER + 50) * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  MID1
+        .word PTR + R + LEAF1
+        .org  LEAF1 + 3 * 50
+        .word LEAF + R + W + U + A + D + 60 * PAGE
+'''
+expect.exit_code = 7
+
+[[case]]
+name = "the OS trit is free"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + A + D - S + 60 * PAGE
+'''
+expect.exit_code = 4
+
+[[case]]
+name = "tables in device memory are an access fault"
+program = '''
+        .include "tables.s"
+        .equ  PTBR, 1 - PAGE             # root at the console's page
+        .equ  RING, -1
+        .include "boot.s"
+        sys
+'''
+expect.exit_code = 3
+
+[[case]]
+name = "ring +1 is never translated"
+# Paging on, with an empty root table: firmware still runs.
+program = '''
+        li    t0, 1 + 108 * 19683
+        csrw  ptbr, t0
+        lt    a0, msg(zero)
+        li    t6, -39366
+        sw    a0, 0(t6)
+msg:    .tryte 42
+'''
+expect.exit_code = 42
+
+[[case]]
+name = "a reserved ptbr mode is not stored"
+program = '''
+        li    t0, 1 + 3 * 3 + 7 * 19683  # mode +, ASID 3, root page 7
+        csrw  ptbr, t0
+        li    t0, -1 + 5 * 19683         # mode -: reserved
+        csrw  ptbr, t0
+        csrr  a0, ptbr
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 137791

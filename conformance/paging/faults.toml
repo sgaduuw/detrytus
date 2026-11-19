@@ -1,0 +1,127 @@
+# Page faults report the cause and the faulting virtual address
+# (docs/isa.md 9.4). The program runs in ring -1 from user.s, and virtual
+# page 50 maps to physical page 60 with the flags given.
+
+[[case]]
+name = "load from an unmapped page"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        lw a2, 0(t0)
+        sys
+'''
+expect.exit_code = 7
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "store to an unmapped page"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        sw a2, 0(t0)
+        sys
+'''
+expect.exit_code = 8
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "jump to an unmapped page"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        jalr zero, 0(t0)
+        sys
+'''
+expect.exit_code = 6
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "store to a read-only page"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        sw a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + U + A + 60 * PAGE
+'''
+expect.exit_code = 8
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "atomics need write permission"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        amoadd a2, a2, (t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + U + A + 60 * PAGE
+'''
+expect.exit_code = 8
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "load without the accessed trit"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        lw a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + D + 60 * PAGE
+'''
+expect.exit_code = 7
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "store without the dirty trit"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        sw a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + A + 60 * PAGE
+'''
+expect.exit_code = 8
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "user load from a kernel page"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        lw a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + A + D + 60 * PAGE
+'''
+expect.exit_code = 7
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "jump to a page that is not executable"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        jalr zero, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + U + A + 60 * PAGE
+'''
+expect.exit_code = 6
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3
+
+[[case]]
+name = "load from a page that is not readable"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE + 3
+        lw a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + W + U + A + D + 60 * PAGE
+'''
+expect.exit_code = 7
+expect.registers = { a1 = 984153 }  # 50 * PAGE + 3

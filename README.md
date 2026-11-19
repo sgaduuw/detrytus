@@ -57,6 +57,8 @@ and its disassembly.
 - [`docs/rust-plan.md`](docs/rust-plan.md): the plan for moving the
   implementation to Rust.
 - [`examples/`](examples/): runnable programs.
+- [`conformance/`](conformance/README.md): the conformance suite,
+  machine behaviour as data that any implementation runs.
 
 Development checks, all run in CI:
 
@@ -95,6 +97,7 @@ uv run ruff format --check detrytus tests
 | `asm/` | the assembler: `source` (parsing, includes, local labels), `operands`, `pseudo`-instructions, `core` passes |
 | `disasm.py` | the disassembler |
 | `debug/` | the debugger: `engine` runs and inspects, `shell` is the front end |
+| `conformance.py` | the conformance suite's runner |
 | `cli.py` | the `detrytus` command |
 
 ## The shape of it
