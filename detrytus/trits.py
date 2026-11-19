@@ -38,7 +38,7 @@ def low(x: int, n: int) -> int:
     This is also wrap-around to an n-trit field, since keeping the low
     trits is reduction modulo 3**n onto the balanced representative.
     """
-    m = pow3(n)
+    m = _POW3[n]  # indexed directly: this is the hottest function in the emulator
     h = (m - 1) // 2
     return (x + h) % m - h
 
@@ -55,7 +55,9 @@ def field(x: int, lo: int, n: int) -> int:
 
 def split_high(x: int, n: int) -> int:
     """x with its low n trits cut off: the exact q in x = q*3**n + low(x, n)."""
-    return (x - low(x, n)) // pow3(n)
+    m = _POW3[n]
+    h = (m - 1) // 2
+    return (x - ((x + h) % m - h)) // m
 
 
 def set_trit(x: int, i: int, value: int) -> int:
