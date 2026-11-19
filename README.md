@@ -20,7 +20,9 @@ integer, tritwise, memory, atomic, control and system instruction, plus
 traps, delegation, interrupts, the timer, single step and paged virtual
 memory. Floating point, compressed bundles and debug triggers are
 specified but not implemented yet. The implementation is moving to
-Rust, in steps laid out in [`docs/rust-plan.md`](docs/rust-plan.md).
+Rust, in steps laid out in [`docs/rust-plan.md`](docs/rust-plan.md):
+the Rust core in [`rust/core/`](rust/core/) runs the unprivileged
+instructions so far, and the Python one stays the reference.
 
 ## Usage
 
@@ -60,7 +62,8 @@ and its disassembly.
 - [`conformance/`](conformance/README.md): the conformance suite,
   machine behaviour as data that any implementation runs.
 
-Development checks, all run in CI:
+Development checks, all run in CI (the Rust ones need a Rust
+toolchain, 1.88 or later):
 
 ```bash
 uv run pytest
@@ -76,6 +79,18 @@ uv run ruff check detrytus tests
 
 ```bash
 uv run ruff format --check detrytus tests
+```
+
+```bash
+cargo test
+```
+
+```bash
+cargo clippy --all-targets -- -D warnings
+```
+
+```bash
+cargo fmt --check
 ```
 
 ## Layout
@@ -99,6 +114,10 @@ uv run ruff format --check detrytus tests
 | `debug/` | the debugger: `engine` runs and inspects, `shell` is the front end |
 | `conformance.py` | the conformance suite's runner |
 | `cli.py` | the `detrytus` command |
+
+The Rust core, `rust/core/src/`, mirrors the machine half of that:
+`trits.rs`, `isa.rs`, `alu.rs`, `bus.rs` (memory and the built-in
+devices), `image.rs` (reading `.dti`), `hart.rs` and `machine.rs`.
 
 ## The shape of it
 

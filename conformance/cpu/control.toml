@@ -138,3 +138,52 @@ double: add   a0, a0, a0
 out:
 '''
 expect.exit_code = 20
+
+[[case]]
+name = "a branch reaches 300000 words each way"
+# Beyond 12 trits of offset (±265720 words), so it needs all 13.
+program = '''
+        li    a0, 0
+        beq   zero, zero, far
+        j     out
+back:   addi  a0, a0, 10
+        j     out
+        .org  900000
+far:    addi  a0, a0, 1
+        bne   a0, zero, back
+out:
+'''
+expect.exit_code = 11
+
+[[case]]
+name = "br3 reaches 3000 words forward"
+# Near the 8-trit limit of its offsets (±3280 words).
+program = '''
+        li    t0, 5
+        br3   t0, neg, pos
+        li    a0, 0
+        j     out
+        .org  -9000
+neg:    li    a0, -1
+        j     out
+        .org  9000
+pos:    li    a0, 1
+out:
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "br3 reaches 3000 words back"
+program = '''
+        li    t0, -5
+        br3   t0, neg, pos
+        li    a0, 0
+        j     out
+        .org  -9000
+neg:    li    a0, -1
+        j     out
+        .org  9000
+pos:    li    a0, 1
+out:
+'''
+expect.exit_code = -1

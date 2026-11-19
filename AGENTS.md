@@ -14,7 +14,10 @@ system expects from a core. The repository holds three things:
 
 - **The ISA specification**, [`docs/isa.md`](docs/isa.md). It is the
   source of truth for what the machine does.
-- **A Python emulator and assembler** that implement the spec.
+- **A Python emulator and assembler** that implement the spec, and the
+  reference while the implementation moves to Rust.
+- **A Rust core** (`rust/core/`), the machine without the tools, built
+  up phase by phase per [`docs/rust-plan.md`](docs/rust-plan.md).
 - **Examples and tests** that exercise both.
 
 The target is an operating system of its own, a microkernel in a
@@ -35,7 +38,15 @@ uv run ruff format --check detrytus tests
 uv run detrytus run examples/hello.s
 ```
 
-CI runs the four checks on every pull request. Run them yourself before
+For the Rust core, a toolchain of 1.88 or later:
+
+```sh
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
+
+CI runs all seven checks on every pull request. Run them yourself before
 pushing, each as its own command, and judge each by its exit status. A
 pipe (`ruff check ... | tail`) replaces the tool's status with the
 pipe's and hides a failure.
@@ -68,6 +79,9 @@ stays out of your diff.
 | `detrytus/conformance.py` | the conformance suite's runner |
 | `detrytus/cli.py` | the `detrytus` command |
 | `conformance/` | the conformance suite: machine behaviour as data |
+| `conformance/build/` | its cases assembled, for the Rust runner: generated, committed |
+| `rust/core/src/` | the Rust core: `trits`, `isa`, `alu`, `bus`, `image`, `hart`, `machine` |
+| `rust/core/tests/` | the Rust conformance runner and spec sync test |
 | `examples/` | runnable assembly programs |
 
 One concern per file. If a module's job needs an "and" to describe, it
@@ -95,6 +109,19 @@ tables and fails if the code disagrees. So:
 4. If it uses a new operand letter, add a setter to
    `asm/operands.py` and a renderer to `disasm.py`.
 5. Test its semantics, its encoding round trip, and its illegal forms.
+
+## Python and Rust move together
+
+While both cores exist, a change to machine behaviour changes both, and
+a conformance case pins it down. The Python core is the reference: when
+they disagree, Python is right until the spec says otherwise. After
+adding or changing a case, regenerate its image with
+`uv run python -m detrytus.conformance` and commit it; a Python test
+fails while `conformance/build/` is out of date.
+
+The Rust core has no dependencies; its tests may have some. It stops
+with `Stop::Unsupported` for anything it does not implement yet, as the
+Python core raises `NotImplementedError`, and never approximates.
 
 ## Conventions
 

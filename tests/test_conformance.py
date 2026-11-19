@@ -17,6 +17,26 @@ def test_case(case):
     assert not failures, "\n".join(failures)
 
 
+def test_built_images_are_current():
+    # Other cores run the cases from these images; regenerate them with
+    # `uv run python -m detrytus.conformance` after changing a case.
+    wanted = conformance.build_images(ROOT)
+    on_disk = set((ROOT / conformance.BUILD_DIR).rglob("*.dti"))
+    assert on_disk == set(wanted), "conformance/build/ has missing or extra images"
+    stale = [p for p, data in wanted.items() if p.read_bytes() != data]
+    assert not stale, f"stale images: {stale}"
+
+
+def test_slugs_make_file_names():
+    assert (
+        conformance.slug("a load needs no dirty trit") == "a-load-needs-no-dirty-trit"
+    )
+    assert (
+        conformance.slug("ring +1 is never translated") == "ring-1-is-never-translated"
+    )
+    assert conformance.slug("  Odd -- spacing!  ") == "odd-spacing"
+
+
 # --- the runner itself ---------------------------------------------------------
 
 HALT_WITH_4 = """

@@ -77,8 +77,8 @@ cargo test runner over the same files.
 
 The assembler stays in Python until phase 5, so for Rust the suite runs
 on `.dti` images assembled by Python and committed under
-`conformance/build/`, refreshed by a script and checked by CI to be up
-to date.
+`conformance/build/`, regenerated with `python -m detrytus.conformance`
+and checked by a Python test to be up to date.
 
 ## Phases
 
@@ -88,10 +88,13 @@ green.
 1. **Conformance suite** (done). Create `conformance/` and its Python
    runner, and move the machine-behaviour tests into it as data. Python
    only; this pays off whatever happens next.
-2. **Core crate: decode and integers.** Cargo workspace, `detrytus-core`
-   with trit arithmetic, the instruction table, decoding, the integer
-   and tritwise instructions, the bus and devices. Rust unit tests for
-   the arithmetic; the conformance cases that need no traps pass.
+2. **Core crate: decode and integers** (done). Cargo workspace,
+   `detrytus-core` with trit arithmetic, the instruction table, decoding,
+   the integer and tritwise instructions, the bus and devices. Rust unit
+   tests for the arithmetic; the conformance cases that need no traps
+   pass. The Rust runner lists the cases it may defer to phase 3
+   (`PHASE_3` in `rust/core/tests/conformance.rs`): anything it reports
+   as unsupported outside that list, or gets wrong anywhere, fails.
 3. **Core crate: privilege and paging.** Traps, CSRs, the timer,
    single step, the MMU and TLB with the same never-evicting behaviour.
    The whole conformance suite passes on Rust.

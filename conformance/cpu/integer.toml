@@ -137,3 +137,17 @@ expect.registers = { a3 = 10, a4 = 20, a5 = 0 }
 name = "tlut applies Kleene and per trit"
 program = "li a1, 0t+0-+\nli a2, 0t+++-\ntmin a0, a1, a2"
 expect.exit_code = 23  # 0t+0--
+
+[[case]]
+name = "divr with a negative divisor"
+# 8 / -3 = -2.67: rounds to -3, leaving -1
+program = "li a1, 8\nli a2, -3\ndivr a0, a1, a2\nremr a3, a1, a2"
+expect.exit_code = -3
+expect.registers = { a3 = -1 }
+
+[[case]]
+name = "tlut reads the first operand as the row"
+# tabs is abs of the first operand, whatever the second: the only
+# asymmetric named table, so it pins down which operand is which.
+program = "li a1, 0t+0-+\nli a2, 0t-+00\ntlut a0, a1, a2, tabs"
+expect.exit_code = 31  # 0t+0++

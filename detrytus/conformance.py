@@ -4,8 +4,14 @@ Cases live in TOML files under conformance/ (format in
 conformance/README.md). Each one is an assembly program and what running
 it must produce. The format is plain data so the cases outlive this
 Python implementation (docs/rust-plan.md).
+
+Until there is a Rust assembler, other cores run the cases from images
+this module assembles into conformance/build/: run it as
+`python -m detrytus.conformance` after changing a case.
 """
 
+import re
+import sys
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -34,6 +40,7 @@ OUTCOMES = {"exit_code", "step_limit", "unhandled_cause"}
 CHECKS = {"console", "registers", "csrs", "ring", "words", "trytes"}
 DEFAULT_RAM_PAGES = 729
 DEFAULT_MAX_STEPS = 100_000
+BUILD_DIR = "build"
 
 
 class CaseError(ValueError):
@@ -118,14 +125,49 @@ def load_file(path: Path) -> list[Case]:
     cases = [_case(path, raw, defaults) for raw in data.get("case", [])]
     if not cases:
         raise CaseError(f"{path}: no cases")
-    names = [c.name for c in cases]
-    if len(names) != len(set(names)):
-        raise CaseError(f"{path}: case names repeat")
+    slugs = [slug(c.name) for c in cases]
+    if len(slugs) != len(set(slugs)) or "" in slugs:
+        raise CaseError(f"{path}: case names repeat, or are empty, once slugged")
     return cases
 
 
 def load_all(root: Path) -> list[Case]:
     return [case for p in sorted(root.rglob("*.toml")) for case in load_file(p)]
+
+
+def slug(name: str) -> str:
+    """A case name as a file name: lower case, runs of other characters
+    as one '-'. Other runners derive image paths the same way."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def image_path(root: Path, case: Case) -> Path:
+    """Where a case's image lives: build/<case file without .toml>/<slug>.dti."""
+    relative = case.file.relative_to(root).with_suffix("")
+    return root / BUILD_DIR / relative / f"{slug(case.name)}{images.SUFFIX}"
+
+
+def build_images(root: Path) -> dict[Path, bytes]:
+    """Every case's image, keyed by the path it belongs at."""
+    return {
+        image_path(root, case): images.dumps(build(case)) for case in load_all(root)
+    }
+
+
+def write_images(root: Path) -> list[Path]:
+    """Bring conformance/build/ up to date; return the paths changed."""
+    wanted = build_images(root)
+    changed = []
+    for path in sorted((root / BUILD_DIR).rglob("*" + images.SUFFIX)):
+        if path not in wanted:
+            path.unlink()
+            changed.append(path)
+    for path, data in wanted.items():
+        if not path.exists() or path.read_bytes() != data:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            changed.append(path)
+    return changed
 
 
 def build(case: Case) -> Image:
@@ -201,3 +243,13 @@ def _compare(case: Case, out: Outcome) -> list[str]:
             if got != value:
                 failures.append(f"{label.format(name)}: wanted {value}, got {got}")
     return failures
+
+
+def main() -> None:
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("conformance")
+    for path in write_images(root.resolve()):
+        print(path)
+
+
+if __name__ == "__main__":
+    main()

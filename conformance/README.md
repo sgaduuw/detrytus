@@ -9,7 +9,27 @@ for (see [`docs/rust-plan.md`](../docs/rust-plan.md)).
 uv run pytest tests/test_conformance.py
 ```
 
-The Python runner is [`detrytus/conformance.py`](../detrytus/conformance.py).
+```bash
+cargo test --test conformance
+```
+
+The Python runner is [`detrytus/conformance.py`](../detrytus/conformance.py),
+the Rust one [`rust/core/tests/conformance.rs`](../rust/core/tests/conformance.rs).
+
+## Images
+
+There is no Rust assembler yet, so the Rust runner loads each case's
+program from an image in `build/`, assembled by Python. After adding or
+changing a case, regenerate them and commit the result:
+
+```bash
+uv run python -m detrytus.conformance
+```
+
+A Python test fails while any image is missing, stale or left over. An
+image lives at `build/<case file without .toml>/<slug>.dti`, the slug
+being the case name in lower case with each run of other characters
+turned into one `-`; slugs must be unique within a file.
 
 ## Layout
 
@@ -19,6 +39,7 @@ The Python runner is [`detrytus/conformance.py`](../detrytus/conformance.py).
 | `traps/` | traps, delegation, interrupts, the timer, single step |
 | `paging/` | translation, permission faults, superpages, the TLB |
 | `examples/` | the programs in `examples/`, run as shipped |
+| `build/` | the cases' assembled images, generated |
 
 `paging/` also holds shared assembly: `tables.s` (constants and base
 page tables), `boot.s` (firmware that enables paging and drops to a
@@ -49,7 +70,7 @@ expect.registers = { a1 = 7, a2 = -3 }
 
 | Key | Meaning |
 |-----|---------|
-| `name` | required; unique in the file, no `/` |
+| `name` | required; unique in the file (as a slug too), no `/` |
 | `program` | assembly source, inline |
 | `source` | a file to assemble, relative to the case file |
 | `sources` | several files (sources or `.dti` images) loaded together |
