@@ -65,7 +65,9 @@ stays out of your diff.
 | `detrytus/image.py` | the `.dti` image format and merging images |
 | `detrytus/disasm.py` | the disassembler |
 | `detrytus/debug/` | the debugger: `engine` (run control, inspection), `shell` (commands) |
+| `detrytus/conformance.py` | the conformance suite's runner |
 | `detrytus/cli.py` | the `detrytus` command |
+| `conformance/` | the conformance suite: machine behaviour as data |
 | `examples/` | runnable assembly programs |
 
 One concern per file. If a module's job needs an "and" to describe, it
@@ -127,7 +129,11 @@ tables and fails if the code disagrees. So:
 
 When you change the ISA tables, the decoder, the emulator's semantics,
 the assembler's layout or encoding, add a test rather than checking by
-hand. Then make sure the test can fail:
+hand. Behaviour a program can observe (results, traps, paging, the
+console) is tested by a case in [`conformance/`](conformance/README.md),
+not in Python, so the Rust core will be held to it too. Tests of the
+Python tools themselves stay in `tests/`. Then make sure the test can
+fail:
 
 1. **Watch it fail.** Break the code your test guards and confirm the
    test goes red, then restore the code. A test never seen to fail is
@@ -143,8 +149,8 @@ hand. Then make sure the test can fail:
    `hart.read_csr(isa.CSRS["mtcause"])`), not by indexing internal
    lists.
 
-`tests/helpers.py` has `run(source)` and `result_of(body)` for running a
-snippet to power-off and reading the exit code.
+`tests/helpers.py` has `run(source)` and `result_of(body)` for tool
+tests that need to run a snippet to power-off.
 
 ## Git and pull requests
 

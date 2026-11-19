@@ -1,0 +1,140 @@
+# Branches, jumps and calls (docs/isa.md 7.8).
+
+[defaults]
+postlude = '''
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+
+[[case]]
+name = "br3 negative"
+program = '''
+        li    t0, -4
+        br3   t0, neg, pos
+        li    a0, 2
+        j     out
+neg:    li    a0, 1
+        j     out
+pos:    li    a0, 3
+out:
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "br3 zero"
+program = '''
+        li    t0, 0
+        br3   t0, neg, pos
+        li    a0, 2
+        j     out
+neg:    li    a0, 1
+        j     out
+pos:    li    a0, 3
+out:
+'''
+expect.exit_code = 2
+
+[[case]]
+name = "br3 positive"
+program = '''
+        li    t0, 9
+        br3   t0, neg, pos
+        li    a0, 2
+        j     out
+neg:    li    a0, 1
+        j     out
+pos:    li    a0, 3
+out:
+'''
+expect.exit_code = 3
+
+[[case]]
+name = "beq taken"
+program = '''
+        li a1, 1
+        li a2, 1
+        li a0, 0
+        beq a1, a2, yes
+        j out
+yes:    li a0, 1
+out:
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "bne not taken"
+program = '''
+        li a1, 1
+        li a2, 1
+        li a0, 0
+        bne a1, a2, yes
+        j out
+yes:    li a0, 1
+out:
+'''
+expect.exit_code = 0
+
+[[case]]
+name = "blt taken"
+program = '''
+        li a1, -2
+        li a2, 1
+        li a0, 0
+        blt a1, a2, yes
+        j out
+yes:    li a0, 1
+out:
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "bge taken on equal"
+program = '''
+        li a1, 1
+        li a2, 1
+        li a0, 0
+        bge a1, a2, yes
+        j out
+yes:    li a0, 1
+out:
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "ble not taken"
+program = '''
+        li a1, 2
+        li a2, 1
+        li a0, 0
+        ble a1, a2, yes
+        j out
+yes:    li a0, 1
+out:
+'''
+expect.exit_code = 0
+
+[[case]]
+name = "bgt taken"
+program = '''
+        li a1, 2
+        li a2, 1
+        li a0, 0
+        bgt a1, a2, yes
+        j out
+yes:    li a0, 1
+out:
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "call and return"
+program = '''
+        li    a0, 5
+        call  double
+        call  double
+        j     out
+double: add   a0, a0, a0
+        ret
+out:
+'''
+expect.exit_code = 20

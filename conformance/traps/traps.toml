@@ -1,0 +1,295 @@
+# Traps, delegation, interrupts and single step (docs/isa.md 8). A
+# handler that reads mtcause is installed first in most cases.
+
+[defaults]
+prelude = '''
+        la    t0, handler
+        csrw  mtvec, t0
+'''
+
+[[case]]
+name = "an unhandled trap stops the machine"
+prelude = ""
+program = "brk"
+expect.unhandled_cause = 5
+
+[[case]]
+name = "illegal instruction traps with the word"
+program = '''
+        .word 0               # all-zero word: opcode 0
+handler:
+        csrr  a1, mtcause
+        csrr  a2, mtval
+        li    t6, -39366
+        sw    a1, 0(t6)
+'''
+expect.exit_code = 1
+expect.registers = { a2 = 0 }
+expect.csrs = { mtcause = 1, mtval = 0 }
+
+[[case]]
+name = "system call from the user ring and back"
+# Firmware drops to ring -1 with tret, the program makes a system call,
+# and the handler returns past it.
+program = '''
+        la    t0, user
+        csrw  mtpc, t0
+        li    t0, -1          # tstatus.PR = -1: tret goes to the user ring
+        csrw  mtstatus, t0
+        tret
+user:
+        li    a1, 41
+        sys
+        addi  a0, a1, 1
+        li    t6, -39366
+        sw    a0, 0(t6)
+handler:
+        csrr  t1, mtcause     # +4: system call
+        csrr  t2, mtstatus
+        tex   t2, t2, 0, 1    # PR: the ring the call came from
+        mul   a1, a1, t1      # 41 * 4
+        add   a1, a1, t2      # -1
+        csrr  t0, mtpc
+        addi  t0, t0, 3
+        csrw  mtpc, t0
+        tret
+'''
+expect.exit_code = 164  # 41 * 4 - 1 + 1
+expect.ring = -1
+
+[[case]]
+name = "the user ring cannot touch machine CSRs"
+program = '''
+        la    t0, user
+        csrw  mtpc, t0
+        li    t0, -1
+        csrw  mtstatus, t0
+        tret
+user:   csrr  a0, mtvec
+handler:
+        csrr  a0, mtcause
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "a misaligned word access traps"
+program = '''
+        li    t1, 19684
+        lw    a0, 0(t1)
+handler:
+        csrr  a0, mtcause
+        csrr  a1, mtval
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 2
+expect.registers = { a1 = 19684 }
+
+[[case]]
+name = "trap entry saves IE in PIE and tret restores it"
+program = '''
+        li    t0, 0t+0        # tstatus.IE = +
+        csrw  mtstatus, t0
+        sys
+        csrr  a2, mtstatus    # after tret
+        li    t6, -39366
+        sw    a0, 0(t6)
+handler:
+        csrr  a1, mtstatus    # on entry
+        csrr  t0, mtpc
+        addi  t0, t0, 3
+        csrw  mtpc, t0
+        tret
+'''
+expect.exit_code = 0
+# On entry PR = + (from ring +1), IE = -, PIE = +: 1 - 3 + 9. After tret
+# IE = + again: 1 + 3 + 9.
+expect.registers = { a1 = 7, a2 = 13 }
+
+[[case]]
+name = "a load beyond RAM is an access fault"
+program = '''
+        li    t1, 800 * 19683 # RAM is 729 pages
+        lw    a0, 3(t1)
+handler:
+        csrr  a0, mtcause
+        csrr  a1, mtval
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 3
+expect.registers = { a1 = 15746403 }
+
+[[case]]
+name = "a store to the boot page faults"
+program = '''
+        sw    zero, 0(zero)
+handler:
+        csrr  a0, mtcause
+        csrr  a1, mtval
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 3
+expect.registers = { a1 = 0 }
+
+[[case]]
+name = "vectored mode dispatches by cause"
+prelude = ""
+program = '''
+        la    t0, table
+        addi  t0, t0, 1       # mode trit +: vectored
+        csrw  mtvec, t0
+        sys
+        li    a0, 99
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .align 2
+        nop
+table:  j     wrong           # cause 0 never happens
+        j     wrong           # cause +1
+        j     wrong           # +2
+        j     wrong           # +3
+        li    a0, 4           # +4: system call lands here
+        li    t6, -39366
+        sw    a0, 0(t6)
+wrong:  li    a0, 99
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 4
+
+[[case]]
+name = "exception delegation reaches the kernel bank"
+prelude = ""
+program = '''
+        la    t0, mhandler
+        csrw  mtvec, t0
+        la    t0, shandler
+        csrw  stvec, t0
+        li    t0, 0t+0000     # trit 4 (cause +4) delegated to ring 0
+        csrw  edeleg, t0
+        la    t0, user
+        csrw  mtpc, t0
+        li    t0, -1
+        csrw  mtstatus, t0
+        tret
+user:   sys
+mhandler:
+        li    a0, 1
+        li    t6, -39366
+        sw    a0, 0(t6)
+shandler:
+        li    a0, 2
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 2
+expect.ring = 0
+expect.csrs = { stcause = 4 }
+
+[[case]]
+name = "a delegated trap raised in ring +1 stays there"
+# Delegation sends system calls to ring 0, but a trap never lands in a
+# ring below the one it interrupts, so firmware's own sys stays put.
+prelude = ""
+program = '''
+        la    t0, mhandler
+        csrw  mtvec, t0
+        la    t0, shandler
+        csrw  stvec, t0
+        li    t0, 0t+0000
+        csrw  edeleg, t0
+        sys
+mhandler:
+        li    a0, 1
+        li    t6, -39366
+        sw    a0, 0(t6)
+shandler:
+        li    a0, 2
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 1
+expect.ring = 1
+expect.csrs = { mtcause = 4 }
+
+[[case]]
+name = "the timer interrupt fires at timecmp"
+# Time advances one tick per step, so the interrupt arrives at a fixed
+# point in the spin loop.
+program = '''
+        li    t0, 50
+        csrw  mtimecmp, t0
+        li    t0, 0t+0        # ie trit 1: timer
+        csrw  mie, t0
+        li    t0, 0t+0        # tstatus.IE = +
+        csrw  mtstatus, t0
+        li    a0, 0
+spin:   addi  a0, a0, 1
+        j     spin
+handler:
+        csrr  a1, mtcause
+        csrr  a2, time
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 20
+# The interrupt is taken on the step where time reaches 50; the handler's
+# second instruction reads time two steps later.
+expect.registers = { a1 = -1, a2 = 52 }
+
+[[case]]
+name = "wfi skips ahead to the timer"
+max_steps = 100
+program = '''
+        li    t0, 1000000
+        csrw  mtimecmp, t0
+        li    t0, 0t+0
+        csrw  mie, t0
+        csrw  mtstatus, t0
+        wfi
+handler:
+        csrr  a0, mtcause
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = -1
+
+[[case]]
+name = "single step traps after one user instruction"
+program = '''
+        la    t0, user
+        csrw  mtpc, t0
+        li    t0, 0t+000-     # SS (trit 4) = +, PR = -1
+        csrw  mtstatus, t0
+        tret
+user:   addi  a1, zero, 7
+        addi  a1, a1, 100     # never reached
+handler:
+        csrr  a0, mtcause
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 9
+expect.registers = { a1 = 7 }
+
+[[case]]
+name = "instret counts retired instructions"
+prelude = ""
+program = '''
+        csrr  a1, entropy
+        csrr  a0, instret     # only the first instruction has retired
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "the step limit is reported"
+prelude = ""
+max_steps = 50
+program = "spin: j spin"
+expect.step_limit = true

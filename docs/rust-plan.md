@@ -52,24 +52,28 @@ selects it.
 
 ## The conformance suite
 
-Each case is an assembly file plus a small TOML file of expectations:
+Phase 1 built it: [`conformance/`](../conformance/README.md) holds the
+cases and their format, and `detrytus/conformance.py` runs them on the
+Python core. Each case is a program (inline, or files to assemble or
+load) and its expected outcome and state, in TOML:
 
 ```toml
-# conformance/paging/user_fault.toml
-source = "user_fault.s"
-ram_pages = 20
-max_steps = 100000
-exit_code = 7
-console = "..."
-[registers]
-a1 = 984153
+[[case]]
+name = "a load needs no dirty trit"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + A + 60 * PAGE
+'''
+expect.exit_code = 4
 ```
 
-A case may also give several sources to load together, or expect the
-step limit. Both implementations get a runner: a pytest plugin over the
-directory for Python, a cargo test for Rust. The first cases are drawn
-from the existing CPU, MMU and example tests, which are already mostly
-"assemble this, run it, check the result".
+The machine-behaviour tests that were Python (`test_cpu.py`,
+`test_mmu.py` and the example runs) moved into it. The Rust core gets a
+cargo test runner over the same files.
 
 The assembler stays in Python until phase 5, so for Rust the suite runs
 on `.dti` images assembled by Python and committed under
@@ -81,9 +85,9 @@ to date.
 Each phase is one or more pull requests, and each ends with everything
 green.
 
-1. **Conformance suite.** Create `conformance/` and its Python runner,
-   and move the machine-behaviour tests into it as data. Python only;
-   this pays off whatever happens next.
+1. **Conformance suite** (done). Create `conformance/` and its Python
+   runner, and move the machine-behaviour tests into it as data. Python
+   only; this pays off whatever happens next.
 2. **Core crate: decode and integers.** Cargo workspace, `detrytus-core`
    with trit arithmetic, the instruction table, decoding, the integer
    and tritwise instructions, the bus and devices. Rust unit tests for

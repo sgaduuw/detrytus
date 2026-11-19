@@ -1,0 +1,153 @@
+# The TLB and the checked-translation cache (docs/isa.md 9.5). The TLB
+# never evicts, so a stale translation is observable until fence.vm.
+# Cached checks must never answer for another access type, ring or SUA
+# setting.
+
+[[case]]
+name = "a stale translation survives until fence.vm"
+program = '''
+        .include "kernel.s"
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)
+        li    t1, LEAF0 + 3 * 50
+        li    t2, LEAF + R + W + A + D + 61 * PAGE
+        sw    t2, 0(t1)          # remap page 50 to physical page 61
+        lw    a3, 0(t0)          # the TLB still holds the old translation
+        fence.vm t0, zero
+        lw    a4, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + A + D + 60 * PAGE
+        .org  LEAF0 + 3 * 103    # the leaf table, so the kernel can edit it
+        .word LEAF + R + W + A + D + LEAF0
+        .org  60 * PAGE
+        .word 1
+        .org  61 * PAGE
+        .word 2
+'''
+expect.exit_code = 4
+expect.registers = { a2 = 1, a3 = 1, a4 = 2 }
+
+[[case]]
+name = "ASIDs keep translations apart and global entries survive"
+# Two address spaces. The first (ASID 1) maps page 50 to 60 and page 51
+# to 60 as a global entry; the second (ASID 2, root 105) maps both to 61.
+# Flushing one ASID leaves the other's translations alone.
+program = '''
+        .include "tables.s"
+        .equ  PTBR, 1 + 3 * 1 + ROOT * PAGE
+        .equ  PTBR2, 1 + 3 * 2 + 105 * PAGE
+        .equ  LEAF2, 107 * PAGE
+        .equ  RING, 0
+        .include "boot.s"
+        li    t0, 50 * PAGE
+        li    t1, 51 * PAGE
+        lw    a2, 0(t0)          # address space 1: physical 60
+        lw    a3, 0(t1)          # global entry, physical 60
+        li    t4, LEAF0 + 3 * 50
+        li    t5, LEAF + R + W + A + D + 62 * PAGE
+        sw    t5, 0(t4)          # remap page 50 in space 1: stale until a fence
+        li    t2, PTBR2
+        csrw  ptbr, t2
+        lw    a4, 0(t0)          # address space 2: its own translation, 61
+        lw    a5, 0(t1)          # the global entry still applies: 60
+        li    t3, 2
+        fence.vm zero, t3        # flush address space 2: globals stay
+        lw    s0, 0(t1)
+        li    t2, PTBR
+        csrw  ptbr, t2
+        lw    s2, 0(t0)          # space 1 was not flushed: still physical 60
+        li    t2, PTBR2
+        csrw  ptbr, t2
+        fence.vm zero, zero      # flush everything
+        lw    s1, 0(t1)
+        sys
+
+        .org  LEAF0 + 3 * CODE
+        .word LEAF + R + X + A + CODE * PAGE
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + A + D + 60 * PAGE
+        .word LEAF + R + W + A + G + D + 60 * PAGE
+        .org  LEAF0 + 3 * 103    # space 1's leaf table, so the kernel can edit it
+        .word LEAF + R + W + A + D + LEAF0
+
+        .org  105 * PAGE
+        .word PTR + 106 * PAGE
+        .org  106 * PAGE
+        .word PTR + LEAF2
+        .org  LEAF2 + 3 * CODE
+        .word LEAF + R + X + A + CODE * PAGE
+        .org  LEAF2 + 3 * 50
+        .word LEAF + R + W + A + D + 61 * PAGE
+        .word LEAF + R + W + A + D + 61 * PAGE
+
+        .org  60 * PAGE
+        .word 1
+        .org  61 * PAGE
+        .word 2
+'''
+expect.exit_code = 4
+expect.registers = { a2 = 1, a3 = 1, a4 = 2, a5 = 1, s0 = 1, s1 = 2, s2 = 1 }
+
+[[case]]
+name = "a cached SUA read does not survive turning SUA off"
+program = '''
+        .include "kernel.s"
+        li    t1, 0t+000         # SUA on
+        csrw  ststatus, t1
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)          # allowed
+        li    t1, 0t-000         # SUA = -: off
+        csrw  ststatus, t1
+        lw    a3, 0(t0)          # the same page, now refused
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + U + A + D + 60 * PAGE
+        .org  60 * PAGE
+        .word 8
+'''
+expect.exit_code = 7
+expect.registers = { a2 = 8 }
+
+[[case]]
+name = "a cached load does not let a store through"
+program = '''
+        .include "user.s"
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)
+        sw    a2, 0(t0)
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + U + A + D + 60 * PAGE
+        .org  60 * PAGE
+        .word 8
+'''
+expect.exit_code = 8
+expect.registers = { a2 = 8 }
+
+[[case]]
+name = "a cached kernel read does not answer for the user ring"
+# Ring 0 reads a kernel page (cached), then drops to ring -1, running
+# from a user page, and reads the same page, which it must not.
+program = '''
+        .include "kernel.s"
+        li    t0, 50 * PAGE
+        lw    a2, 0(t0)          # ring 0: allowed
+        li    t1, 51 * PAGE
+        csrw  stpc, t1
+        li    t1, -1
+        csrw  ststatus, t1       # PR = -1
+        tret
+        .org  51 * PAGE
+        lw    a3, 0(t0)          # ring -1: refused
+        sys
+        .org  LEAF0 + 3 * 50
+        .word LEAF + R + W + A + D + 60 * PAGE
+        .word LEAF + R + X + U + A + 51 * PAGE
+        .org  60 * PAGE
+        .word 5
+'''
+expect.exit_code = 7
+expect.registers = { a2 = 5 }
+# mtstatus 0t--: PR = - (the fault came from ring -1), PIE = -.
+expect.csrs = { mtstatus = -4 }

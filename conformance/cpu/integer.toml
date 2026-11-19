@@ -1,0 +1,139 @@
+# Integer and tritwise instructions (docs/isa.md 7.1-7.4). Each program
+# leaves its answer in a0, and the postlude powers off with it.
+
+[defaults]
+postlude = '''
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+
+[[case]]
+name = "add"
+program = "li a1, 7\nli a2, -3\nadd a0, a1, a2"
+expect.exit_code = 4
+
+[[case]]
+name = "sub"
+program = "li a1, 7\nli a2, -3\nsub a0, a1, a2"
+expect.exit_code = 10
+
+[[case]]
+name = "mul"
+program = "li a1, 7\nli a2, -3\nmul a0, a1, a2"
+expect.exit_code = -21
+
+[[case]]
+name = "div rounds toward zero"
+program = "li a1, -7\nli a2, 2\ndiv a0, a1, a2"
+expect.exit_code = -3
+
+[[case]]
+name = "rem has the dividend's sign"
+program = "li a1, -7\nli a2, 2\nrem a0, a1, a2"
+expect.exit_code = -1
+
+[[case]]
+name = "divr rounds to nearest"
+program = "li a1, 8\nli a2, 3\ndivr a0, a1, a2"
+expect.exit_code = 3
+
+[[case]]
+name = "remr is balanced"
+program = "li a1, 8\nli a2, 3\nremr a0, a1, a2"
+expect.exit_code = -1
+
+[[case]]
+name = "cmp"
+program = "li a1, 5\nli a2, 9\ncmp a0, a1, a2"
+expect.exit_code = -1
+
+[[case]]
+name = "cmp does not overflow at the extremes"
+program = "li a1, 3812798742493\nli a2, -3812798742493\ncmp a0, a1, a2"
+expect.exit_code = 1
+
+[[case]]
+name = "max"
+program = "li a1, 5\nli a2, 9\nmax a0, a1, a2"
+expect.exit_code = 9
+
+[[case]]
+name = "abs"
+program = "li a1, -5\nabs a0, a1"
+expect.exit_code = 5
+
+[[case]]
+name = "shi left"
+program = "li a1, 1\nshi a0, a1, 3"
+expect.exit_code = 27
+
+[[case]]
+name = "shi right rounds"
+program = "li a1, 41\nshi a0, a1, -1"  # 41/3 = 13.67 rounds to 14
+expect.exit_code = 14
+
+[[case]]
+name = "tzt counts trailing zero trits"
+program = "li a1, 54\ntzt a0, a1"
+expect.exit_code = 3
+
+[[case]]
+name = "nzt counts non-zero trits"
+program = "li a1, 0t+0-0+\nnzt a0, a1"
+expect.exit_code = 3
+
+[[case]]
+name = "tex extracts a field"
+program = "li a1, 0t+-0+\ntex a0, a1, 1, 2"
+expect.exit_code = -3  # 0t-0
+
+[[case]]
+name = "tins inserts a field"
+program = "li a0, 0t++++\nli a1, 0t-\ntins a0, a1, 2, 1"
+expect.exit_code = 22  # 0t+-++
+
+[[case]]
+name = "bxor"
+program = "li a1, 6\nli a2, 3\nbxor a0, a1, a2"
+expect.exit_code = 5
+
+[[case]]
+name = "lui"
+program = "lui a0, 1"
+expect.exit_code = 6561
+
+[[case]]
+name = "not negates"
+program = "li a1, 7\nnot a0, a1"
+expect.exit_code = -7
+
+[[case]]
+name = "add wraps symmetrically"
+program = "li a1, 3812798742493\naddi a0, a1, 1"
+expect.exit_code = -3812798742493
+
+[[case]]
+name = "mulh gives the high word"
+program = "li a1, 3812798742493\nli a2, 3812798742488\nmulh a0, a1, a2"
+expect.exit_code = 1906399371244
+
+[[case]]
+name = "sel picks by sign"
+program = '''
+        li a1, 10
+        li a2, 20
+        li t0, -5
+        sel a3, t0, a1, a2     # negative: a1
+        li t0, 5
+        sel a4, t0, a1, a2     # positive: a2
+        sel a5, zero, a1, a2   # zero: 0
+        add a0, a3, a4
+        add a0, a0, a5
+'''
+expect.exit_code = 30
+expect.registers = { a3 = 10, a4 = 20, a5 = 0 }
+
+[[case]]
+name = "tlut applies Kleene and per trit"
+program = "li a1, 0t+0-+\nli a2, 0t+++-\ntmin a0, a1, a2"
+expect.exit_code = 23  # 0t+0--

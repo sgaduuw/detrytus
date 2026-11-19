@@ -1,0 +1,24 @@
+# The programs in examples/, run as shipped.
+
+[[case]]
+name = "hello"
+source = "../../examples/hello.s"
+expect.exit_code = 0
+expect.console = "Hello from a balanced-ternary machine!\n"
+
+[[case]]
+name = "bsearch finds every key"
+source = "../../examples/bsearch.s"
+expect.exit_code = 0
+expect.console = "5\n0\n8\n-1\n2\n"
+
+[[case]]
+name = "paging runs user code through its page table"
+source = "../../examples/paging.s"
+expect.exit_code = 0
+expect.console = "user: hello from virtual page 1\nfirmware: system call from ring -1\n"
+
+[[case]]
+name = "sections"
+source = "../../examples/sections.s"
+expect.exit_code = 0
