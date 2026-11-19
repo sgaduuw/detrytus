@@ -79,6 +79,15 @@ class Hart:
         """A register by any of its names: 'a0', 'r1', 'sp', ..."""
         return self.x(isa.REG_NAMES[name])
 
+    def csr(self, name: str) -> int:
+        """A CSR by name, read with ring +1's privilege: for tests and
+        tools. Reading entropy advances its stream, as a program's would."""
+        ring, self.ring = self.ring, 1
+        try:
+            return self.read_csr(isa.CSRS[name])
+        finally:
+            self.ring = ring
+
     # --- the fetch loop ----------------------------------------------------
 
     def step(self) -> None:

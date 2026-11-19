@@ -54,3 +54,23 @@ program = '''
 '''
 expect.exit_code = 0
 expect.registers = { a1 = 10, a2 = 15, a3 = 10, a4 = 0, a5 = 1, t3 = 5 }
+
+[[case]]
+name = "the other atomics"
+# amotlut with tabs replaces memory with the tritwise abs of its old
+# value: -4 is 0t--, so it becomes 0t++, 4.
+program = '''
+        li    t0, 19683
+        li    t1, 10
+        sw    t1, 0(t0)
+        li    t2, 5
+        amomin a1, t2, (t0)      # a1 = 10, mem = 5
+        amomax a2, t1, (t0)      # a2 = 5, mem = 10
+        li    t3, -4
+        amoswap a3, t3, (t0)     # a3 = 10, mem = -4
+        amotlut a4, zero, (t0), tabs  # a4 = -4, mem = 4
+        li    a0, 0
+'''
+expect.exit_code = 0
+expect.registers = { a1 = 10, a2 = 5, a3 = 10, a4 = -4 }
+expect.words = { "19683" = 4 }

@@ -106,6 +106,34 @@ impl Hart {
         isa::reg_number(name).map(|r| self.x(r))
     }
 
+    // --- state, for tools and for comparing cores ------------------------------
+
+    /// Registers r-13 to r13, in order.
+    pub fn regs(&self) -> [i64; 27] {
+        self.regs
+    }
+
+    /// A trap bank (ring 0 or +1), in the order of [`isa::BANK`]. The
+    /// stored ip, without the timer trit computed from time.
+    pub fn bank(&self, ring: i64) -> [i64; 9] {
+        self.banks[ring as usize]
+    }
+
+    /// The CSRs held as plain storage, by number, in number order.
+    pub fn stored_csrs(&self) -> Vec<(i64, i64)> {
+        let mut csrs: Vec<(i64, i64)> = self.csrs.iter().map(|(&n, &v)| (n, v)).collect();
+        csrs.sort_unstable();
+        csrs
+    }
+
+    pub fn reservation(&self) -> Option<i64> {
+        self.reservation
+    }
+
+    pub fn step_ring(&self) -> Option<i64> {
+        self.step_ring
+    }
+
     // --- the fetch loop ----------------------------------------------------
 
     pub fn step(&mut self, bus: &mut Bus) -> Result<(), Stop> {

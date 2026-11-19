@@ -1,0 +1,14 @@
+[project]
+name = "detrytus-rs"
+version = "0.1.0"
+description = "The Rust core of detrytus, for the Python tools: optional"
+license = "MIT"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+module-name = "detrytus_rs"
+features = ["pyo3/extension-module"]

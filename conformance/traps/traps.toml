@@ -327,3 +327,46 @@ handler:
         sw    a0, 0(t6)
 '''
 expect.exit_code = 1
+
+[[case]]
+name = "csrrtmax and csrrtmin combine tritwise"
+# mscratch 0t+0- (8) with 0t-+0 (-6): max per trit is 0t++0 (12), then
+# min of that with 0t-+0 is 0t-+0 (-6).
+program = '''
+        li    t1, 8
+        csrw  mscratch, t1
+        li    t0, -6
+        csrrtmax a1, mscratch, t0
+        csrrtmin a2, mscratch, t0
+        csrr  a3, mscratch
+        li    a0, 0
+        li    t6, -39366
+        sw    a0, 0(t6)
+handler:
+        li    a0, 99
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 0
+expect.registers = { a1 = 8, a2 = 12, a3 = -6 }
+
+[[case]]
+name = "instret counts in the user ring"
+# Two reads of instret around one instruction: two instructions retire
+# between them, the first read and the addi.
+program = '''
+        la    t0, user
+        csrw  mtpc, t0
+        li    t0, -1
+        csrw  mtstatus, t0
+        tret
+user:   csrr  a1, instret
+        addi  a3, a3, 1
+        csrr  a2, instret
+        sub   a0, a2, a1
+        sys
+handler:
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 2

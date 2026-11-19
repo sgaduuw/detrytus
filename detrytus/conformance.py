@@ -16,13 +16,15 @@ import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from detrytus import image as images
-from detrytus import isa
 from detrytus.asm import Image, assemble
-from detrytus.machine import Machine, StepLimit
+from detrytus.machine import Machine, StepLimit, create
 from detrytus.trap import UnhandledTrap
+
+if TYPE_CHECKING:
+    from detrytus.rust import RustMachine
 
 CASE_KEYS = {
     "name",
@@ -67,7 +69,7 @@ class Case:
 class Outcome:
     kind: str  # 'exit', 'step_limit' or 'unhandled'
     value: int | None
-    machine: Machine
+    machine: "Machine | RustMachine"
     failures: list[str] = field(default_factory=list)
 
 
@@ -185,8 +187,9 @@ def build(case: Case) -> Image:
     )
 
 
-def run(case: Case) -> Outcome:
-    m = Machine(ram_pages=case.ram_pages, seed=1)
+def run(case: Case, backend: str = "python") -> Outcome:
+    """Run a case on the "python" or "rust" core."""
+    m = create(ram_pages=case.ram_pages, seed=1, backend=backend)
     m.console.feed(case.input)
     m.load(build(case))
     try:
@@ -200,19 +203,10 @@ def run(case: Case) -> Outcome:
     return outcome
 
 
-def _read_csr(m: Machine, name: str) -> int:
-    hart = m.hart
-    ring, hart.ring = hart.ring, 1  # read as ring +1, then restore
-    try:
-        return hart.read_csr(isa.CSRS[name])
-    finally:
-        hart.ring = ring
-
-
 # Checks on named things: expectation key -> (label, read one by name).
-NAMED: dict[str, tuple[str, Callable[[Machine, str], int]]] = {
+NAMED: dict[str, tuple[str, Callable[[Any, str], int]]] = {
     "registers": ("register {}", lambda m, name: m.hart.reg(name)),
-    "csrs": ("csr {}", _read_csr),
+    "csrs": ("csr {}", lambda m, name: m.hart.csr(name)),
     "words": ("word at {}", lambda m, addr: m.bus.read(int(addr), 3, "walk")),
     "trytes": ("tryte at {}", lambda m, addr: m.bus.read(int(addr), 1, "walk")),
 }

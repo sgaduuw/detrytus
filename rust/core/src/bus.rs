@@ -100,6 +100,22 @@ impl Bus {
         self.pages.get(&page).map_or(0, |p| p[(addr - page * PAGE + HALF_PAGE) as usize] as i64)
     }
 
+    /// Every non-zero tryte of memory, in address order.
+    pub fn trytes(&self) -> Vec<(i64, i64)> {
+        let mut out: Vec<(i64, i64)> = self
+            .pages
+            .iter()
+            .flat_map(|(&page, mem)| {
+                mem.iter()
+                    .enumerate()
+                    .filter(|(_, t)| **t != 0)
+                    .map(move |(i, &t)| (page * PAGE + i as i64 - HALF_PAGE, t as i64))
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
     /// Write a tryte without access checks: for loaders, not the CPU.
     pub fn poke(&mut self, addr: i64, tryte: i64) {
         let page = page_of(addr);

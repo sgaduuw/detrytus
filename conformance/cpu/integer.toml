@@ -151,3 +151,49 @@ name = "tlut reads the first operand as the row"
 # asymmetric named table, so it pins down which operand is which.
 program = "li a1, 0t+0-+\nli a2, 0t-+00\ntlut a0, a1, a2, tabs"
 expect.exit_code = 31  # 0t+0++
+
+[[case]]
+name = "cmpi"
+program = "li a1, 5\ncmpi a0, a1, 9\ncmpi a2, a1, 2\ncmpi a3, a1, 5"
+expect.exit_code = -1
+expect.registers = { a2 = 1, a3 = 0 }
+
+[[case]]
+name = "rotations go both ways"
+# Rotating 1 right by one trit brings it round to trit 26.
+program = "li a1, 1\nroti a0, a1, -1\nroti a2, a1, 1\nli t0, -1\nrot a3, a1, t0"
+expect.exit_code = 2541865828329
+expect.registers = { a2 = 3, a3 = 2541865828329 }
+
+[[case]]
+name = "sh shifts right with a negative count"
+program = "li a1, 41\nli a2, -1\nsh a0, a1, a2"
+expect.exit_code = 14
+
+[[case]]
+name = "lzt counts leading zero trits"
+program = "li a1, 1\nlzt a0, a1\nlzt a2, zero"
+expect.exit_code = 26
+expect.registers = { a2 = 27 }
+
+[[case]]
+name = "min"
+program = "li a1, 5\nli a2, -9\nmin a0, a1, a2"
+expect.exit_code = -9
+
+[[case]]
+name = "binary and, or and shift"
+# On the two's-complement form: 6 & 3 = 2, 6 | 3 = 7, 3 << 2 = 12, -8 >> 2 = -2.
+program = '''
+        li    a1, 6
+        li    a2, 3
+        band  a3, a1, a2
+        bor   a4, a1, a2
+        li    t0, 2
+        bsh   a5, a2, t0
+        li    t1, -8
+        li    t2, -2
+        bsh   a0, t1, t2
+'''
+expect.exit_code = -2
+expect.registers = { a3 = 2, a4 = 7, a5 = 12 }

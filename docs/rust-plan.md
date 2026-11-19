@@ -46,9 +46,11 @@ detrytus/                 the repository
   docs/, tests/, examples/
 ```
 
-The Python package becomes a mixed Python/Rust project built with
-maturin, so `uv sync` builds the extension and `Machine(backend="rust")`
-selects it.
+The bindings are a separate, optional package built with maturin
+(`rust/py`), not part of the Python package: the owner chose that so
+installing detrytus, and trylobite's CI with it, needs no Rust toolchain
+until the switchover. `detrytus.machine.create(backend="rust")` selects
+it.
 
 ## The conformance suite
 
@@ -102,11 +104,14 @@ green.
    identical output and step counts. The interpreter is unoptimised
    (hash-mapped pages, a decode cache keyed by word), so that is a
    floor, not a ceiling.
-4. **Bindings and differential testing.** `detrytus-py` exposes the
-   core; `Machine(backend="rust")` passes the full Python test suite and
-   trylobite's tests. A differential runner executes random programs on
-   both cores and compares registers, CSRs and memory after every step;
-   it runs in CI.
+4. **Bindings and differential testing** (done). `detrytus-py` exposes
+   the core as the optional `detrytus-rs` package, so installing
+   detrytus still needs no Rust toolchain; `detrytus.machine.create`
+   (or `run --backend rust`) selects it. The conformance suite passes
+   through the bindings, and so do trylobite's 21 tests (in 1.4 s,
+   against 16.7 s on Python). A differential runner steps the
+   conformance programs and 300 random programs on both cores and
+   compares their whole state after every step; it runs in CI.
 5. **Rust command line.** `detrytus-cli run` for `.dti` images, then the
    assembler ported to Rust with the assembler tests moved into the
    conformance suite where they can be, then the debugger. Each tool

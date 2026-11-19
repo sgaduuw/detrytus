@@ -421,3 +421,33 @@ trylobite's demo runs about 16 times faster on Rust: 0.066 to 0.082 s
 against 1.14 to 1.20 s, three runs each, whole process, same output and
 293,537 steps on both.
 
+### 2026-11-19 · Bindings as an optional package, and the cores compared step by step (phase 4)
+
+The plan had the Python package built with maturin, so that installing
+it compiled the Rust core. That would have made a Rust toolchain a
+requirement for anyone installing detrytus, trylobite's CI included.
+The owner chose a separate, optional package instead: `detrytus-rs`
+(`rust/py`, PyO3), installed with `uv pip install ./rust/py`.
+`detrytus/rust.py` wraps it in the Python Machine's interface (load,
+run, console, registers and CSRs by name, physical memory), and
+`detrytus.machine.create` picks a core by argument or
+`DETRYTUS_BACKEND`. The debugger and `--trace` need the Python core's
+hooks and stay on it; the plan moves debugging into the Rust core later.
+
+`tests/test_differential.py` steps both cores through the same program
+and compares their whole architectural state after every step: all the
+conformance programs and 300 random programs built from legal
+encodings, with handlers that skip whatever traps. Run against
+deliberate bugs that the conformance suite missed (in `cmpi`, `roti`,
+`amomin`, `csrrtmin`, `lzt`, `instret` counting in the user ring, and
+entropy), it caught all seven, and nine new cases now let the suite
+catch them on its own. The one bug neither caught, capping a binary
+right shift at 62 bits, cannot be observed: words never exceed 2⁴².
+
+trylobite's 21 tests pass on the Rust core through the bindings, in
+1.4 s against 16.7 s, run from a copy whose test helper calls
+`create()`; trylobite itself still calls `Machine` directly.
+
+`tests/helpers.py` is gone: its users were the CPU and MMU tests that
+moved into the conformance suite.
+
