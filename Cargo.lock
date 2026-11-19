@@ -3,11 +3,32 @@
 version = 4
 
 [[package]]
-name = "detrytus-core"
+name = "detrytus-asm"
 version = "0.1.0"
 dependencies = [
+ "detrytus-core",
+]
+
+[[package]]
+name = "detrytus-cli"
+version = "0.1.0"
+dependencies = [
+ "detrytus-asm",
+ "detrytus-core",
+]
+
+[[package]]
+name = "detrytus-conformance"
+version = "0.1.0"
+dependencies = [
+ "detrytus-asm",
+ "detrytus-core",
  "toml",
 ]
+
+[[package]]
+name = "detrytus-core"
+version = "0.1.0"
 
 [[package]]
 name = "detrytus-py"

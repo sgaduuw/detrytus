@@ -4,14 +4,8 @@ Cases live in TOML files under conformance/ (format in
 conformance/README.md). Each one is an assembly program and what running
 it must produce. The format is plain data so the cases outlive this
 Python implementation (docs/rust-plan.md).
-
-Until there is a Rust assembler, other cores run the cases from images
-this module assembles into conformance/build/: run it as
-`python -m detrytus.conformance` after changing a case.
 """
 
-import re
-import sys
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -19,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from detrytus import image as images
-from detrytus.asm import Image, assemble
+from detrytus.asm import AsmError, Image, assemble
 from detrytus.machine import Machine, StepLimit, create
 from detrytus.trap import UnhandledTrap
 
@@ -38,11 +32,12 @@ CASE_KEYS = {
     "input",
 }
 DEFAULT_KEYS = CASE_KEYS - {"name"}
-OUTCOMES = {"exit_code", "step_limit", "unhandled_cause"}
+OUTCOMES = {"exit_code", "step_limit", "unhandled_cause", "asm_error"}
 CHECKS = {"console", "registers", "csrs", "ring", "words", "trytes"}
+# Only with asm_error: the line the error is reported at.
+ASM_ERROR_KEYS = {"asm_error", "asm_error_line"}
 DEFAULT_RAM_PAGES = 729
 DEFAULT_MAX_STEPS = 100_000
-BUILD_DIR = "build"
 
 
 class CaseError(ValueError):
@@ -67,9 +62,10 @@ class Case:
 
 @dataclass
 class Outcome:
-    kind: str  # 'exit', 'step_limit' or 'unhandled'
-    value: int | None
-    machine: "Machine | RustMachine"
+    kind: str  # 'exit', 'step_limit', 'unhandled' or 'asm_error'
+    value: int | str | None  # the exit code, cause or error message
+    machine: "Machine | RustMachine | None"  # None if assembly failed
+    line: int | None = None  # where an assembly error was reported
     failures: list[str] = field(default_factory=list)
 
 
@@ -84,7 +80,8 @@ def _case(path: Path, raw: dict[str, Any], defaults: dict[str, Any]) -> Case:
     case_raw = {k: v for k, v in raw.items() if k != "expect"}
     where = f"{path}: case {raw.get('name', '?')!r}"
     _check_keys(where, case_raw, CASE_KEYS)
-    _check_keys(f"{where} [expect]", expect, OUTCOMES | CHECKS)
+    allowed = ASM_ERROR_KEYS if "asm_error" in expect else OUTCOMES | CHECKS
+    _check_keys(f"{where} [expect]", expect, allowed)
     if "name" not in raw or "/" in raw["name"]:
         raise CaseError(f"{path}: every case needs a name, without '/'")
     outcomes = OUTCOMES & set(expect)
@@ -127,49 +124,14 @@ def load_file(path: Path) -> list[Case]:
     cases = [_case(path, raw, defaults) for raw in data.get("case", [])]
     if not cases:
         raise CaseError(f"{path}: no cases")
-    slugs = [slug(c.name) for c in cases]
-    if len(slugs) != len(set(slugs)) or "" in slugs:
-        raise CaseError(f"{path}: case names repeat, or are empty, once slugged")
+    names = [c.name for c in cases]
+    if len(names) != len(set(names)):
+        raise CaseError(f"{path}: case names repeat")
     return cases
 
 
 def load_all(root: Path) -> list[Case]:
     return [case for p in sorted(root.rglob("*.toml")) for case in load_file(p)]
-
-
-def slug(name: str) -> str:
-    """A case name as a file name: lower case, runs of other characters
-    as one '-'. Other runners derive image paths the same way."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-
-
-def image_path(root: Path, case: Case) -> Path:
-    """Where a case's image lives: build/<case file without .toml>/<slug>.dti."""
-    relative = case.file.relative_to(root).with_suffix("")
-    return root / BUILD_DIR / relative / f"{slug(case.name)}{images.SUFFIX}"
-
-
-def build_images(root: Path) -> dict[Path, bytes]:
-    """Every case's image, keyed by the path it belongs at."""
-    return {
-        image_path(root, case): images.dumps(build(case)) for case in load_all(root)
-    }
-
-
-def write_images(root: Path) -> list[Path]:
-    """Bring conformance/build/ up to date; return the paths changed."""
-    wanted = build_images(root)
-    changed = []
-    for path in sorted((root / BUILD_DIR).rglob("*" + images.SUFFIX)):
-        if path not in wanted:
-            path.unlink()
-            changed.append(path)
-    for path, data in wanted.items():
-        if not path.exists() or path.read_bytes() != data:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-            changed.append(path)
-    return changed
 
 
 def build(case: Case) -> Image:
@@ -189,9 +151,15 @@ def build(case: Case) -> Image:
 
 def run(case: Case, backend: str = "python") -> Outcome:
     """Run a case on the "python" or "rust" core."""
+    try:
+        image = build(case)
+    except AsmError as e:
+        outcome = Outcome("asm_error", e.message, None, e.line)
+        outcome.failures = _compare(case, outcome)
+        return outcome
     m = create(ram_pages=case.ram_pages, seed=1, backend=backend)
     m.console.feed(case.input)
-    m.load(build(case))
+    m.load(image)
     try:
         result = m.run(case.max_steps)
         outcome = Outcome("exit", result.exit_code, m)
@@ -213,20 +181,29 @@ NAMED: dict[str, tuple[str, Callable[[Any, str], int]]] = {
 
 
 def _outcome(e: dict[str, Any], out: Outcome) -> list[str]:
-    if "exit_code" in e:
+    if "asm_error" in e:
+        wanted: tuple[str, int | str | None] = ("asm_error", e["asm_error"])
+    elif "exit_code" in e:
         wanted = ("exit", e["exit_code"])
     elif "step_limit" in e:
         wanted = ("step_limit", None)
     else:
         wanted = ("unhandled", e["unhandled_cause"])
-    if (out.kind, out.value) == wanted:
-        return []
-    return [f"outcome: wanted {wanted[0]} {wanted[1]}, got {out.kind} {out.value}"]
+    failures = []
+    if (out.kind, out.value) != wanted:
+        failures.append(
+            f"outcome: wanted {wanted[0]} {wanted[1]!r}, got {out.kind} {out.value!r}"
+        )
+    if "asm_error_line" in e and out.line != e["asm_error_line"]:
+        failures.append(f"asm_error_line: wanted {e['asm_error_line']}, got {out.line}")
+    return failures
 
 
 def _compare(case: Case, out: Outcome) -> list[str]:
     e, m = case.expect, out.machine
     failures = _outcome(e, out)
+    if m is None:
+        return failures
     if "console" in e and m.console.text != e["console"]:
         failures.append(f"console: wanted {e['console']!r}, got {m.console.text!r}")
     if "ring" in e and m.hart.ring != e["ring"]:
@@ -237,13 +214,3 @@ def _compare(case: Case, out: Outcome) -> list[str]:
             if got != value:
                 failures.append(f"{label.format(name)}: wanted {value}, got {got}")
     return failures
-
-
-def main() -> None:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("conformance")
-    for path in write_images(root.resolve()):
-        print(path)
-
-
-if __name__ == "__main__":
-    main()

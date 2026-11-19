@@ -1,35 +1,22 @@
 # The conformance suite
 
-Machine behaviour, stored as data: each case is an assembly program and
-what running it must produce. Any implementation of detrytus runs the
-same cases, so they outlive the Python emulator they were first written
-for (see [`docs/rust-plan.md`](../docs/rust-plan.md)).
+Machine and assembler behaviour, stored as data: each case is an
+assembly program and what assembling and running it must produce. Any
+implementation of detrytus runs the same cases, so they outlive the
+Python tools they were first written for (see
+[`docs/rust-plan.md`](../docs/rust-plan.md)).
 
 ```bash
 uv run pytest tests/test_conformance.py
 ```
 
 ```bash
-cargo test --test conformance
+cargo test -p detrytus-conformance
 ```
 
-The Python runner is [`detrytus/conformance.py`](../detrytus/conformance.py),
-the Rust one [`rust/core/tests/conformance.rs`](../rust/core/tests/conformance.rs).
-
-## Images
-
-There is no Rust assembler yet, so the Rust runner loads each case's
-program from an image in `build/`, assembled by Python. After adding or
-changing a case, regenerate them and commit the result:
-
-```bash
-uv run python -m detrytus.conformance
-```
-
-A Python test fails while any image is missing, stale or left over. An
-image lives at `build/<case file without .toml>/<slug>.dti`, the slug
-being the case name in lower case with each run of other characters
-turned into one `-`; slugs must be unique within a file.
+The Python runner is [`detrytus/conformance.py`](../detrytus/conformance.py);
+the Rust one, [`rust/conformance/tests/conformance.rs`](../rust/conformance/tests/conformance.rs),
+assembles each case with the Rust assembler and runs it on the Rust core.
 
 ## Layout
 
@@ -38,8 +25,8 @@ turned into one `-`; slugs must be unique within a file.
 | `cpu/` | integer and tritwise instructions, branches, memory, atomics |
 | `traps/` | traps, delegation, interrupts, the timer, single step |
 | `paging/` | translation, permission faults, superpages, the TLB |
+| `asm/` | the assembler: layout, local labels, sections, and its errors |
 | `examples/` | the programs in `examples/`, run as shipped |
-| `build/` | the cases' assembled images, generated |
 
 `paging/` also holds shared assembly: `tables.s` (constants and base
 page tables), `boot.s` (firmware that enables paging and drops to a
@@ -70,7 +57,7 @@ expect.registers = { a1 = 7, a2 = -3 }
 
 | Key | Meaning |
 |-----|---------|
-| `name` | required; unique in the file (as a slug too), no `/` |
+| `name` | required; unique in the file, no `/` |
 | `program` | assembly source, inline |
 | `source` | a file to assemble, relative to the case file |
 | `sources` | several files (sources or `.dti` images) loaded together |
@@ -99,8 +86,15 @@ Under `expect`. Exactly one outcome:
 | `exit_code` | power off with this code |
 | `step_limit = true` | still be running after `max_steps` steps |
 | `unhandled_cause` | stop on a trap with this cause, its bank's `tvec` being 0 |
+| `asm_error` | fail to assemble, with exactly this message |
 
-and any of these checks on the state it stops in:
+`asm_error` is the message alone, without the file, line and source line
+an assembler prints around it; `asm_error_line` may give the line it
+must be reported at. A case that expects an assembly error takes no
+other keys under `expect`.
+
+
+and, for a run, any of these checks on the state it stops in:
 
 | Key | Checks |
 |-----|--------|
@@ -118,8 +112,11 @@ Unknown keys are errors, so a misspelt expectation cannot pass silently.
 
 ## Adding a case
 
-Machine behaviour that a program can observe belongs here, not in a
-Python test. Then make sure the case can fail: break the emulator code
-it guards, watch the case go red, and restore it (AGENTS.md, Tests).
-Tests of the Python tools themselves (assembler, debugger, image
-format, spec sync) stay in `tests/`.
+Behaviour a program can observe, and how the assembler lays a program
+out or rejects it, belongs here, not in a Python or Rust test. Then make
+sure the case can fail: break the code it guards, watch the case go
+red, and restore it (AGENTS.md, Tests). What only a tool's interface
+shows (listing text, the debugger, the image format, include files on
+disk, the command line) is tested in `tests/`, and
+`tests/test_cli_parity.py` holds the two command lines to the same
+output.

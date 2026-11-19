@@ -7,8 +7,5 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-# The core has no dependencies. toml is for the conformance test runner.
+# The core has no dependencies.
 [dependencies]
-
-[dev-dependencies]
-toml = "0.8"

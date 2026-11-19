@@ -245,9 +245,10 @@ pub fn cond_taken(cond: i64, s: i64) -> Option<bool> {
 /// A register's number from any of its names: `r-13`..`r13`, `zero`,
 /// `a0`..`a5`, `t0`..`t6`, `s0`..`s8`, `fp`, `gp`, `tp`, `ra`, `sp`.
 pub fn reg_number(name: &str) -> Option<i64> {
-    let indexed = |prefix: &str, count: i64| -> Option<i64> {
+    // Exact spellings only: "r1" but not "r01" or "r+1".
+    let indexed = |prefix: &str, range: std::ops::RangeInclusive<i64>| -> Option<i64> {
         let n: i64 = name.strip_prefix(prefix)?.parse().ok()?;
-        (0..count).contains(&n).then_some(n)
+        (range.contains(&n) && name == format!("{prefix}{n}")).then_some(n)
     };
     match name {
         "zero" => Some(0),
@@ -256,16 +257,91 @@ pub fn reg_number(name: &str) -> Option<i64> {
         "tp" => Some(-11),
         "ra" => Some(-12),
         "sp" => Some(-13),
-        _ => {
-            if let Some(n) = name.strip_prefix('r').and_then(|n| n.parse::<i64>().ok()) {
-                return (-13..=13).contains(&n).then_some(n);
-            }
-            indexed("a", 6)
-                .map(|n| 1 + n)
-                .or_else(|| indexed("t", 7).map(|n| 7 + n))
-                .or_else(|| indexed("s", 9).map(|n| -1 - n))
-        }
+        _ => indexed("r", -13..=13)
+            .or_else(|| indexed("a", 0..=5).map(|n| 1 + n))
+            .or_else(|| indexed("t", 0..=6).map(|n| 7 + n))
+            .or_else(|| indexed("s", 0..=8).map(|n| -1 - n)),
     }
+}
+
+/// A register's ABI name, as the disassembler prints it; None for the
+/// registers that have only their number (r-1 prints as s0).
+pub fn abi_name(r: i64) -> Option<String> {
+    Some(match r {
+        0 => "zero".into(),
+        1..=6 => format!("a{}", r - 1),
+        7..=13 => format!("t{}", r - 7),
+        -9..=-1 => format!("s{}", -1 - r),
+        -10 => "gp".into(),
+        -11 => "tp".into(),
+        -12 => "ra".into(),
+        -13 => "sp".into(),
+        _ => return None,
+    })
+}
+
+/// Branch conditions by name, in the order the assembler lists them.
+pub const CONDS: [(&str, i64); 6] =
+    [("eq", 0), ("ne", 3), ("gt", 1), ("lt", -1), ("ge", 2), ("le", -2)];
+
+pub fn cond_name(cond: i64) -> Option<&'static str> {
+    CONDS.iter().find(|(_, c)| *c == cond).map(|(n, _)| *n)
+}
+
+// --- tritwise truth tables (7.5) ---------------------------------------------
+
+/// A two-input trit function as the 9-trit `tlut` table.
+pub fn make_table(f: impl Fn(i64, i64) -> i64) -> i64 {
+    (0..9).map(|k| f(k / 3 - 1, k % 3 - 1) * crate::trits::pow3(k as u32)).sum()
+}
+
+/// The named tables, in the assembler's order.
+pub fn tables() -> [(&'static str, i64); 7] {
+    [
+        ("tmin", make_table(i64::min)),
+        ("tmax", make_table(i64::max)),
+        ("tmul", make_table(|a, b| a * b)),
+        ("tsum", make_table(|a, b| low(a + b, 1))),
+        ("tcons", make_table(|a, b| if a == b { a } else { 0 })),
+        ("tany", make_table(|a, b| (a + b).signum())),
+        ("tabs", make_table(|a, _| a.abs())),
+    ]
+}
+
+// --- encoding -----------------------------------------------------------------
+
+/// The fields a format has, by name: (name, lowest trit, width).
+pub fn format_fields(format: Format) -> &'static [(&'static str, u32, u32)] {
+    match format {
+        R => &[("rd", 5, 3), ("rs1", 8, 3), ("rs2", 11, 3), ("rs3", 14, 3), ("fn", 17, 10)],
+        I => &[("rd", 5, 3), ("rs1", 8, 3), ("imm", 11, 16)],
+        S => &[("rs2", 5, 3), ("rs1", 8, 3), ("imm", 11, 16)],
+        FB => &[("cond", 5, 2), ("hint", 7, 1), ("rs1", 8, 3), ("rs2", 11, 3), ("off", 14, 13)],
+        T => &[("hint", 5, 1), ("pad", 6, 2), ("rs1", 8, 3), ("offn", 11, 8), ("offp", 19, 8)],
+        U | J => &[("rd", 5, 3), ("imm", 8, 19)],
+    }
+}
+
+/// Build an instruction word from named field values, in order; the
+/// first field that does not fit is the error.
+pub fn encode(op: &Op, fields: &[(&str, i64)]) -> Result<i64, String> {
+    let layout = format_fields(op.format);
+    let mut word = op.opcode;
+    for &(name, value) in fields {
+        let Some(&(_, lo, width)) = layout.iter().find(|(n, _, _)| *n == name) else {
+            return Err(format!("{}: format {:?} has no field {name}", op.name, op.format));
+        };
+        let max = crate::trits::half(width);
+        if value.abs() > max {
+            return Err(format!("{name} = {value} does not fit {width} trits (±{max})"));
+        }
+        word += value * crate::trits::pow3(lo);
+    }
+    Ok(word)
+}
+
+pub fn by_name(name: &str) -> Option<&'static Op> {
+    OPS.iter().find(|op| op.name == name)
 }
 
 // --- trap causes (8.5) -------------------------------------------------------
@@ -332,6 +408,59 @@ pub const FCSR: i64 = csr_number(-1, 1, 0);
 pub fn stored_csrs() -> impl Iterator<Item = i64> {
     let debug = (0..9).flat_map(|i| [csr_number(0, 1, 20 + i), csr_number(0, 1, 30 + i)]);
     [EDELEG, IDELEG, PTBR, FCSR].into_iter().chain(debug)
+}
+
+/// A CSR's name from its number.
+pub fn csr_name(number: i64) -> Option<String> {
+    let fixed = [
+        ("edeleg", EDELEG),
+        ("ideleg", IDELEG),
+        ("hartid", HARTID),
+        ("ptbr", PTBR),
+        ("entropy", ENTROPY),
+        ("cycle", CYCLE),
+        ("time", TIME),
+        ("instret", INSTRET),
+        ("fcsr", FCSR),
+    ];
+    if let Some((name, _)) = fixed.iter().find(|(_, n)| *n == number) {
+        return Some((*name).into());
+    }
+    for (prefix, ring) in [('m', 1), ('s', 0)] {
+        let i = number - csr_number(ring, 1, 0);
+        if (0..BANK.len() as i64).contains(&i) {
+            return Some(format!("{prefix}{}", BANK[i as usize]));
+        }
+    }
+    for (prefix, base) in [("tdaddr", 20), ("tdctl", 30)] {
+        let i = number - csr_number(0, 1, base);
+        if (0..9).contains(&i) {
+            return Some(format!("{prefix}{i}"));
+        }
+    }
+    None
+}
+
+/// Every CSR, by name, in the assembler's order.
+pub fn csrs() -> Vec<(String, i64)> {
+    let mut out: Vec<(String, i64)> = Vec::new();
+    for (prefix, ring) in [('m', 1), ('s', 0)] {
+        for (i, b) in BANK.iter().enumerate() {
+            out.push((format!("{prefix}{b}"), csr_number(ring, 1, i as i64)));
+        }
+    }
+    for name in
+        ["edeleg", "ideleg", "hartid", "ptbr", "entropy", "cycle", "time", "instret", "fcsr"]
+    {
+        out.push((name.into(), csr_by_name(name).unwrap()));
+    }
+    for i in 0..9 {
+        out.push((format!("tdaddr{i}"), csr_number(0, 1, 20 + i)));
+    }
+    for i in 0..9 {
+        out.push((format!("tdctl{i}"), csr_number(0, 1, 30 + i)));
+    }
+    out
 }
 
 /// A CSR's number from its name.
@@ -536,6 +665,28 @@ mod tests {
     }
 
     #[test]
+    fn tables_match_the_spec_values() {
+        let t: Vec<i64> = tables().iter().map(|(_, v)| *v).collect();
+        assert_eq!((t[0], t[1]), (TMIN, TMAX));
+    }
+
+    #[test]
+    fn encode_checks_field_widths() {
+        let add = by_name("add").unwrap();
+        assert_eq!(encode(add, &[("rd", 1), ("rs1", 2), ("rs2", -3)]).unwrap(), r(1, 1, 2, -3));
+        assert_eq!(encode(add, &[("rd", 14)]).unwrap_err(), "rd = 14 does not fit 3 trits (±13)");
+        assert!(encode(add, &[("imm", 1)]).unwrap_err().contains("has no field imm"));
+    }
+
+    #[test]
+    fn csr_names_round_trip() {
+        for (name, number) in csrs() {
+            assert_eq!(csr_name(number), Some(name.clone()));
+            assert_eq!(csr_by_name(&name), Some(number));
+        }
+    }
+
+    #[test]
     fn csr_numbers_follow_the_layout() {
         assert_eq!(csr_by_name("mtvec"), Some(6561 + 2187 + 1));
         assert_eq!(csr_by_name("stimecmp"), Some(2187 + 8));
@@ -556,5 +707,9 @@ mod tests {
         assert_eq!(reg_number("sp"), Some(-13));
         assert_eq!(reg_number("a6"), None);
         assert_eq!(reg_number("r14"), None);
+        assert_eq!(reg_number("r01"), None);
+        assert_eq!(reg_number("r+1"), None);
+        assert_eq!(abi_name(-1).as_deref(), Some("s0"));
+        assert_eq!(abi_name(13).as_deref(), Some("t6"));
     }
 }

@@ -77,10 +77,11 @@ The machine-behaviour tests that were Python (`test_cpu.py`,
 `test_mmu.py` and the example runs) moved into it. The Rust core gets a
 cargo test runner over the same files.
 
-The assembler stays in Python until phase 5, so for Rust the suite runs
-on `.dti` images assembled by Python and committed under
-`conformance/build/`, regenerated with `python -m detrytus.conformance`
-and checked by a Python test to be up to date.
+Until the Rust assembler existed, the Rust runner loaded `.dti` images
+assembled by Python and committed under `conformance/build/`. Since
+phase 5 it assembles the cases itself (`rust/conformance`), and the
+images are gone. The suite now covers the assembler too: layout, local
+labels, sections and every error message (`conformance/asm/`).
 
 ## Phases
 
@@ -112,10 +113,15 @@ green.
    against 16.7 s on Python). A differential runner steps the
    conformance programs and 300 random programs on both cores and
    compares their whole state after every step; it runs in CI.
-5. **Rust command line.** `detrytus-cli run` for `.dti` images, then the
-   assembler ported to Rust with the assembler tests moved into the
-   conformance suite where they can be, then the debugger. Each tool
-   switches over when it passes the same cases as its Python version.
+5. **Rust command line.** `detrytus-cli run` for `.dti` images (done:
+   `rust/cli`, binary `detrytus`), then the assembler ported to Rust
+   with the assembler tests moved into the conformance suite where they
+   can be (done: `rust/asm`, and `detrytus asm`; `run` takes sources),
+   then the debugger. Each tool switches over when it passes the same
+   cases as its Python version: `tests/test_cli_parity.py` requires the
+   same stdout, stderr, exit status and image bytes from both commands
+   on every conformance program, the examples and a corpus of broken
+   source.
 6. **Switchover.** Rust becomes the default; the Python core, bindings
    and tools are removed once nothing depends on them. trylobite moves
    to the Rust command line.

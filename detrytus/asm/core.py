@@ -17,7 +17,7 @@ from detrytus.asm.operands import OperandError, Operands, encode_instruction
 from detrytus.asm.source import Statement, parse
 from detrytus.disasm import disassemble
 from detrytus.expr import ExprError, evaluate
-from detrytus.trits import TRYTE_MAX, TRYTE_TRITS, low, split_high
+from detrytus.trits import TRYTE_MAX, TRYTE_TRITS, WORD_TRITS, low, pow3, split_high
 
 TRYTE_DIRECTIVES = (".tryte", ".string", ".ascii", ".zero")
 STRING_ESCAPES = {"n": "\n", "t": "\t", "0": "\0"}
@@ -199,8 +199,17 @@ class Assembler:
         return run - 1, load - run
 
     def _lay_align(self, s: Statement) -> None:
-        unit = 3 ** self._constant(self._expect(s, 1)[0])
-        self._loc = _next_centre(self._loc, unit) - 1
+        power = self._constant(self._expect(s, 1)[0])
+        if not 0 <= power <= WORD_TRITS:
+            # 3**27 already spans every address; a negative power would
+            # make the address a fraction.
+            raise AsmError(
+                f".align takes a power of 3 from 0 to {WORD_TRITS}, not {power}",
+                s.line,
+                s.source,
+                s.file,
+            )
+        self._loc = _next_centre(self._loc, pow3(power)) - 1
 
     def _lay_trytes(self, s: Statement) -> None:
         s.kind = "tryte"

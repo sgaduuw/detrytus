@@ -1,0 +1,12 @@
+[package]
+name = "detrytus-asm"
+version = "0.1.0"
+description = "The detrytus assembler, in Rust: the same images and errors as the Python one"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+detrytus-core = { version = "0.1.0", path = "../core" }

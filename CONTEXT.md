@@ -451,3 +451,53 @@ trylobite's 21 tests pass on the Rust core through the bindings, in
 `tests/helpers.py` is gone: its users were the CPU and MMU tests that
 moved into the conformance suite.
 
+### 2026-11-19 · The Rust command starts with `run`, held to the Python one's output
+
+`rust/cli` builds a `detrytus` binary whose `run` takes `.dti` images
+(sources need the assembler, still Python, and get a message saying to
+make an image with `detrytus asm -o`). It copies the Python command's
+behaviour exactly: console output streamed as the program runs, the
+same `--ram-pages`, `--max-steps` and `--stats`, the same messages for
+traps, step limits and overlapping images, and the same exit statuses
+(the program's code, or 65, 66, 69, 70, 124, 2). Rather than a separate
+set of Rust tests, `tests/test_cli_parity.py` runs both commands on
+every conformance image and compares stdout, stderr and status, so the
+two cannot drift apart unnoticed; it caught a one-character change to a
+message when tried. The one allowed difference is the wording of an
+operating-system error, such as a missing file, which each language
+phrases its own way.
+
+It runs trylobite's demo in about 0.06 s, against about 1.15 s for the
+Python command.
+
+### 2026-11-19 · The Rust assembler copies the Python one exactly
+
+`rust/asm` ports the assembler, and the Rust `detrytus` gains `asm`;
+`run` takes sources. The target was not "assembles the same programs"
+but the same output for the same input: identical image bytes, listing
+text, error messages and exit statuses, checked by
+`tests/test_cli_parity.py` on every conformance program, the examples
+and a corpus of 83 broken snippets that covers every error the
+assembler raises. That meant reproducing some Python details on purpose:
+`json.dumps` for image metadata, `repr()` quoting in messages,
+`str.splitlines()` line endings, the order fields are checked in when
+encoding, and `Path.resolve()` for includes.
+
+Two things the comparison turned up. The Rust writer first left the
+last packed byte unpadded, where Python pads with zero trits (each still
+adds 1); the very last byte of every image differed. And `.align` with a
+negative power silently made the Python assembler's address a fraction;
+both assemblers now refuse powers outside 0 to 27 (3²⁷ already spans
+every address).
+
+With a Rust assembler the Rust conformance runner assembles its own
+cases (`rust/conformance`), so the Python-built images in
+`conformance/build/` and their regeneration step are gone. The
+assembler's own tests moved into the suite where a program can show
+them: `conformance/asm/` holds its error messages (a new `asm_error`
+outcome, with `asm_error_line`) and its layout rules, run and observed.
+What only a tool shows, the listing text and include files on disk,
+stays in Python tests and the parity test. Deliberate bugs in the Rust
+assembler were all caught by the suite or the parity test once three
+cases and a snippet were added, except one that cannot be observed.
+

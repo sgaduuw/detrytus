@@ -17,5 +17,6 @@ class AsmError(Exception):
             where = f"{file}:{line}: " if file else f"line {line}: "
         context = f"\n    {source.strip()}" if source else ""
         super().__init__(f"{where}{message}{context}")
+        self.message = message  # without the location and source line
         self.line = line
         self.file = file

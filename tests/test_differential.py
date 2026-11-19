@@ -125,7 +125,8 @@ def compare(image: Image, steps: int, ram_pages: int = 729, text: str = "") -> i
 
 # --- the conformance programs ------------------------------------------------
 
-CASES = conformance.load_all(ROOT)
+# Cases that expect an assembly error have nothing to run.
+CASES = [c for c in conformance.load_all(ROOT) if "asm_error" not in c.expect]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.id for c in CASES])

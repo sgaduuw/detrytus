@@ -139,8 +139,14 @@ The Rust core, `rust/core/src/`, mirrors the machine half of that:
 `trits.rs`, `isa.rs`, `alu.rs`, `bus.rs` (memory and the built-in
 devices), `image.rs` (reading `.dti`), `hart.rs` (the fetch loop and
 instructions), `privileged.rs` (traps, interrupts, CSRs), `mmu.rs`,
-`entropy.rs` and `machine.rs`. `rust/py/` holds its Python bindings. `cargo run --release --example run --
---ram-pages 40 demo.dti` runs an image on it.
+`entropy.rs` and `machine.rs`. `rust/py/` holds its Python bindings,
+`rust/asm/` the assembler, and `rust/cli/` a Rust `detrytus` command
+with `asm` and `run`, giving the same output, images and exit statuses
+as the Python one (the debugger is still Python only):
+
+```bash
+cargo run --release -p detrytus-cli -- run examples/hello.s
+```
 
 ## The shape of it
 

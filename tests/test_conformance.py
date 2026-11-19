@@ -27,26 +27,6 @@ def test_case_on_the_rust_core(case):
     assert not failures, "\n".join(failures)
 
 
-def test_built_images_are_current():
-    # Other cores run the cases from these images; regenerate them with
-    # `uv run python -m detrytus.conformance` after changing a case.
-    wanted = conformance.build_images(ROOT)
-    on_disk = set((ROOT / conformance.BUILD_DIR).rglob("*.dti"))
-    assert on_disk == set(wanted), "conformance/build/ has missing or extra images"
-    stale = [p for p, data in wanted.items() if p.read_bytes() != data]
-    assert not stale, f"stale images: {stale}"
-
-
-def test_slugs_make_file_names():
-    assert (
-        conformance.slug("a load needs no dirty trit") == "a-load-needs-no-dirty-trit"
-    )
-    assert (
-        conformance.slug("ring +1 is never translated") == "ring-1-is-never-translated"
-    )
-    assert conformance.slug("  Odd -- spacing!  ") == "odd-spacing"
-
-
 # --- the runner itself ---------------------------------------------------------
 
 HALT_WITH_4 = """
@@ -156,7 +136,7 @@ def test_assembly_errors_name_the_case(tmp_path):
         '[[case]]\nname = "broken"\nprogram = "bogus a0"\nexpect.exit_code = 0',
     )
     with pytest.raises(AsmError, match=r"cases\.toml \[broken\]:1"):
-        conformance.run(case)
+        conformance.build(case)
 
 
 def test_console_input_reaches_the_program(tmp_path):
@@ -176,3 +156,52 @@ expect.exit_code = 90
 """,
     )
     assert conformance.run(case).failures == []
+
+
+def test_an_expected_assembly_error_passes_with_its_message_and_line(tmp_path):
+    (case,) = _cases(
+        tmp_path,
+        """
+[[case]]
+name = "bad"
+program = "nop\\nfrob a0"
+expect.asm_error = "unknown instruction 'frob'"
+expect.asm_error_line = 2
+""",
+    )
+    assert conformance.run(case).failures == []
+
+
+@pytest.mark.parametrize(
+    ("expect", "message"),
+    [
+        ('expect.asm_error = "something else"', "outcome: wanted asm_error"),
+        (
+            "expect.asm_error = \"unknown instruction 'frob'\"\n"
+            "expect.asm_error_line = 1",
+            "asm_error_line: wanted 1, got 2",
+        ),
+    ],
+)
+def test_an_assembly_error_must_match(tmp_path, expect, message):
+    text = '[[case]]\nname = "bad"\nprogram = "nop\\nfrob a0"\n' + expect
+    (case,) = _cases(tmp_path, text)
+    failures = conformance.run(case).failures
+    assert len(failures) == 1
+    assert message in failures[0]
+
+
+def test_a_program_that_fails_to_assemble_fails_a_run_case(tmp_path):
+    (case,) = _cases(
+        tmp_path, '[[case]]\nname = "x"\nprogram = "frob"\nexpect.exit_code = 0'
+    )
+    assert "got asm_error" in conformance.run(case).failures[0]
+
+
+def test_an_assembly_error_case_takes_no_machine_checks(tmp_path):
+    text = (
+        '[[case]]\nname = "x"\nprogram = "frob"\n'
+        'expect.asm_error = "x"\nexpect.ring = 1'
+    )
+    with pytest.raises(conformance.CaseError, match="unknown keys"):
+        _cases(tmp_path, text)

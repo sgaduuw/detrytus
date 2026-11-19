@@ -1,0 +1,17 @@
+[package]
+name = "detrytus-conformance"
+version = "0.1.0"
+description = "Runs the conformance suite on the Rust assembler and core"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Tests only: the runner is tests/conformance.rs.
+[dependencies]
+
+[dev-dependencies]
+detrytus-asm = { version = "0.1.0", path = "../asm" }
+detrytus-core = { version = "0.1.0", path = "../core" }
+toml = "0.8"

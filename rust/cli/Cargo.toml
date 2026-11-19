@@ -1,0 +1,18 @@
+[package]
+name = "detrytus-cli"
+version = "0.1.0"
+description = "The detrytus command line, in Rust: grows until it replaces the Python one"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "detrytus"
+path = "src/main.rs"
+
+[dependencies]
+detrytus-asm = { version = "0.1.0", path = "../asm" }
+detrytus-core = { version = "0.1.0", path = "../core" }
+
