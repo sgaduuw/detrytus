@@ -40,6 +40,10 @@ pub struct Image {
     pub listing: Vec<Listing>,
     /// Addresses, not .equ values.
     pub labels: BTreeMap<String, Value>,
+    /// The labels in the order they were bound, as the Python image's
+    /// dict keeps them; a debugger naming an address takes the first of
+    /// several labels there.
+    pub label_order: Vec<String>,
 }
 
 impl Image {
@@ -186,6 +190,7 @@ impl Assembler {
             for label in &s.labels {
                 self.define(label, addr, s)?;
                 self.image.labels.insert(label.clone(), addr);
+                self.image.label_order.push(label.clone());
             }
         }
         Ok(())

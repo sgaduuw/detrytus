@@ -100,6 +100,12 @@ impl Bus {
         self.pages.get(&page).map_or(0, |p| p[(addr - page * PAGE + HALF_PAGE) as usize] as i64)
     }
 
+    /// Memory for a debugger: None for devices, whose reads can have side
+    /// effects, and for addresses with nothing behind them.
+    pub fn peek(&mut self, addr: i64, width: u32) -> Option<i64> {
+        self.read(addr, width, Access::Walk).ok()
+    }
+
     /// Every non-zero tryte of memory, in address order.
     pub fn trytes(&self) -> Vec<(i64, i64)> {
         let mut out: Vec<(i64, i64)> = self

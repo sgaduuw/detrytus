@@ -17,7 +17,7 @@ from detrytus.machine import Machine
 from detrytus.trap import UnhandledTrap
 
 DEFAULT_LIMIT = 10_000_000
-_REGISTER = re.compile(r"\$([a-z][a-z0-9]*|r-?\d+)")
+_REGISTER = re.compile(r"\$(r-?\d+|[a-z][a-z0-9]*)")
 
 
 @dataclass

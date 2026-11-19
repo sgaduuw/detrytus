@@ -151,6 +151,15 @@ def test_expressions_read_registers_and_symbols(dbg):
         dbg.evaluate("$nope")
 
 
+def test_numbered_registers_read_with_either_sign(dbg):
+    # $r-3 is s2; the pattern once took $r for a name and stopped there.
+    dbg.add_breakpoint("double")
+    dbg.cont()
+    assert dbg.evaluate("$r1") == dbg.hart.reg("a0") == 5
+    assert dbg.evaluate("$r-1") == dbg.evaluate("$s0") == 19683
+    assert dbg.evaluate("$r-1 + 1") == 19684
+
+
 def test_where_names_labels_not_constants(dbg):
     # POWER_OFF and DATA are .equ constants and must never label an address.
     assert (
@@ -226,3 +235,10 @@ def test_cli_batch_mode(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "breakpoint 1 at" in out
     assert "stopped: breakpoint 1" in out
+
+
+def test_an_unknown_csr_number_is_an_error_not_a_crash(dbg):
+    out = io.StringIO()
+    shell = DebugShell(dbg, stdout=out)
+    shell.onecmd("csr 12345")
+    assert out.getvalue() == "error: no CSR 12345\n"

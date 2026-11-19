@@ -16,6 +16,13 @@ uv run detrytus debug examples/bsearch.s -b bsearch -x commands.txt --batch
 debugger commands from a file first, and `--batch` exits once they are
 done, which makes sessions scriptable.
 
+The Rust `detrytus` command (`rust/cli`) has the same debugger, with the
+same commands and output, line for line:
+
+```bash
+cargo run --release -p detrytus-cli -- debug examples/bsearch.s
+```
+
 ## Commands
 
 | Command | Alias | Does |

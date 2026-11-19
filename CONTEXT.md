@@ -501,3 +501,28 @@ stays in Python tests and the parity test. Deliberate bugs in the Rust
 assembler were all caught by the suite or the parity test once three
 cases and a snippet were added, except one that cannot be observed.
 
+### 2026-11-19 · The Rust debugger: events from the core, output copied from Python
+
+`detrytus debug` in Rust is a port of the Python engine and shell. The
+plan put debugging in the core; what went in is small: when
+`Hart::events` is on, each step records the instructions it executes,
+the data accesses it completes and the traps it enters, and the
+debugger reads that list to stop at watchpoints and caught traps and to
+trace. The core also gained `probe` and `Bus::peek`, which read memory
+without filling the TLB or touching devices. Breakpoints need nothing
+from the core: the debugger checks the pc between steps.
+
+As with the assembler, the target was identical output, so the shell
+copies Python's `cmd.Cmd` line parsing and its `help` text (cleaned
+docstrings and the column layout). `tests/test_cli_parity.py` runs ten
+scripted sessions on five programs (one with two labels at an address,
+one that crashes, one loaded from an image) and three interactive ones
+over stdin, and compares every line. Ten deliberate bugs in the Rust
+debugger were all caught once three of those were added.
+
+Porting found two Python bugs, both fixed: `$r-3` was read as `$r`,
+because the register pattern tried names before numbered registers, so
+the documented form never worked; and `csr` with an unknown number let
+the CPU's internal trap escape and crash the debugger, where it now says
+`no CSR N`.
+

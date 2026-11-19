@@ -154,6 +154,12 @@ impl Mmu {
     }
 }
 
+/// Translate without checking permissions or touching the TLB: for
+/// debuggers. None where nothing is mapped.
+pub fn probe(bus: &mut Bus, va: i64, ptbr: Ptbr) -> Option<i64> {
+    walk(bus, va, Access::Load, ptbr).ok().map(|leaf| leaf.page_centre + low(va, PAGE_TRITS))
+}
+
 fn walk(bus: &mut Bus, va: i64, access: Access, ptbr: Ptbr) -> Result<Leaf, Fault> {
     let fault = (access.fault_cause(), va);
     let mut table = ptbr.root * pow3(PAGE_TRITS);

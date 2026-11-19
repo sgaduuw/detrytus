@@ -28,6 +28,7 @@ impl Hart {
         tpc: i64,
         target: Option<i64>,
     ) -> Result<(), Stop> {
+        self.record(crate::hart::Event::Trap { cause, tval, tpc });
         let target = target.unwrap_or_else(|| {
             let delegated = cause > 0 && field(self.csrs[&isa::EDELEG], cause as u32, 1) == 1;
             if delegated { 0 } else { 1 }
@@ -143,6 +144,15 @@ impl Hart {
     /// Reading `entropy` advances its stream, as a program's read would.
     pub fn csr(&mut self, name: &str) -> Option<i64> {
         let number = isa::csr_by_name(name)?;
+        let ring = std::mem::replace(&mut self.ring, 1);
+        let value = self.read_csr(number).ok();
+        self.ring = ring;
+        value
+    }
+
+    /// A CSR by number, read with ring +1's privilege; None if there is
+    /// no such CSR.
+    pub fn csr_by_number(&mut self, number: i64) -> Option<i64> {
         let ring = std::mem::replace(&mut self.ring, 1);
         let value = self.read_csr(number).ok();
         self.ring = ring;

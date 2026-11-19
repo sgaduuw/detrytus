@@ -4,23 +4,25 @@
 //! does: the same output, messages and exit statuses for the same files.
 //! The debugger is still Python.
 
-use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::process::ExitCode;
 
-use detrytus_asm::{AsmError, Image, assemble};
-use detrytus_core::image::{self, Segment};
 use detrytus_core::trits::low;
 use detrytus_core::{Machine, Outcome};
 
+mod debug;
+mod program;
+
+use program::{Loaded, load, load_one, strerror};
+
 const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] FILE...";
-const MAGIC: &[u8] = b"DTI\x01";
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
 const USAGE_ERROR: u8 = 2;
-const BAD_INPUT: u8 = 65;
-const NO_INPUT: u8 = 66;
+pub(crate) const BAD_INPUT: u8 = 65;
+pub(crate) const NO_INPUT: u8 = 66;
 const NOT_IMPLEMENTED: u8 = 69;
 const UNHANDLED_TRAP: u8 = 70;
 const STEP_LIMIT: u8 = 124;
@@ -36,11 +38,11 @@ struct RunArgs {
 }
 
 /// A failure that ends the command: its message and exit status.
-struct Fail(String, u8);
+pub(crate) struct Fail(String, u8);
 
 impl Fail {
     /// A problem with the command or its files.
-    fn new(message: String, status: u8) -> Self {
+    pub(crate) fn new(message: String, status: u8) -> Self {
         Fail(format!("detrytus: {message}"), status)
     }
 
@@ -79,83 +81,6 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     Ok(run)
 }
 
-/// A file as the commands take it: assembly source, an image, or - for
-/// source on stdin.
-enum Loaded {
-    Source(Image),
-    Image(Vec<u8>, Vec<Segment>),
-}
-
-impl Loaded {
-    fn segments(&self) -> Vec<Segment> {
-        match self {
-            Loaded::Image(_, segments) => segments
-                .iter()
-                .map(|s| Segment { start: s.start, trytes: s.trytes.clone() })
-                .collect(),
-            Loaded::Source(image) => {
-                let mut runs: Vec<Segment> = Vec::new();
-                for (&addr, &tryte) in &image.trytes {
-                    match runs.last_mut() {
-                        Some(run) if run.start + run.trytes.len() as i64 == addr => {
-                            run.trytes.push(tryte)
-                        }
-                        _ => runs.push(Segment { start: addr, trytes: vec![tryte] }),
-                    }
-                }
-                runs
-            }
-        }
-    }
-}
-
-fn asm_error(e: AsmError) -> Fail {
-    Fail::new(e.to_string(), BAD_INPUT)
-}
-
-fn load_one(path: &str) -> Result<Loaded, Fail> {
-    if path == "-" {
-        let mut text = String::new();
-        std::io::stdin()
-            .read_to_string(&mut text)
-            .map_err(|e| Fail::new(format!("<stdin>: {e}"), NO_INPUT))?;
-        return assemble(&text, Some("<stdin>")).map(Loaded::Source).map_err(asm_error);
-    }
-    let data = std::fs::read(path)
-        .map_err(|e| Fail::new(format!("{path}: {}", strerror(&e)), NO_INPUT))?;
-    if data.starts_with(MAGIC) {
-        let segments = image::parse(&data).map_err(|e| Fail::new(e, BAD_INPUT))?;
-        return Ok(Loaded::Image(data, segments));
-    }
-    let text = String::from_utf8(data)
-        .map_err(|_| Fail::new(format!("{path}: not UTF-8 text"), BAD_INPUT))?;
-    assemble(&text, Some(path)).map(Loaded::Source).map_err(asm_error)
-}
-
-fn strerror(e: &std::io::Error) -> String {
-    let text = e.to_string();
-    text.rfind(" (os error ").map_or(text.clone(), |i| text[..i].to_string())
-}
-
-/// Every file's trytes; images that overlap are refused, as the Python
-/// command does.
-fn load(files: &[String]) -> Result<Vec<Segment>, Fail> {
-    let mut segments = Vec::new();
-    let mut used = HashSet::new();
-    for file in files {
-        let parsed = load_one(file)?.segments();
-        for s in &parsed {
-            if let Some(addr) =
-                (s.start..s.start + s.trytes.len() as i64).find(|a| !used.insert(*a))
-            {
-                return Err(Fail::new(format!("images overlap at address {addr}"), BAD_INPUT));
-            }
-        }
-        segments.extend(parsed);
-    }
-    Ok(segments)
-}
-
 fn format_trits(word: i64) -> String {
     let mut x = word;
     let mut trits = Vec::with_capacity(27);
@@ -192,7 +117,7 @@ fn cmd_asm(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     if let Some(out) = &output {
         let bytes = match &loaded {
             Loaded::Source(image) => image.to_bytes(),
-            Loaded::Image(data, _) => data.clone(),
+            Loaded::Image(data) => data.clone(),
         };
         std::fs::write(out, bytes)
             .map_err(|e| Fail::new(format!("{out}: {}", strerror(&e)), NO_INPUT))?;
@@ -219,7 +144,9 @@ fn sign(n: i64) -> String {
 
 fn run(args: RunArgs) -> Result<u8, Fail> {
     let mut machine = Machine::new(args.ram_pages, seed());
-    machine.load(&load(&args.files)?);
+    for (addr, tryte) in load(&args.files)?.trytes {
+        machine.bus.poke(addr, tryte);
+    }
     let mut stdout = std::io::stdout();
     let (mut done, mut printed) = (0u64, 0usize);
     loop {
@@ -265,11 +192,58 @@ fn seed() -> u32 {
     h.finish() as u32
 }
 
+fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
+    let (mut files, mut ram_pages, mut breaks, mut commands, mut batch) =
+        (Vec::new(), 729, Vec::new(), None, false);
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--ram-pages" => ram_pages = number(&arg, args.next())?,
+            "-b" | "--break" => {
+                breaks.push(args.next().ok_or_else(|| usage("-b needs an address"))?)
+            }
+            "-x" | "--commands" => {
+                commands = Some(args.next().ok_or_else(|| usage("-x needs a file"))?)
+            }
+            "--batch" => batch = true,
+            flag if flag.starts_with('-') && flag != "-" => {
+                return Err(usage(&format!("unknown option {flag}")));
+            }
+            _ => files.push(arg),
+        }
+    }
+    if files.is_empty() {
+        return Err(usage("debug needs at least one file"));
+    }
+    let program = load(&files)?;
+    let mut shell = debug::shell::Shell { dbg: debug::engine::Debugger::new(program, ram_pages) };
+    for expr in &breaks {
+        shell.onecmd(&format!("break {expr}"));
+    }
+    if let Some(path) = commands {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| Fail::new(format!("{path}: {}", strerror(&e)), NO_INPUT))?;
+        for line in text.split_inclusive('\n') {
+            if shell.onecmd(&debug::shell::Shell::precmd(line.trim_end_matches('\n'))) {
+                return Ok(0);
+            }
+        }
+    }
+    if batch {
+        return Ok(0);
+    }
+    println!("{}", debug::shell::INTRO);
+    shell.show_current();
+    shell.cmdloop();
+    Ok(0)
+}
+
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let result = match args.next().as_deref() {
         Some("asm") => cmd_asm(args),
         Some("run") => parse_run(args).and_then(run),
+        Some("debug") => cmd_debug(args),
         Some("--version") => {
             println!("detrytus {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
