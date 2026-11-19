@@ -23,8 +23,9 @@ specified but not implemented yet. The implementation is moving to
 Rust, in steps laid out in [`docs/rust-plan.md`](docs/rust-plan.md):
 the Rust core in [`rust/core/`](rust/core/) now implements everything
 the Python one does and passes the whole conformance suite, about 16
-times faster on trylobite. It has no command line yet; the Python tools
-remain the way to use detrytus, and the Python core the reference.
+times faster on trylobite. The Python tools can run on it through the
+optional `detrytus-rs` package (below); the Python core stays the
+reference.
 
 ## Usage
 
@@ -45,6 +46,22 @@ uv run detrytus asm examples/bsearch.s
 ```bash
 uv run detrytus debug examples/bsearch.s
 ```
+
+To run on the Rust core, build the optional package (this needs a Rust
+toolchain, 1.88 or later) and pick the backend:
+
+```bash
+uv pip install ./rust/py
+```
+
+```bash
+uv run detrytus run examples/hello.s --backend rust
+```
+
+`DETRYTUS_BACKEND=rust` makes it the default for `run` and for code
+that builds machines with `detrytus.machine.create`. The debugger and
+`--trace` need the Python core. `uv sync` removes the package again, so
+reinstall it after syncing.
 
 `run` assembles a program, loads it at address 0 and runs it until it
 writes to the power-off device. It takes several files, sources or
@@ -115,13 +132,14 @@ cargo fmt --check
 | `disasm.py` | the disassembler |
 | `debug/` | the debugger: `engine` runs and inspects, `shell` is the front end |
 | `conformance.py` | the conformance suite's runner |
+| `rust.py` | the optional Rust core behind the Python core's interface |
 | `cli.py` | the `detrytus` command |
 
 The Rust core, `rust/core/src/`, mirrors the machine half of that:
 `trits.rs`, `isa.rs`, `alu.rs`, `bus.rs` (memory and the built-in
 devices), `image.rs` (reading `.dti`), `hart.rs` (the fetch loop and
 instructions), `privileged.rs` (traps, interrupts, CSRs), `mmu.rs`,
-`entropy.rs` and `machine.rs`. `cargo run --release --example run --
+`entropy.rs` and `machine.rs`. `rust/py/` holds its Python bindings. `cargo run --release --example run --
 --ram-pages 40 demo.dti` runs an image on it.
 
 ## The shape of it

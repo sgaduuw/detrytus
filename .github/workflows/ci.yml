@@ -33,3 +33,18 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+
+  bindings:
+    runs-on: ubuntu-latest
+    env:
+      DETRYTUS_REQUIRE_RUST: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal
+      - run: uv sync
+      - name: Build the Rust backend
+        run: uv pip install ./rust/py
+      - name: Both cores, case by case and step by step
+        run: uv run pytest tests/test_conformance.py tests/test_differential.py

@@ -38,5 +38,11 @@ max-complexity = 10
 strict = true
 files = ["detrytus"]
 
+# The optional Rust backend (rust/py) is a compiled module without type
+# stubs; detrytus/rust.py wraps it and types its own interface.
+[[tool.mypy.overrides]]
+module = ["detrytus_rs"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

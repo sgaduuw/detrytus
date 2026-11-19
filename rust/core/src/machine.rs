@@ -39,15 +39,26 @@ impl Machine {
     /// Run until the program powers off, stops, or reaches `max_steps`.
     pub fn run(&mut self, max_steps: u64) -> Outcome {
         for steps in 0..max_steps {
-            match self.hart.step(&mut self.bus) {
-                Ok(()) => {}
-                Err(Stop::Halt(code)) => return Outcome::Exit { code, steps: steps + 1 },
-                Err(Stop::Unhandled { cause, tval, pc, ring }) => {
-                    return Outcome::Unhandled { cause, tval, pc, ring };
-                }
-                Err(Stop::Unsupported(what)) => return Outcome::Unsupported(what),
+            if let Err(stop) = self.hart.step(&mut self.bus) {
+                return Self::outcome(stop, steps + 1);
             }
         }
         Outcome::StepLimit
+    }
+
+    /// One step: None while the machine keeps running. A power-off
+    /// counts this one step.
+    pub fn step(&mut self) -> Option<Outcome> {
+        self.hart.step(&mut self.bus).err().map(|stop| Self::outcome(stop, 1))
+    }
+
+    fn outcome(stop: Stop, steps: u64) -> Outcome {
+        match stop {
+            Stop::Halt(code) => Outcome::Exit { code, steps },
+            Stop::Unhandled { cause, tval, pc, ring } => {
+                Outcome::Unhandled { cause, tval, pc, ring }
+            }
+            Stop::Unsupported(what) => Outcome::Unsupported(what),
+        }
     }
 }

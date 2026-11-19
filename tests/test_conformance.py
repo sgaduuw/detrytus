@@ -6,6 +6,7 @@ import pytest
 
 from detrytus import conformance
 from detrytus.asm import AsmError
+from tests.backends import needs_rust
 
 ROOT = Path(__file__).parent.parent / "conformance"
 CASES = conformance.load_all(ROOT)
@@ -14,6 +15,15 @@ CASES = conformance.load_all(ROOT)
 @pytest.mark.parametrize("case", CASES, ids=[c.id for c in CASES])
 def test_case(case):
     failures = conformance.run(case).failures
+    assert not failures, "\n".join(failures)
+
+
+@needs_rust
+@pytest.mark.parametrize("case", CASES, ids=[c.id for c in CASES])
+def test_case_on_the_rust_core(case):
+    # The Rust core through its Python bindings: cargo test runs the
+    # suite on the core itself, this checks the bindings carry it.
+    failures = conformance.run(case, backend="rust").failures
     assert not failures, "\n".join(failures)
 
 

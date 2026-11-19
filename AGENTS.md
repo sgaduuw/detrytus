@@ -46,7 +46,9 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-CI runs all seven checks on every pull request. Run them yourself before
+CI runs all seven checks on every pull request, and a third job builds
+the optional Rust backend (`uv pip install ./rust/py`) and runs the
+conformance and differential tests on it. Run them yourself before
 pushing, each as its own command, and judge each by its exit status. A
 pipe (`ruff check ... | tail`) replaces the tool's status with the
 pipe's and hides a failure.
@@ -82,6 +84,8 @@ stays out of your diff.
 | `conformance/build/` | its cases assembled, for the Rust runner: generated, committed |
 | `rust/core/src/` | the Rust core: `trits`, `isa`, `alu`, `bus`, `image`, `hart`, `privileged`, `mmu`, `entropy`, `machine` |
 | `rust/core/examples/run.rs` | runs `.dti` images on the Rust core, for trying and timing it |
+| `rust/py/` | the optional `detrytus-rs` package: Python bindings for the Rust core |
+| `detrytus/rust.py` | wraps those bindings in the Python core's interface |
 | `rust/core/tests/` | the Rust conformance runner and spec sync test |
 | `examples/` | runnable assembly programs |
 
@@ -177,8 +181,12 @@ fail:
    `hart.read_csr(isa.CSRS["mtcause"])`), not by indexing internal
    lists.
 
-`tests/helpers.py` has `run(source)` and `result_of(body)` for tool
-tests that need to run a snippet to power-off.
+Tests that need the Rust backend use `needs_rust` from
+`tests/backends.py`: they skip without the `detrytus-rs` package, and
+fail instead when `DETRYTUS_REQUIRE_RUST` is set, as in CI.
+`tests/test_differential.py` runs both cores step by step and compares
+their whole state; a change to either core that it flags is a
+disagreement to resolve, with the Python core as the reference.
 
 ## Git and pull requests
 

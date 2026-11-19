@@ -10,7 +10,7 @@ from detrytus.cpu import Hart
 from detrytus.debug import Debugger, DebugShell
 from detrytus.disasm import disassemble
 from detrytus.isa import Decoded
-from detrytus.machine import Machine, StepLimit
+from detrytus.machine import BACKENDS, Machine, StepLimit, create
 from detrytus.trap import UnhandledTrap
 from detrytus.trits import format_trits
 
@@ -49,9 +49,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         sys.stdout.write(ch)
         sys.stdout.flush()
 
-    machine = Machine(ram_pages=args.ram_pages, out=out)
+    if args.trace and args.backend == "rust":
+        print("detrytus: --trace needs the Python backend", file=sys.stderr)
+        return 2
+    try:
+        machine = create(ram_pages=args.ram_pages, out=out, backend=args.backend)
+    except RuntimeError as e:
+        print(f"detrytus: {e}", file=sys.stderr)
+        return 2
     machine.load(image)
     if args.trace:
+        assert isinstance(machine, Machine)
 
         def trace(hart: Hart, d: Decoded) -> None:
             print(
@@ -130,6 +138,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ram-pages", type=int, default=729)
     p.add_argument("--trace", action="store_true", help="print each instruction")
     p.add_argument("--stats", action="store_true", help="print the step count")
+    p.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        help="the core to run on: python (default, or $DETRYTUS_BACKEND) or "
+        "rust (needs the optional detrytus-rs package)",
+    )
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("debug", help="assemble a program and debug it interactively")

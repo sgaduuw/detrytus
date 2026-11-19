@@ -1,12 +1,17 @@
 """The emulated platform: a bus, its devices and one hart, wired together."""
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from detrytus.asm import Image
 from detrytus.bus import Bus
 from detrytus.cpu import Hart
 from detrytus.devices import CONSOLE_PAGE, POWER_PAGE, Console, Halt, PowerControl
+
+if TYPE_CHECKING:
+    from detrytus.rust import RustMachine
 
 
 class StepLimit(Exception):
@@ -47,3 +52,25 @@ class Machine:
         except Halt as h:
             return Result(h.code, steps + 1)
         raise StepLimit(f"no power-off after {steps} steps")
+
+
+BACKENDS = ("python", "rust")
+
+
+def create(
+    ram_pages: int = 729,
+    out: Callable[[str], None] | None = None,
+    seed: int | None = None,
+    backend: str | None = None,
+) -> "Machine | RustMachine":
+    """A machine on the chosen core: "python" (the reference) or "rust"
+    (the optional detrytus-rs package). With no backend given, the
+    DETRYTUS_BACKEND environment variable chooses, else Python."""
+    backend = backend or os.environ.get("DETRYTUS_BACKEND", "python")
+    if backend == "python":
+        return Machine(ram_pages, out, seed)
+    if backend == "rust":
+        from detrytus.rust import RustMachine
+
+        return RustMachine(ram_pages, out, seed)
+    raise ValueError(f"unknown backend {backend!r}: choose from {BACKENDS}")
