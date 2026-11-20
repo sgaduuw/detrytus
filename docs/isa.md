@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.4, **draft**. Everything here may change until the emulator
+Version 0.5, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -8,8 +8,9 @@ detrytus is a balanced-ternary instruction set in the spirit of the
 Soviet Setun (1958) and Setun-70 (1970), rebuilt around what a modern
 core offers an operating system: a load/store RISC design with
 position-independent code, three privilege rings with trap delegation,
-paged virtual memory, a timer, a weak memory model with acquire/release
-atomics, floating point, cache control and an entropy source. Where
+paged virtual memory, a timer, any number of harts up to the platform's
+limit (hot-pluggable), a weak memory model with acquire/release atomics,
+floating point, cache control and an entropy source. Where
 ternary lets a feature be simpler than its binary equivalent, the spec
 takes the simpler form and says so.
 
@@ -179,10 +180,17 @@ with no attribute table. Accessing an address that holds nothing traps
 
 ### 5.4 Reset
 
-On reset `pc` is 0, inside the boot page. All registers are 0, the
-current ring is +1, interrupts are disabled and translation is off.
-The all-zero word is an illegal instruction (opcode 0), so execution
-that runs into zeroed memory traps instead of sliding.
+On reset hart 0 starts with `pc` 0, inside the boot page. All registers
+are 0, the current ring is +1, interrupts are disabled and translation
+is off. The all-zero word is an illegal instruction (opcode 0), so
+execution that runs into zeroed memory traps instead of sliding.
+
+Every other hart present at reset starts *stopped*: it runs nothing
+until a running hart starts it through the platform's hart controller
+(5.6), at an address and with an argument of that hart's choosing, in
+the same state as hart 0 at reset. Hart 0 is always present. Firmware
+therefore needs no code to park secondary harts, and a hart plugged in
+later behaves exactly like one that was present but not yet started.
 
 ### 5.5 Memory model
 
@@ -235,6 +243,62 @@ to see earlier stores only after `fence.i` and `fence.vm` respectively.
 Sequential consistency is one legal outcome, so an emulator that runs
 harts one instruction at a time with no store buffering conforms
 without further work.
+
+### 5.6 Multiple harts
+
+A machine has one or more **harts** (hardware threads), each with its
+own `pc`, registers, CSRs (both trap banks included), current ring, TLB
+and `lr` reservation. They share everything else: all of physical
+memory, which is coherent between them under the memory model above;
+the devices; and one clock, the `time` CSR (8.2), which reads the same
+on every hart. Each hart compares it against its own `timecmp`
+registers, so each has its own timer interrupt.
+
+**Numbering.** A hart's number, read from `hartid`, is balanced and
+names its place in a tree of threes: the lowest trit is its position
+within a triad (−1, 0, +1), the next trit the triad's position within a
+group of nine, and so on up. A machine of 9 harts numbers them −4 to +4;
+one of 27, −13 to +13. Hart 0, the middle of the middle triad at every
+level, is the boot hart. Numbers are fixed slots, so a machine need not
+fill them: with hot-plug, gaps are normal, and software must not assume
+that harts −n..n all exist. Hardware may share caches within a triad
+and connect triads as a ternary tree; the numbering follows such a
+layout naturally, but the ISA does not require one. The platform sets
+the largest number of harts (the reference platform allows 729, hart
+numbers −364..+364).
+
+**Starting, stopping, hot-plug.** A hart is *absent*, *stopped* or
+*running*. A running hart starts a stopped one, at an entry address and
+with one argument, through the platform's hart controller
+(`platform.md`); the new hart begins in the reset state of 5.4 with
+`a0` holding the argument. A hart stops only itself, which makes
+removal cooperative: the kernel moves work off a hart, then the hart
+stops, and only a stopped hart may be removed. A stopped hart holds no
+state: its registers, TLB, reservation and pending messages are gone.
+Harts may be added or removed while the machine runs; the controller
+announces either with an external interrupt.
+
+**Per-hart storage.** There is no hart-private memory: one address
+means the same location on every hart. Software keeps per-hart data (a
+stack, a trap save area, scheduler state) in ordinary RAM and reaches it
+through `hartid`, the `scratch` CSRs (a trap handler swaps its area's
+address in with `csrrw`), the `tp` register by convention, or the
+argument it was started with.
+
+**Signals and messages.** Each hart has a small mailbox in the hart
+controller. One store to another hart's mailbox queues a word for it and
+raises its software interrupt (cause −3), which stays pending while the
+mailbox holds messages. A sender can address one hart, or every running
+hart in a subtree of the numbering (all harts that agree with a number
+except in its lowest `k` trits). Larger payloads go in shared RAM, with
+the message saying where; the sender orders the two with `fence w, o`
+between filling the buffer and sending, and the receiver with
+`fence i, r` between taking the message and reading the buffer.
+
+**Remote flushes.** `fence.vm` and `fence.i` act on the hart that runs
+them. A kernel that changes a translation other harts may hold, or code
+they may run, signals them and has each run the fence itself: the
+usual shootdown. A stopped hart holds nothing to flush.
 
 ## 6. Instruction encoding
 
@@ -704,12 +768,12 @@ Other CSRs:
 |-----------|--------|------|--------|----------|
 | `edeleg`  | 8768   | +1   | rw | exception delegation, trit `i` for cause +`i` |
 | `ideleg`  | 8769   | +1   | rw | interrupt delegation, trit `i` for cause −`i` |
-| `hartid`  | 4374   | +1   | ro | this hart's number |
+| `hartid`  | 4374   | +1   | ro | this hart's number, balanced (5.6) |
 | `ptbr`    | 2197   | 0    | rw | page-table base and mode (9.2) |
 | `entropy` | −2187  | 0    | ro | fresh random trits from a hardware source |
-| `cycle`   | −8748  | −1   | ro | cycles since reset |
-| `time`    | −8747  | −1   | ro | wall-clock ticks, rate set by the platform |
-| `instret` | −8746  | −1   | ro | instructions retired |
+| `cycle`   | −8748  | −1   | ro | this hart's cycles since it started |
+| `time`    | −8747  | −1   | ro | wall-clock ticks, one clock shared by every hart, rate set by the platform |
+| `instret` | −8746  | −1   | ro | instructions this hart has retired since it started |
 | `fcsr`    | −4374  | −1   | rw | float flags (trits 4..0: invalid, divide-by-zero, overflow, underflow, inexact) and rounding mode (trits 6..5) |
 
 `tstatus` fields:
@@ -757,7 +821,8 @@ An interrupt with cause −`i` is taken into its target ring `r` when
 `ip[i]` and `ie[i]` are both `+` in `r`'s bank, and either the current
 ring is below `r`, or it equals `r` with `IE = +`. Ring `r`'s timer
 interrupt is pending whenever `time ≥ timecmp`; software clears it by
-moving `timecmp` forward.
+moving `timecmp` forward. Each hart has its own `timecmp` registers and
+so its own timer interrupt, all against the shared `time`.
 
 ### 8.5 Causes
 
@@ -775,8 +840,8 @@ RISC-V gives the top bit of `mcause`.
 | +7 | load page fault |
 | +8 | store page fault |
 | −1 | timer interrupt |
-| −2 | external interrupt |
-| −3 | software interrupt (interprocessor signal) |
+| −2 | external interrupt: devices, and the hart controller announcing a hart added or a removal requested |
+| −3 | software interrupt: this hart's mailbox holds a message (5.6), or software set `ip` trit 3 |
 | +9 | single step |
 
 ### 8.6 Debug
@@ -937,6 +1002,9 @@ switching `ptbr` to a different ASID needs none.
 `r0` here means the register field names `r0`, not a register holding 0:
 ASID 0 is named with a register that holds 0.
 
+`fence.vm` acts only on the hart that runs it; other harts are flushed
+by asking them to run it (5.6).
+
 ## 10. Example: binary search with a three-way branch
 
 ```asm
@@ -1001,9 +1069,10 @@ sequence, whose 18 trits cover every code point with room to spare.
 
 ### 12.3 Platform
 
-The emulator's platform description will fix the MMIO devices: a
-console, an interrupt controller, a block device and a way to signal
-other harts, all at negative page numbers.
+`platform.md` fixes the reference platform's MMIO devices: a console,
+power control and the hart controller (5.6). Still to come: an
+interrupt controller for devices and a block device, at negative page
+numbers like the rest.
 
 ## 13. Open questions
 
@@ -1013,3 +1082,9 @@ other harts, all at negative page numbers.
    guess, to be revisited against measured instruction frequencies.
 3. **Hypervisor support.** Whether ring +1 should grow two-stage
    translation so detrytus can host detrytus guests.
+4. **Waiting on a word.** Whether a hart should be able to sleep until
+   another hart writes a word it reserved with `lr` (as RISC-V's Zawrs
+   does), which lets a lock waiter sleep without an interrupt. Mailboxes
+   and `wfi` cover signalling for now.
+5. **Removing hart 0.** Whether the boot hart may ever be removed, once
+   another hart has taken over its duties.
