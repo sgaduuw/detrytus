@@ -40,6 +40,7 @@ cargo run --release -p detrytus-cli -- debug examples/bsearch.s
 | `csr NAME` | | one CSR, such as `mtcause` or `ptbr` |
 | `print EXPR` | `p` | evaluate an expression, in decimal and balanced ternary |
 | `examine ADDR [N]` | `x` | N words from ADDR (default 4) |
+| `xp ADDR [N]` | | N words of physical memory from ADDR, untranslated |
 | `disas [ADDR] [N]` | | disassemble N words (default: 8 from the pc) |
 | `trace on\|off` | | print every instruction as it runs |
 | `quit` | `q` | leave |
@@ -55,6 +56,8 @@ ADDR and EXPR are assembler expressions (`docs/assembler.md`): labels,
 
 Addresses are virtual, as the stopped program sees them: in a ring
 running with paging, `examine` and `watch` go through its page table.
+`xp` is the exception: it reads physical memory as it is, which is what
+a kernel's own data structures need once the machine has stopped.
 
 `watch` on an aligned address (a multiple of 3) watches the word
 centred there; on any other address, the single tryte.
