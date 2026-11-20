@@ -574,3 +574,33 @@ but costs nothing.
 Development now needs only a Rust toolchain; CI is one job of `cargo
 fmt`, `clippy` and `test`.
 
+
+### 2026-11-20 · Multiple harts: the proposal
+
+ISA 0.5 (draft) describes machines with more than one hart; the
+platform's hart controller is written down but not built. The choices,
+for review:
+
+- **One clock.** `time` is shared by every hart; `timecmp` stays per
+  hart, so each has its own timer.
+- **No private memory.** All memory is shared and coherent under the
+  existing memory model. Per-hart data lives in RAM, found through
+  `hartid`, `scratch`, `tp` or the start argument. A region every hart
+  sees "at once" adds nothing that coherent RAM does not already give.
+- **Mailboxes for fast messages.** One store queues a word for another
+  hart and rings its software interrupt; nine deep, and a send that
+  cannot be delivered is reported, never dropped silently. Big payloads
+  go by pointer into shared RAM.
+- **Threes.** Hart numbers are balanced and tree-shaped: the low trit is
+  the place in a triad, the next the triad's place in a nine. Hart 0 is
+  the centre and boots; other harts start stopped, so firmware does not
+  park them. Group sends address a subtree. The reference platform
+  allows 729 harts, one page of slots, with pages reserved beyond.
+- **Hot-plug** is cooperative: the platform announces an added hart or
+  asks for one to go; only a hart can stop itself, and only a stopped
+  hart is removed.
+- **Flushes stay local.** `fence.vm` and `fence.i` act on one hart;
+  shootdown is done with messages, as on RISC-V.
+
+Open: a wait-on-word instruction like Zawrs, and whether hart 0 may
+ever be removed (isa.md 13).
