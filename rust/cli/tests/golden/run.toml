@@ -1,0 +1,725 @@
+# detrytus run: output, the stats line, trace, and errors.
+# Recorded from the Rust command, after checking the Python one printed
+# exactly the same (rust/cli/tests/golden.rs explains the format).
+
+[[case]]
+name = "hello with stats"
+args = ["run", "--stats", "{root}/examples/hello.s"]
+status = 0
+stdout = '''
+Hello from a balanced-ternary machine!
+'''
+stderr = '''
+
+detrytus: 202 steps, exit 0
+'''
+
+[[case]]
+name = "bsearch with stats"
+args = ["run", "--stats", "{root}/examples/bsearch.s"]
+status = 0
+stdout = '''
+5
+0
+8
+-1
+2
+'''
+stderr = '''
+
+detrytus: 389 steps, exit 0
+'''
+
+[[case]]
+name = "paging with stats"
+args = ["run", "--stats", "{root}/examples/paging.s"]
+status = 0
+stdout = '''
+user: hello from virtual page 1
+firmware: system call from ring -1
+'''
+stderr = '''
+
+detrytus: 375 steps, exit 0
+'''
+
+[[case]]
+name = "sections with stats"
+args = ["run", "--stats", "{root}/examples/sections.s"]
+status = 0
+stdout = '''
+code in the boot page, strings in RAM page 2
+helpers came from lib/console.s
+'''
+stderr = '''
+
+detrytus: 403 steps, exit 0
+'''
+
+[[case]]
+name = "hello traced"
+args = ["run", "--trace", "{root}/examples/hello.s"]
+status = 0
+stdout = '''
+Hello from a balanced-ternary machine!
+'''
+stderr = '''
+[           0 r+1] auipc t0, 0
+[           3 r+1] addi t0, t0, 29
+[           6 r+1] addi t1, zero, -19683
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          15 r+1] sw t2, 0(t1)
+[          18 r+1] addi t0, t0, 1
+[          21 r+1] jal zero, 9
+[           9 r+1] lt t2, 0(t0)
+[          12 r+1] beq t2, zero, 24
+[          24 r+1] addi t1, zero, -39366
+[          27 r+1] sw zero, 0(t1)
+'''
+
+[[case]]
+name = "paging traced"
+args = ["run", "--trace", "{root}/examples/paging.s"]
+status = 0
+stdout = '''
+user: hello from virtual page 1
+firmware: system call from ring -1
+'''
+stderr = '''
+[           0 r+1] addi t0, zero, 39366
+[           3 r+1] addi t1, zero, 59048
+[           6 r+1] sw t1, 0(t0)
+[           9 r+1] addi t0, zero, 59049
+[          12 r+1] addi t1, zero, 78731
+[          15 r+1] sw t1, 0(t0)
+[          18 r+1] addi t0, zero, 78732
+[          21 r+1] addi t1, zero, 99256
+[          24 r+1] sw t1, 3(t0)
+[          27 r+1] addi t1, zero, -16673
+[          30 r+1] sw t1, 6(t0)
+[          33 r+1] addi t0, zero, 39367
+[          36 r+1] csrrw zero, ptbr, t0
+[          39 r+1] auipc t0, 0
+[          42 r+1] addi t0, t0, 27
+[          45 r+1] csrrw zero, mtvec, t0
+[          48 r+1] lui t0, 3
+[          51 r+1] addi t0, t0, 0
+[          54 r+1] csrrw zero, mtpc, t0
+[          57 r+1] addi t0, zero, -1
+[          60 r+1] csrrw zero, mtstatus, t0
+[          63 r+1] tret
+[       19683 r-1] auipc t0, 0
+[       19686 r-1] addi t0, t0, 26
+[       19689 r-1] addi t1, zero, 39366
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19698 r-1] sw t2, 0(t1)
+[       19701 r-1] addi t0, t0, 1
+[       19704 r-1] jal zero, 19692
+[       19692 r-1] lt t2, 0(t0)
+[       19695 r-1] beq t2, zero, 19707
+[       19707 r-1] sys
+[          66 r+1] csrrw s0, mtcause, zero
+[          69 r+1] addi t0, zero, 4
+[          72 r+1] bne s0, t0, 90
+[          75 r+1] auipc a0, 0
+[          78 r+1] addi a0, a0, 41
+[          81 r+1] jal ra, 96
+[          96 r+1] addi t1, zero, -19683
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         105 r+1] sw t2, 0(t1)
+[         108 r+1] addi a0, a0, 1
+[         111 r+1] jal zero, 99
+[          99 r+1] lt t2, 0(a0)
+[         102 r+1] beq t2, zero, 114
+[         114 r+1] jalr zero, 0(ra)
+[          84 r+1] addi t0, zero, -39366
+[          87 r+1] sw zero, 0(t0)
+'''
+
+[[case]]
+name = "an unhandled trap"
+args = ["run", "{here}/programs/crash.s"]
+status = 70
+stdout = ""
+stderr = '''
+
+detrytus: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+'''
+
+[[case]]
+name = "the step limit"
+args = ["run", "--max-steps", "50", "-"]
+stdin = '''
+spin: j spin
+'''
+status = 124
+stdout = ""
+stderr = '''
+
+detrytus: no power-off after 50 steps
+'''
+
+[[case]]
+name = "overlapping files"
+args = ["run", "{root}/examples/hello.s", "{root}/examples/hello.s"]
+status = 65
+stdout = ""
+stderr = '''
+detrytus: images overlap at address -1
+'''
+
+[[case]]
+name = "source on stdin"
+args = ["run", "--stats", "-"]
+stdin = '''
+li a0, 7
+li t6, -39366
+sw a0, 0(t6)
+'''
+status = 7
+stdout = ""
+stderr = '''
+
+detrytus: 3 steps, exit 7
+'''
+
+[[case]]
+name = "an image"
+args = ["run", "{tmp}/b.dti"]
+setup = [["asm", "{root}/examples/bsearch.s", "-o", "{tmp}/b.dti"]]
+status = 0
+stdout = '''
+5
+0
+8
+-1
+2
+'''
+stderr = ""
+
+[[case]]
+name = "a missing file"
+args = ["run", "{tmp}/missing.s"]
+status = 66
+stdout = ""
+stderr = '''
+detrytus: {tmp}/missing.s: No such file or directory
+'''

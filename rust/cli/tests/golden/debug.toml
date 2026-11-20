@@ -1,0 +1,2426 @@
+# detrytus debug: scripted and interactive sessions.
+# Recorded from the Rust command, after checking the Python one printed
+# exactly the same (rust/cli/tests/golden.rs explains the format).
+
+[[case]]
+name = "basics on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+regs
+step
+s 3
+n
+info
+regs
+c
+step
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 0   ring +1
+=> 3  [ring +1]  addi t0, t0, 48
+=> 12 <start+3>  [ring +1]  addi a0, zero, 5
+=> 15 <start+6>  [ring +1]  jal ra, 42
+  1: break at 9 <start>
+  catch: off
+  a0               5     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0           19683     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 15 <start+6>   ring +1
+stopped: powered off with exit code 20
+stopped: the machine has powered off (exit 20)
+  a0              20     a1              20     a2               0
+  a3               0     a4               0     a5               0
+  t0          -39366     t1              36     t2              42
+  t3               0     t4               0     t5               0
+  t6               0     s0           19683     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              27     sp               0
+  pc 39 <after+3>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "breaks on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+b double
+b after
+info
+c
+regs
+c
+c
+d 1
+info
+d
+info
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+breakpoint 2 at 42 <double>
+breakpoint 3 at 36 <after>
+  1: break at 9 <start>
+  2: break at 42 <double>
+  3: break at 36 <after>
+  catch: off
+stopped: breakpoint 1 at 9 <start>
+=> 9 <start>  [ring +1]  addi s0, zero, 19683
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 9 <start>   ring +1
+stopped: breakpoint 2 at 42 <double>
+=> 42 <double>  [ring +1]  add a0, a0, a0
+stopped: breakpoint 2 at 42 <double>
+=> 42 <double>  [ring +1]  add a0, a0, a0
+  2: break at 42 <double>
+  3: break at 36 <after>
+  catch: off
+  catch: off
+stopped: powered off with exit code 20
+'''
+stderr = ""
+
+[[case]]
+name = "watch on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+w DATA
+w DATA+1 r
+watch DATA rw
+info
+c
+c
+c
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+watchpoint 2 on 19682..19684 (w), now 0
+watchpoint 3 on 19684..19684 (r), now 0
+watchpoint 4 on 19682..19684 (rw), now 0
+  1: break at 9 <start>
+  2: watch 19682..19684 (w)
+  3: watch 19684..19684 (r)
+  4: watch 19682..19684 (rw)
+  catch: off
+stopped: breakpoint 1 at 9 <start>
+=> 9 <start>  [ring +1]  addi s0, zero, 19683
+stopped: watchpoint 2: write at 19683 <handler+19635>: 0 -> 20
+=> 30 <start+21>  [ring +1]  lw a1, 0(s0)
+stopped: watchpoint 3: read at 19683 <handler+19635>
+=> 33 <start+24>  [ring +1]  sys
+stopped: powered off with exit code 20
+'''
+stderr = ""
+
+[[case]]
+name = "catch on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+catch syscall
+c
+regs
+catch off
+catch 4 -1 timer
+info
+catch all
+c
+catch
+info
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+catching trap causes [4]
+stopped: breakpoint 1 at 9 <start>
+=> 9 <start>  [ring +1]  addi s0, zero, 19683
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 9 <start>   ring +1
+not catching traps
+catching trap causes [-1, 4]
+  1: break at 9 <start>
+  catch: [-1, 4]
+catching every trap
+stopped: trap cause +4 at 33 <start+24>, tval 0
+=> 48 <handler>  [ring +1]  csrrw t1, mtpc, zero
+catching every trap
+  1: break at 9 <start>
+  catch: all
+'''
+stderr = ""
+
+[[case]]
+name = "inspect on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+p 1+2
+p $a0
+p $pc + 3
+p $r-1
+p $nope
+p DATA * 2
+x 0
+x start 2
+x -19683 1
+disas
+disas start 3
+csr mtvec
+csr ptbr
+csr 12345
+csr
+p
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+error: no register $nope
+39366  0t0000000000000000+-000000000
+                       0             1738  0t0000000000000000000+-+0++0+
+                       3          8550718  0t00000000000+--+0+-++-+0++-+
+                       6       1549904998  0t0000000++000000++-+0000--++
+               9 <start>       3486784192  0t000000+00000000000000-0++-+
+               9 <start>       3486784192  0t000000+00000000000000-0++-+
+            12 <start+3>           886012  0t0000000000000+--00000+0++-+
+                  -19683  <unmapped>
+=>                        0  auipc t0, 0
+                          3  addi t0, t0, 48
+                          6  csrrw zero, mtvec, t0
+                  9 <start>  addi s0, zero, 19683
+               12 <start+3>  addi a0, zero, 5
+               15 <start+6>  jal ra, 42
+               18 <start+9>  auipc t2, 0
+              21 <start+12>  addi t2, t2, 24
+                  9 <start>  addi s0, zero, 19683
+               12 <start+3>  addi a0, zero, 5
+               15 <start+6>  jal ra, 42
+mtvec = 0  0t000000000000000000000000000
+ptbr = 0  0t000000000000000000000000000
+error: no CSR 12345
+error: csr needs a name, such as mtcause
+error: empty expression
+'''
+stderr = ""
+
+[[case]]
+name = "errors on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s x
+d 99
+watch
+b
+trace maybe
+bogus
+Step
+!x
+?
+help
+help step
+help s
+help EOF
+help nothing
+catch foo
+x
+examine 1 2 3
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+error: expected a count, got 'x'
+error: no breakpoint or watchpoint 99
+error: watch needs an address
+error: break needs an address
+error: trace on or trace off
+unknown command 'bogus'; 'help' lists them
+unknown command 'Step'; 'help' lists them
+unknown command '!x'; 'help' lists them
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+step [N]: run N instructions (default 1). Alias: s
+*** No help on s
+quit: leave the debugger. Alias: q
+*** No help on nothing
+error: invalid literal for int() with base 10: 'foo'
+error: empty expression
+error: trailing input in '1 2'
+'''
+stderr = ""
+
+[[case]]
+name = "trace on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+trace on
+s 4
+trace off
+s
+restart
+b double
+c
+n
+n
+n
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+                          0  auipc t0, 0
+                          3  addi t0, t0, 48
+                          6  csrrw zero, mtvec, t0
+                  9 <start>  addi s0, zero, 19683
+=> 12 <start+3>  [ring +1]  addi a0, zero, 5
+=> 15 <start+6>  [ring +1]  jal ra, 42
+=> 0  [ring +1]  auipc t0, 0
+breakpoint 2 at 42 <double>
+stopped: breakpoint 1 at 9 <start>
+=> 9 <start>  [ring +1]  addi s0, zero, 19683
+=> 12 <start+3>  [ring +1]  addi a0, zero, 5
+=> 15 <start+6>  [ring +1]  jal ra, 42
+stopped: breakpoint 2 at 42 <double>
+=> 42 <double>  [ring +1]  add a0, a0, a0
+'''
+stderr = ""
+
+[[case]]
+name = "restart on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+w DATA
+c
+restart
+info
+c
+c
+c
+step
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+watchpoint 2 on 19682..19684 (w), now 0
+stopped: breakpoint 1 at 9 <start>
+=> 9 <start>  [ring +1]  addi s0, zero, 19683
+=> 0  [ring +1]  auipc t0, 0
+  1: break at 9 <start>
+  2: watch 19682..19684 (w)
+  catch: off
+stopped: breakpoint 1 at 9 <start>
+=> 9 <start>  [ring +1]  addi s0, zero, 19683
+stopped: watchpoint 2: write at 19683 <handler+19635>: 0 -> 20
+=> 30 <start+21>  [ring +1]  lw a1, 0(s0)
+stopped: powered off with exit code 20
+stopped: the machine has powered off (exit 20)
+'''
+stderr = ""
+
+[[case]]
+name = "quit on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s
+q
+s
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+=> 3  [ring +1]  addi t0, t0, 48
+'''
+stderr = ""
+
+[[case]]
+name = "next on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+n
+n
+n
+n
+n
+n
+n
+n
+n
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+=> 3  [ring +1]  addi t0, t0, 48
+=> 6  [ring +1]  csrrw zero, mtvec, t0
+=> 9 <start>  [ring +1]  addi s0, zero, 19683
+=> 12 <start+3>  [ring +1]  addi a0, zero, 5
+=> 15 <start+6>  [ring +1]  jal ra, 42
+=> 18 <start+9>  [ring +1]  auipc t2, 0
+=> 21 <start+12>  [ring +1]  addi t2, t2, 24
+=> 24 <start+15>  [ring +1]  jalr ra, 0(t2)
+=> 27 <start+18>  [ring +1]  sw a0, 0(s0)
+  a0              20     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2              42
+  t3               0     t4               0     t5               0
+  t6               0     s0           19683     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              27     sp               0
+  pc 27 <start+18>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "physical on debuggee"
+args = ["debug", "{here}/programs/debuggee.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+c
+xp DATA 2
+xp 0
+xp -19683 1
+xp
+help xp
+help
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <start>
+stopped: breakpoint 1 at 9 <start>
+=> 9 <start>  [ring +1]  addi s0, zero, 19683
+                   19683                0  0t000000000000000000000000000
+                   19686                0  0t000000000000000000000000000
+                       0             1738  0t0000000000000000000+-+0++0+
+                       3          8550718  0t00000000000+--+0+-++-+0++-+
+                       6       1549904998  0t0000000++000000++-+0000--++
+                       9       3486784192  0t000000+00000000000000-0++-+
+                  -19683  <unmapped>
+error: empty expression
+xp ADDR [N]: show N words of physical memory from ADDR (default 4).
+
+Unlike examine, ADDR is not translated: it reads RAM and the boot
+page as they are, whatever ring and page table are current.
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+'''
+stderr = ""
+
+[[case]]
+name = "basics on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+regs
+step
+s 3
+n
+info
+regs
+c
+step
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 0 <start>   ring +1
+=> 3 <start+3>  [ring +1]  brk
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+stopped: the machine has powered off (exit -1)
+  1: break at 0 <start>
+  catch: off
+  a0               1     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 3 <start+3>   ring +1
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+  a0               1     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 3 <start+3>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "breaks on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+b double
+b after
+info
+c
+regs
+c
+c
+d 1
+info
+d
+info
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'double'
+error: undefined symbol 'after'
+  1: break at 0 <start>
+  catch: off
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+  a0               1     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 3 <start+3>   ring +1
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+  catch: off
+  catch: off
+stopped: the machine has powered off (exit -1)
+'''
+stderr = ""
+
+[[case]]
+name = "watch on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+w DATA
+w DATA+1 r
+watch DATA rw
+info
+c
+c
+c
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'DATA'
+error: undefined symbol 'DATA'
+error: undefined symbol 'DATA'
+  1: break at 0 <start>
+  catch: off
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+'''
+stderr = ""
+
+[[case]]
+name = "catch on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+catch syscall
+c
+regs
+catch off
+catch 4 -1 timer
+info
+catch all
+c
+catch
+info
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+catching trap causes [4]
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+  a0               1     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 3 <start+3>   ring +1
+not catching traps
+catching trap causes [-1, 4]
+  1: break at 0 <start>
+  catch: [-1, 4]
+catching every trap
+stopped: the machine has powered off (exit -1)
+catching every trap
+  1: break at 0 <start>
+  catch: all
+'''
+stderr = ""
+
+[[case]]
+name = "inspect on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+p 1+2
+p $a0
+p $pc + 3
+p $r-1
+p $nope
+p DATA * 2
+x 0
+x start 2
+x -19683 1
+disas
+disas start 3
+csr mtvec
+csr ptbr
+csr 12345
+csr
+p
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+error: no register $nope
+error: undefined symbol 'DATA'
+               0 <start>           177424  0t000000000000000+00000+0++-+
+             3 <start+3>              -39  0t00000000000000000000000---0
+             6 <start+6>           354571  0t00000000000000+-00000+0++-+
+             9 <start+9>                0  0t000000000000000000000000000
+               0 <start>           177424  0t000000000000000+00000+0++-+
+             3 <start+3>              -39  0t00000000000000000000000---0
+                  -19683  <unmapped>
+=>                0 <start>  addi a0, zero, 1
+                3 <start+3>  brk
+                6 <start+6>  addi a0, zero, 2
+                9 <start+9>  .word 0  # illegal: opcode 0
+              12 <start+12>  .word 0  # illegal: opcode 0
+              15 <start+15>  .word 0  # illegal: opcode 0
+              18 <start+18>  .word 0  # illegal: opcode 0
+              21 <start+21>  .word 0  # illegal: opcode 0
+=>                0 <start>  addi a0, zero, 1
+                3 <start+3>  brk
+                6 <start+6>  addi a0, zero, 2
+mtvec = 0  0t000000000000000000000000000
+ptbr = 0  0t000000000000000000000000000
+error: no CSR 12345
+error: csr needs a name, such as mtcause
+error: empty expression
+'''
+stderr = ""
+
+[[case]]
+name = "errors on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s x
+d 99
+watch
+b
+trace maybe
+bogus
+Step
+!x
+?
+help
+help step
+help s
+help EOF
+help nothing
+catch foo
+x
+examine 1 2 3
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: expected a count, got 'x'
+error: no breakpoint or watchpoint 99
+error: watch needs an address
+error: break needs an address
+error: trace on or trace off
+unknown command 'bogus'; 'help' lists them
+unknown command 'Step'; 'help' lists them
+unknown command '!x'; 'help' lists them
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+step [N]: run N instructions (default 1). Alias: s
+*** No help on s
+quit: leave the debugger. Alias: q
+*** No help on nothing
+error: invalid literal for int() with base 10: 'foo'
+error: empty expression
+error: trailing input in '1 2'
+'''
+stderr = ""
+
+[[case]]
+name = "trace on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+trace on
+s 4
+trace off
+s
+restart
+b double
+c
+n
+n
+n
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+                  0 <start>  addi a0, zero, 1
+                3 <start+3>  brk
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+stopped: the machine has powered off (exit -1)
+=> 0 <start>  [ring +1]  addi a0, zero, 1
+error: undefined symbol 'double'
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+'''
+stderr = ""
+
+[[case]]
+name = "restart on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+w DATA
+c
+restart
+info
+c
+c
+c
+step
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'DATA'
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+=> 0 <start>  [ring +1]  addi a0, zero, 1
+  1: break at 0 <start>
+  catch: off
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+'''
+stderr = ""
+
+[[case]]
+name = "quit on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s
+q
+s
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+=> 3 <start+3>  [ring +1]  brk
+'''
+stderr = ""
+
+[[case]]
+name = "next on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+n
+n
+n
+n
+n
+n
+n
+n
+n
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+=> 3 <start+3>  [ring +1]  brk
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+stopped: the machine has powered off (exit -1)
+  a0               1     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 3 <start+3>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "physical on crash"
+args = ["debug", "{here}/programs/crash.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+c
+xp DATA 2
+xp 0
+xp -19683 1
+xp
+help xp
+help
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+stopped: unhandled trap: cause +5 at pc 3 in ring +1, tval 3
+error: undefined symbol 'DATA'
+                       0           177424  0t000000000000000+00000+0++-+
+                       3              -39  0t00000000000000000000000---0
+                       6           354571  0t00000000000000+-00000+0++-+
+                       9                0  0t000000000000000000000000000
+                  -19683  <unmapped>
+error: empty expression
+xp ADDR [N]: show N words of physical memory from ADDR (default 4).
+
+Unlike examine, ADDR is not translated: it reads RAM and the boot
+page as they are, whatever ring and page table are current.
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+'''
+stderr = ""
+
+[[case]]
+name = "basics on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+regs
+step
+s 3
+n
+info
+regs
+c
+step
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 0 <start>   ring +1
+=> 3 <start+3>  [ring +1]  auipc s0, 0
+=> 12 <next>  [ring +1]  beq s1, zero, 48
+=> 15 <next+3>  [ring +1]  auipc a0, 0
+  1: break at 0 <start>
+  catch: off
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0             222     s1               5
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp           59049
+  pc 15 <next+3>   ring +1
+5
+0
+8
+-1
+2
+stopped: powered off with exit code 0
+stopped: the machine has powered off (exit 0)
+  a0              10     a1               9     a2               0
+  a3               0     a4               0     a5               0
+  t0          -39366     t1              10     t2           59045
+  t3              50     t4           59045     t5          -19683
+  t6               0     s0             237     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              39     sp           59049
+  pc 51 <done+3>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "breaks on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+b double
+b after
+info
+c
+regs
+c
+c
+d 1
+info
+d
+info
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'double'
+error: undefined symbol 'after'
+  1: break at 0 <start>
+  catch: off
+5
+0
+8
+-1
+2
+stopped: powered off with exit code 0
+  a0              10     a1               9     a2               0
+  a3               0     a4               0     a5               0
+  t0          -39366     t1              10     t2           59045
+  t3              50     t4           59045     t5          -19683
+  t6               0     s0             237     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              39     sp           59049
+  pc 51 <done+3>   ring +1
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+  catch: off
+  catch: off
+stopped: the machine has powered off (exit 0)
+'''
+stderr = ""
+
+[[case]]
+name = "watch on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+w DATA
+w DATA+1 r
+watch DATA rw
+info
+c
+c
+c
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'DATA'
+error: undefined symbol 'DATA'
+error: undefined symbol 'DATA'
+  1: break at 0 <start>
+  catch: off
+5
+0
+8
+-1
+2
+stopped: powered off with exit code 0
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+'''
+stderr = ""
+
+[[case]]
+name = "catch on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+catch syscall
+c
+regs
+catch off
+catch 4 -1 timer
+info
+catch all
+c
+catch
+info
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+catching trap causes [4]
+5
+0
+8
+-1
+2
+stopped: powered off with exit code 0
+  a0              10     a1               9     a2               0
+  a3               0     a4               0     a5               0
+  t0          -39366     t1              10     t2           59045
+  t3              50     t4           59045     t5          -19683
+  t6               0     s0             237     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              39     sp           59049
+  pc 51 <done+3>   ring +1
+not catching traps
+catching trap causes [-1, 4]
+  1: break at 0 <start>
+  catch: [-1, 4]
+catching every trap
+stopped: the machine has powered off (exit 0)
+catching every trap
+  1: break at 0 <start>
+  catch: all
+'''
+stderr = ""
+
+[[case]]
+name = "inspect on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+p 1+2
+p $a0
+p $pc + 3
+p $r-1
+p $nope
+p DATA * 2
+x 0
+x start 2
+x -19683 1
+disas
+disas start 3
+csr mtvec
+csr ptbr
+csr 12345
+csr
+p
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+error: no register $nope
+error: undefined symbol 'DATA'
+               0 <start>      10460350078  0t00000+0000000000000---0++-+
+             3 <start+3>             -206  0t000000000000000000000-0++0+
+             6 <start+6>         38788423  0t0000000000+0-0+000-00-0++-+
+             9 <start+9>           885283  0t0000000000000+--0000-+0++-+
+               0 <start>      10460350078  0t00000+0000000000000---0++-+
+             3 <start+3>             -206  0t000000000000000000000-0++0+
+                  -19683  <unmapped>
+=>                0 <start>  addi sp, zero, 59049
+                3 <start+3>  auipc s0, 0
+                6 <start+6>  addi s0, s0, 219
+                9 <start+9>  addi s1, zero, 5
+                  12 <next>  beq s1, zero, 48
+                15 <next+3>  auipc a0, 0
+                18 <next+6>  addi a0, a0, 180
+                21 <next+9>  addi a1, zero, 9
+=>                0 <start>  addi sp, zero, 59049
+                3 <start+3>  auipc s0, 0
+                6 <start+6>  addi s0, s0, 219
+mtvec = 0  0t000000000000000000000000000
+ptbr = 0  0t000000000000000000000000000
+error: no CSR 12345
+error: csr needs a name, such as mtcause
+error: empty expression
+'''
+stderr = ""
+
+[[case]]
+name = "errors on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s x
+d 99
+watch
+b
+trace maybe
+bogus
+Step
+!x
+?
+help
+help step
+help s
+help EOF
+help nothing
+catch foo
+x
+examine 1 2 3
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: expected a count, got 'x'
+error: no breakpoint or watchpoint 99
+error: watch needs an address
+error: break needs an address
+error: trace on or trace off
+unknown command 'bogus'; 'help' lists them
+unknown command 'Step'; 'help' lists them
+unknown command '!x'; 'help' lists them
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+step [N]: run N instructions (default 1). Alias: s
+*** No help on s
+quit: leave the debugger. Alias: q
+*** No help on nothing
+error: invalid literal for int() with base 10: 'foo'
+error: empty expression
+error: trailing input in '1 2'
+'''
+stderr = ""
+
+[[case]]
+name = "trace on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+trace on
+s 4
+trace off
+s
+restart
+b double
+c
+n
+n
+n
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+                  0 <start>  addi sp, zero, 59049
+                3 <start+3>  auipc s0, 0
+                6 <start+6>  addi s0, s0, 219
+                9 <start+9>  addi s1, zero, 5
+=> 12 <next>  [ring +1]  beq s1, zero, 48
+=> 15 <next+3>  [ring +1]  auipc a0, 0
+=> 0 <start>  [ring +1]  addi sp, zero, 59049
+error: undefined symbol 'double'
+5
+0
+8
+-1
+2
+stopped: powered off with exit code 0
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+'''
+stderr = ""
+
+[[case]]
+name = "restart on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+w DATA
+c
+restart
+info
+c
+c
+c
+step
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'DATA'
+5
+0
+8
+-1
+2
+stopped: powered off with exit code 0
+=> 0 <start>  [ring +1]  addi sp, zero, 59049
+  1: break at 0 <start>
+  catch: off
+5
+0
+8
+-1
+2
+stopped: powered off with exit code 0
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+'''
+stderr = ""
+
+[[case]]
+name = "quit on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s
+q
+s
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+=> 3 <start+3>  [ring +1]  auipc s0, 0
+'''
+stderr = ""
+
+[[case]]
+name = "next on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+n
+n
+n
+n
+n
+n
+n
+n
+n
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+=> 3 <start+3>  [ring +1]  auipc s0, 0
+=> 6 <start+6>  [ring +1]  addi s0, s0, 219
+=> 9 <start+9>  [ring +1]  addi s1, zero, 5
+=> 12 <next>  [ring +1]  beq s1, zero, 48
+=> 15 <next+3>  [ring +1]  auipc a0, 0
+=> 18 <next+6>  [ring +1]  addi a0, a0, 180
+=> 21 <next+9>  [ring +1]  addi a1, zero, 9
+=> 24 <next+12>  [ring +1]  lw a2, 0(s0)
+=> 27 <next+15>  [ring +1]  jal ra, 54
+  a0             195     a1               9     a2              27
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0             222     s1               5
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp           59049
+  pc 27 <next+15>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "physical on bsearch"
+args = ["debug", "{root}/examples/bsearch.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+c
+xp DATA 2
+xp 0
+xp -19683 1
+xp
+help xp
+help
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+5
+0
+8
+-1
+2
+stopped: powered off with exit code 0
+error: undefined symbol 'DATA'
+                       0      10460350078  0t00000+0000000000000---0++-+
+                       3             -206  0t000000000000000000000-0++0+
+                       6         38788423  0t0000000000+0-0+000-00-0++-+
+                       9           885283  0t0000000000000+--0000-+0++-+
+                  -19683  <unmapped>
+error: empty expression
+xp ADDR [N]: show N words of physical memory from ADDR (default 4).
+
+Unlike examine, ADDR is not translated: it reads RAM and the boot
+page as they are, whatever ring and page table are current.
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+'''
+stderr = ""
+
+[[case]]
+name = "basics on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+regs
+step
+s 3
+n
+info
+regs
+c
+step
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 0 <start>   ring +1
+=> 3 <start+3>  [ring +1]  addi t1, zero, 59048
+=> 12 <start+12>  [ring +1]  addi t1, zero, 78731
+=> 15 <start+15>  [ring +1]  sw t1, 0(t0)
+  1: break at 0 <start>
+  catch: off
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0           59049     t1           78731     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 15 <start+15>   ring +1
+user: hello from virtual page 1
+firmware: system call from ring -1
+stopped: powered off with exit code 0
+stopped: the machine has powered off (exit 0)
+  a0             151     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0          -39366     t1          -19683     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               4     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              84     sp               0
+  pc 87 <trap+21>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "breaks on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+b double
+b after
+info
+c
+regs
+c
+c
+d 1
+info
+d
+info
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'double'
+error: undefined symbol 'after'
+  1: break at 0 <start>
+  catch: off
+user: hello from virtual page 1
+firmware: system call from ring -1
+stopped: powered off with exit code 0
+  a0             151     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0          -39366     t1          -19683     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               4     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              84     sp               0
+  pc 87 <trap+21>   ring +1
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+  catch: off
+  catch: off
+stopped: the machine has powered off (exit 0)
+'''
+stderr = ""
+
+[[case]]
+name = "watch on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+w DATA
+w DATA+1 r
+watch DATA rw
+info
+c
+c
+c
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'DATA'
+error: undefined symbol 'DATA'
+error: undefined symbol 'DATA'
+  1: break at 0 <start>
+  catch: off
+user: hello from virtual page 1
+firmware: system call from ring -1
+stopped: powered off with exit code 0
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+'''
+stderr = ""
+
+[[case]]
+name = "catch on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+catch syscall
+c
+regs
+catch off
+catch 4 -1 timer
+info
+catch all
+c
+catch
+info
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+catching trap causes [4]
+user: hello from virtual page 1
+stopped: trap cause +4 at 19707 <done>, tval 0
+=> 66 <trap>  [ring +1]  csrrw s0, mtcause, zero
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0           19741     t1           39366     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 66 <trap>   ring +1
+not catching traps
+catching trap causes [-1, 4]
+  1: break at 0 <start>
+  catch: [-1, 4]
+catching every trap
+firmware: system call from ring -1
+stopped: powered off with exit code 0
+catching every trap
+  1: break at 0 <start>
+  catch: all
+'''
+stderr = ""
+
+[[case]]
+name = "inspect on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+p 1+2
+p $a0
+p $pc + 3
+p $r-1
+p $nope
+p DATA * 2
+x 0
+x start 2
+x -19683 1
+disas
+disas start 3
+csr mtvec
+csr ptbr
+csr 12345
+csr
+p
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+error: no register $nope
+error: undefined symbol 'DATA'
+               0 <start>       6973570537  0t00000+-000000000000+-+0++-+
+             3 <start+3>      10460178034  0t00000+000000000-000+0-0++-+
+             6 <start+6>            47867  0t0000000000000000+-++0-000--
+             9 <start+9>      10460354938  0t00000+0000000000000+-+0++-+
+               0 <start>       6973570537  0t00000+-000000000000+-+0++-+
+             3 <start+3>      10460178034  0t00000+000000000-000+0-0++-+
+                  -19683  <unmapped>
+=>                0 <start>  addi t0, zero, 39366
+                3 <start+3>  addi t1, zero, 59048
+                6 <start+6>  sw t1, 0(t0)
+                9 <start+9>  addi t0, zero, 59049
+              12 <start+12>  addi t1, zero, 78731
+              15 <start+15>  sw t1, 0(t0)
+              18 <start+18>  addi t0, zero, 78732
+              21 <start+21>  addi t1, zero, 99256
+=>                0 <start>  addi t0, zero, 39366
+                3 <start+3>  addi t1, zero, 59048
+                6 <start+6>  sw t1, 0(t0)
+mtvec = 0  0t000000000000000000000000000
+ptbr = 0  0t000000000000000000000000000
+error: no CSR 12345
+error: csr needs a name, such as mtcause
+error: empty expression
+'''
+stderr = ""
+
+[[case]]
+name = "errors on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s x
+d 99
+watch
+b
+trace maybe
+bogus
+Step
+!x
+?
+help
+help step
+help s
+help EOF
+help nothing
+catch foo
+x
+examine 1 2 3
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: expected a count, got 'x'
+error: no breakpoint or watchpoint 99
+error: watch needs an address
+error: break needs an address
+error: trace on or trace off
+unknown command 'bogus'; 'help' lists them
+unknown command 'Step'; 'help' lists them
+unknown command '!x'; 'help' lists them
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+step [N]: run N instructions (default 1). Alias: s
+*** No help on s
+quit: leave the debugger. Alias: q
+*** No help on nothing
+error: invalid literal for int() with base 10: 'foo'
+error: empty expression
+error: trailing input in '1 2'
+'''
+stderr = ""
+
+[[case]]
+name = "trace on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+trace on
+s 4
+trace off
+s
+restart
+b double
+c
+n
+n
+n
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+                  0 <start>  addi t0, zero, 39366
+                3 <start+3>  addi t1, zero, 59048
+                6 <start+6>  sw t1, 0(t0)
+                9 <start+9>  addi t0, zero, 59049
+=> 12 <start+12>  [ring +1]  addi t1, zero, 78731
+=> 15 <start+15>  [ring +1]  sw t1, 0(t0)
+=> 0 <start>  [ring +1]  addi t0, zero, 39366
+error: undefined symbol 'double'
+user: hello from virtual page 1
+firmware: system call from ring -1
+stopped: powered off with exit code 0
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+'''
+stderr = ""
+
+[[case]]
+name = "restart on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+w DATA
+c
+restart
+info
+c
+c
+c
+step
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+error: undefined symbol 'DATA'
+user: hello from virtual page 1
+firmware: system call from ring -1
+stopped: powered off with exit code 0
+=> 0 <start>  [ring +1]  addi t0, zero, 39366
+  1: break at 0 <start>
+  catch: off
+user: hello from virtual page 1
+firmware: system call from ring -1
+stopped: powered off with exit code 0
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+stopped: the machine has powered off (exit 0)
+'''
+stderr = ""
+
+[[case]]
+name = "quit on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s
+q
+s
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+=> 3 <start+3>  [ring +1]  addi t1, zero, 59048
+'''
+stderr = ""
+
+[[case]]
+name = "next on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+n
+n
+n
+n
+n
+n
+n
+n
+n
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+=> 3 <start+3>  [ring +1]  addi t1, zero, 59048
+=> 6 <start+6>  [ring +1]  sw t1, 0(t0)
+=> 9 <start+9>  [ring +1]  addi t0, zero, 59049
+=> 12 <start+12>  [ring +1]  addi t1, zero, 78731
+=> 15 <start+15>  [ring +1]  sw t1, 0(t0)
+=> 18 <start+18>  [ring +1]  addi t0, zero, 78732
+=> 21 <start+21>  [ring +1]  addi t1, zero, 99256
+=> 24 <start+24>  [ring +1]  sw t1, 3(t0)
+=> 27 <start+27>  [ring +1]  addi t1, zero, -16673
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0           78732     t1           99256     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 27 <start+27>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "physical on paging"
+args = ["debug", "{root}/examples/paging.s", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+c
+xp DATA 2
+xp 0
+xp -19683 1
+xp
+help xp
+help
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 0 <start>
+user: hello from virtual page 1
+firmware: system call from ring -1
+stopped: powered off with exit code 0
+error: undefined symbol 'DATA'
+                       0       6973570537  0t00000+-000000000000+-+0++-+
+                       3      10460178034  0t00000+000000000-000+0-0++-+
+                       6            47867  0t0000000000000000+-++0-000--
+                       9      10460354938  0t00000+0000000000000+-+0++-+
+                  -19683  <unmapped>
+error: empty expression
+xp ADDR [N]: show N words of physical memory from ADDR (default 4).
+
+Unlike examine, ADDR is not translated: it reads RAM and the boot
+page as they are, whatever ring and page table are current.
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+'''
+stderr = ""
+
+[[case]]
+name = "basics on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+regs
+step
+s 3
+n
+info
+regs
+c
+step
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 0   ring +1
+=> 3  [ring +1]  addi t0, t0, 48
+=> 12 <begin+3>  [ring +1]  addi a0, zero, 5
+=> 15 <begin+6>  [ring +1]  jal ra, 42
+  1: break at 9 <begin>
+  catch: off
+  a0               5     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0           19683     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 15 <begin+6>   ring +1
+stopped: powered off with exit code 20
+stopped: the machine has powered off (exit 20)
+  a0              20     a1              20     a2               0
+  a3               0     a4               0     a5               0
+  t0          -39366     t1              36     t2              42
+  t3               0     t4               0     t5               0
+  t6               0     s0           19683     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              27     sp               0
+  pc 39 <after+3>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "breaks on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+b double
+b after
+info
+c
+regs
+c
+c
+d 1
+info
+d
+info
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+breakpoint 2 at 42 <double>
+breakpoint 3 at 36 <after>
+  1: break at 9 <begin>
+  2: break at 42 <double>
+  3: break at 36 <after>
+  catch: off
+stopped: breakpoint 1 at 9 <begin>
+=> 9 <begin>  [ring +1]  addi s0, zero, 19683
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 9 <begin>   ring +1
+stopped: breakpoint 2 at 42 <double>
+=> 42 <double>  [ring +1]  add a0, a0, a0
+stopped: breakpoint 2 at 42 <double>
+=> 42 <double>  [ring +1]  add a0, a0, a0
+  2: break at 42 <double>
+  3: break at 36 <after>
+  catch: off
+  catch: off
+stopped: powered off with exit code 20
+'''
+stderr = ""
+
+[[case]]
+name = "watch on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+w DATA
+w DATA+1 r
+watch DATA rw
+info
+c
+c
+c
+c
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+watchpoint 2 on 19682..19684 (w), now 0
+watchpoint 3 on 19684..19684 (r), now 0
+watchpoint 4 on 19682..19684 (rw), now 0
+  1: break at 9 <begin>
+  2: watch 19682..19684 (w)
+  3: watch 19684..19684 (r)
+  4: watch 19682..19684 (rw)
+  catch: off
+stopped: breakpoint 1 at 9 <begin>
+=> 9 <begin>  [ring +1]  addi s0, zero, 19683
+stopped: watchpoint 2: write at 19683 <handler+19635>: 0 -> 20
+=> 30 <begin+21>  [ring +1]  lw a1, 0(s0)
+stopped: watchpoint 3: read at 19683 <handler+19635>
+=> 33 <begin+24>  [ring +1]  sys
+stopped: powered off with exit code 20
+'''
+stderr = ""
+
+[[case]]
+name = "catch on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+catch syscall
+c
+regs
+catch off
+catch 4 -1 timer
+info
+catch all
+c
+catch
+info
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+catching trap causes [4]
+stopped: breakpoint 1 at 9 <begin>
+=> 9 <begin>  [ring +1]  addi s0, zero, 19683
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 9 <begin>   ring +1
+not catching traps
+catching trap causes [-1, 4]
+  1: break at 9 <begin>
+  catch: [-1, 4]
+catching every trap
+stopped: trap cause +4 at 33 <begin+24>, tval 0
+=> 48 <handler>  [ring +1]  csrrw t1, mtpc, zero
+catching every trap
+  1: break at 9 <begin>
+  catch: all
+'''
+stderr = ""
+
+[[case]]
+name = "inspect on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+p 1+2
+p $a0
+p $pc + 3
+p $r-1
+p $nope
+p DATA * 2
+x 0
+x start 2
+x -19683 1
+disas
+disas start 3
+csr mtvec
+csr ptbr
+csr 12345
+csr
+p
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+3  0t0000000000000000000000000+0
+0  0t000000000000000000000000000
+error: no register $nope
+39366  0t0000000000000000+-000000000
+                       0             1738  0t0000000000000000000+-+0++0+
+                       3          8550718  0t00000000000+--+0+-++-+0++-+
+                       6       1549904998  0t0000000++000000++-+0000--++
+               9 <begin>       3486784192  0t000000+00000000000000-0++-+
+               9 <begin>       3486784192  0t000000+00000000000000-0++-+
+            12 <begin+3>           886012  0t0000000000000+--00000+0++-+
+                  -19683  <unmapped>
+=>                        0  auipc t0, 0
+                          3  addi t0, t0, 48
+                          6  csrrw zero, mtvec, t0
+                  9 <begin>  addi s0, zero, 19683
+               12 <begin+3>  addi a0, zero, 5
+               15 <begin+6>  jal ra, 42
+               18 <begin+9>  auipc t2, 0
+              21 <begin+12>  addi t2, t2, 24
+                  9 <begin>  addi s0, zero, 19683
+               12 <begin+3>  addi a0, zero, 5
+               15 <begin+6>  jal ra, 42
+mtvec = 0  0t000000000000000000000000000
+ptbr = 0  0t000000000000000000000000000
+error: no CSR 12345
+error: csr needs a name, such as mtcause
+error: empty expression
+'''
+stderr = ""
+
+[[case]]
+name = "errors on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+s x
+d 99
+watch
+b
+trace maybe
+bogus
+Step
+!x
+?
+help
+help step
+help s
+help EOF
+help nothing
+catch foo
+x
+examine 1 2 3
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+error: expected a count, got 'x'
+error: no breakpoint or watchpoint 99
+error: watch needs an address
+error: break needs an address
+error: trace on or trace off
+unknown command 'bogus'; 'help' lists them
+unknown command 'Step'; 'help' lists them
+unknown command '!x'; 'help' lists them
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+step [N]: run N instructions (default 1). Alias: s
+*** No help on s
+quit: leave the debugger. Alias: q
+*** No help on nothing
+error: invalid literal for int() with base 10: 'foo'
+error: empty expression
+error: trailing input in '1 2'
+'''
+stderr = ""
+
+[[case]]
+name = "trace on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+trace on
+s 4
+trace off
+s
+restart
+b double
+c
+n
+n
+n
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+                          0  auipc t0, 0
+                          3  addi t0, t0, 48
+                          6  csrrw zero, mtvec, t0
+                  9 <begin>  addi s0, zero, 19683
+=> 12 <begin+3>  [ring +1]  addi a0, zero, 5
+=> 15 <begin+6>  [ring +1]  jal ra, 42
+=> 0  [ring +1]  auipc t0, 0
+breakpoint 2 at 42 <double>
+stopped: breakpoint 1 at 9 <begin>
+=> 9 <begin>  [ring +1]  addi s0, zero, 19683
+=> 12 <begin+3>  [ring +1]  addi a0, zero, 5
+=> 15 <begin+6>  [ring +1]  jal ra, 42
+stopped: breakpoint 2 at 42 <double>
+=> 42 <double>  [ring +1]  add a0, a0, a0
+'''
+stderr = ""
+
+[[case]]
+name = "restart on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+w DATA
+c
+restart
+info
+c
+c
+c
+step
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+watchpoint 2 on 19682..19684 (w), now 0
+stopped: breakpoint 1 at 9 <begin>
+=> 9 <begin>  [ring +1]  addi s0, zero, 19683
+=> 0  [ring +1]  auipc t0, 0
+  1: break at 9 <begin>
+  2: watch 19682..19684 (w)
+  catch: off
+stopped: breakpoint 1 at 9 <begin>
+=> 9 <begin>  [ring +1]  addi s0, zero, 19683
+stopped: watchpoint 2: write at 19683 <handler+19635>: 0 -> 20
+=> 30 <begin+21>  [ring +1]  lw a1, 0(s0)
+stopped: powered off with exit code 20
+stopped: the machine has powered off (exit 20)
+'''
+stderr = ""
+
+[[case]]
+name = "quit on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+s
+q
+s
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+=> 3  [ring +1]  addi t0, t0, 48
+'''
+stderr = ""
+
+[[case]]
+name = "next on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+n
+n
+n
+n
+n
+n
+n
+n
+n
+regs
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+=> 3  [ring +1]  addi t0, t0, 48
+=> 6  [ring +1]  csrrw zero, mtvec, t0
+=> 9 <begin>  [ring +1]  addi s0, zero, 19683
+=> 12 <begin+3>  [ring +1]  addi a0, zero, 5
+=> 15 <begin+6>  [ring +1]  jal ra, 42
+=> 18 <begin+9>  [ring +1]  auipc t2, 0
+=> 21 <begin+12>  [ring +1]  addi t2, t2, 24
+=> 24 <begin+15>  [ring +1]  jalr ra, 0(t2)
+=> 27 <begin+18>  [ring +1]  sw a0, 0(s0)
+  a0              20     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2              42
+  t3               0     t4               0     t5               0
+  t6               0     s0           19683     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              27     sp               0
+  pc 27 <begin+18>   ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "physical on image"
+args = ["debug", "{tmp}/debuggee.dti", "-b", "start", "-x", "{tmp}/script.txt", "--batch"]
+setup = [["asm", "{here}/programs/debuggee.s", "-o", "{tmp}/debuggee.dti"]]
+script = '''
+c
+xp DATA 2
+xp 0
+xp -19683 1
+xp
+help xp
+help
+'''
+status = 0
+stdout = '''
+breakpoint 1 at 9 <begin>
+stopped: breakpoint 1 at 9 <begin>
+=> 9 <begin>  [ring +1]  addi s0, zero, 19683
+                   19683                0  0t000000000000000000000000000
+                   19686                0  0t000000000000000000000000000
+                       0             1738  0t0000000000000000000+-+0++0+
+                       3          8550718  0t00000000000+--+0+-++-+0++-+
+                       6       1549904998  0t0000000++000000++-+0000--++
+                       9       3486784192  0t000000+00000000000000-0++-+
+                  -19683  <unmapped>
+error: empty expression
+xp ADDR [N]: show N words of physical memory from ADDR (default 4).
+
+Unlike examine, ADDR is not translated: it reads RAM and the boot
+page as they are, whatever ring and page table are current.
+
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+'''
+stderr = ""
+
+[[case]]
+name = "basics, interactive"
+args = ["debug", "{here}/programs/debuggee.s"]
+stdin = '''
+regs
+step
+s 3
+n
+info
+regs
+c
+step
+regs
+'''
+status = 0
+stdout = '''
+detrytus debugger. 'help' lists commands; 'help CMD' explains one.
+=> 0  [ring +1]  auipc t0, 0
+(dt)   a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0               0     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 0   ring +1
+(dt) => 3  [ring +1]  addi t0, t0, 48
+(dt) => 12 <start+3>  [ring +1]  addi a0, zero, 5
+(dt) => 15 <start+6>  [ring +1]  jal ra, 42
+(dt)   catch: off
+(dt)   a0               5     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0              48     t1               0     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0           19683     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 15 <start+6>   ring +1
+(dt) stopped: powered off with exit code 20
+(dt) stopped: the machine has powered off (exit 20)
+(dt)   a0              20     a1              20     a2               0
+  a3               0     a4               0     a5               0
+  t0          -39366     t1              36     t2              42
+  t3               0     t4               0     t5               0
+  t6               0     s0           19683     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra              27     sp               0
+  pc 39 <after+3>   ring +1
+(dt) '''
+stderr = ""
+
+[[case]]
+name = "watch, interactive"
+args = ["debug", "{here}/programs/debuggee.s"]
+stdin = '''
+w DATA
+w DATA+1 r
+watch DATA rw
+info
+c
+c
+c
+c
+'''
+status = 0
+stdout = '''
+detrytus debugger. 'help' lists commands; 'help CMD' explains one.
+=> 0  [ring +1]  auipc t0, 0
+(dt) watchpoint 1 on 19682..19684 (w), now 0
+(dt) watchpoint 2 on 19684..19684 (r), now 0
+(dt) watchpoint 3 on 19682..19684 (rw), now 0
+(dt)   1: watch 19682..19684 (w)
+  2: watch 19684..19684 (r)
+  3: watch 19682..19684 (rw)
+  catch: off
+(dt) stopped: watchpoint 1: write at 19683 <handler+19635>: 0 -> 20
+=> 30 <start+21>  [ring +1]  lw a1, 0(s0)
+(dt) stopped: watchpoint 2: read at 19683 <handler+19635>
+=> 33 <start+24>  [ring +1]  sys
+(dt) stopped: powered off with exit code 20
+(dt) stopped: the machine has powered off (exit 20)
+(dt) '''
+stderr = ""
+
+[[case]]
+name = "errors, interactive"
+args = ["debug", "{here}/programs/debuggee.s"]
+stdin = '''
+s x
+d 99
+watch
+b
+trace maybe
+bogus
+Step
+!x
+?
+help
+help step
+help s
+help EOF
+help nothing
+catch foo
+x
+examine 1 2 3
+'''
+status = 0
+stdout = '''
+detrytus debugger. 'help' lists commands; 'help CMD' explains one.
+=> 0  [ring +1]  auipc t0, 0
+(dt) error: expected a count, got 'x'
+(dt) error: no breakpoint or watchpoint 99
+(dt) error: watch needs an address
+(dt) error: break needs an address
+(dt) error: trace on or trace off
+(dt) unknown command 'bogus'; 'help' lists them
+(dt) unknown command 'Step'; 'help' lists them
+(dt) unknown command '!x'; 'help' lists them
+(dt) 
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+(dt) 
+Documented commands (type help <topic>):
+========================================
+EOF    catch     csr     disas    help  next   quit  restart  trace  xp
+break  continue  delete  examine  info  print  regs  step     watch
+
+(dt) step [N]: run N instructions (default 1). Alias: s
+(dt) *** No help on s
+(dt) quit: leave the debugger. Alias: q
+(dt) *** No help on nothing
+(dt) error: invalid literal for int() with base 10: 'foo'
+(dt) error: empty expression
+(dt) error: trailing input in '1 2'
+(dt) '''
+stderr = ""

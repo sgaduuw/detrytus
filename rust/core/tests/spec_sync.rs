@@ -73,3 +73,39 @@ fn csr_combining_tables_match_the_spec() {
         assert!(cells.contains(&value.to_string().as_str()), "{name}: {row}");
     }
 }
+
+#[test]
+fn every_truth_table_matches_the_spec() {
+    use detrytus_core::isa::tables;
+    let text = spec().replace('\u{2212}', "-");
+    for (name, value) in tables() {
+        let found = if name == "tabs" {
+            // tabs is described in prose: "`tabs` (VALUE)".
+            text.contains(&format!("`tabs` ({value})"))
+        } else {
+            text.lines().any(|l| {
+                let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+                cells.get(1) == Some(&format!("`{name}`").as_str())
+                    && cells.contains(&value.to_string().as_str())
+            })
+        };
+        assert!(found, "{name} = {value} is not in docs/isa.md");
+    }
+}
+
+#[test]
+fn csr_numbers_match_the_spec() {
+    use detrytus_core::isa::csr_by_name;
+    let text = spec();
+    let names =
+        ["edeleg", "ideleg", "hartid", "ptbr", "entropy", "cycle", "time", "instret", "fcsr"];
+    for name in names {
+        let number = csr_by_name(name).unwrap().to_string().replace('-', "\u{2212}");
+        let found = text.lines().any(|l| {
+            let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+            cells.get(1) == Some(&format!("`{name}`").as_str())
+                && cells.get(2) == Some(&number.as_str())
+        });
+        assert!(found, "{name} = {number} is not in docs/isa.md");
+    }
+}
