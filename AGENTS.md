@@ -59,9 +59,10 @@ and hides a failure.
 | `rust/core/src/privileged.rs` | traps, interrupts, CSRs, `tret`, `wfi` |
 | `rust/core/src/mmu.rs` | paged virtual memory: the walk, permission checks, the TLB |
 | `rust/core/src/bus.rs` | physical memory and the built-in devices |
+| `rust/core/src/harts.rs` | the hart controller: hart states, mailboxes, group sends, hot-plug events |
 | `rust/core/src/image.rs` | the `.dti` image format: reading and writing |
 | `rust/core/src/entropy.rs` | the seeded entropy source |
-| `rust/core/src/machine.rs` | the platform wired together |
+| `rust/core/src/machine.rs` | the platform wired together, and the harts run in rounds |
 | `rust/core/tests/` | the spec sync test |
 | `rust/asm/src/` | the assembler: `expr`, `source`, `operands`, `pseudo`, `assembler`, `disasm` |
 | `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `debug/` (engine and shell) |

@@ -2,11 +2,16 @@
 //!
 //! The sign of a physical page number picks the region: page 0 is the
 //! boot page (read-only to the CPU), positive pages up to `ram_pages`
-//! are RAM, negative pages are devices. The platform's two devices are
-//! built in: the console at page −1 and power control at page −2.
+//! are RAM, negative pages are devices. The platform's devices are built
+//! in: the console at page −1, power control at page −2 and the hart
+//! controller at pages −3 and −4.
+//!
+//! The bus also keeps each hart's `lr` reservation, so that a store by
+//! one hart breaks another's.
 
 use std::collections::{HashMap, VecDeque};
 
+use crate::harts::{HartController, LOCAL_PAGE, SLOTS_PAGE};
 use crate::trits::{TRYTE_MOD, TRYTE_TRITS, low, split_high};
 
 pub const PAGE_TRITS: u32 = 9;
@@ -63,6 +68,7 @@ enum Region {
     Ram,
     Console,
     Power,
+    Harts,
 }
 
 pub fn page_of(addr: i64) -> i64 {
@@ -75,11 +81,48 @@ pub struct Bus {
     pub ram_pages: i64,
     pages: HashMap<i64, Box<[i16]>>,
     pub console: Console,
+    pub harts: HartController,
+    /// The hart whose access this is: the machine sets it before each
+    /// hart's step.
+    pub current: i64,
+    /// Each hart's reserved word, by physical address.
+    reservations: HashMap<i64, i64>,
 }
 
 impl Bus {
+    /// A bus with one hart, hart 0.
     pub fn new(ram_pages: i64) -> Self {
-        Bus { ram_pages, pages: HashMap::new(), console: Console::default() }
+        Self::with_harts(ram_pages, &[0])
+    }
+
+    /// A bus whose hart controller has the harts in `present`.
+    pub fn with_harts(ram_pages: i64, present: &[i64]) -> Self {
+        Bus {
+            ram_pages,
+            pages: HashMap::new(),
+            console: Console::default(),
+            harts: HartController::new(present),
+            current: 0,
+            reservations: HashMap::new(),
+        }
+    }
+
+    /// Reserve the word at a physical address for the current hart.
+    pub fn reserve(&mut self, addr: i64) {
+        self.reservations.insert(self.current, addr);
+    }
+
+    /// Whether the current hart's reservation survives; it is used up
+    /// either way.
+    pub fn take_reservation(&mut self) -> bool {
+        self.reservations.remove(&self.current).is_some()
+    }
+
+    /// Break other harts' reservations on any word a store touches.
+    fn break_reservations(&mut self, addr: i64, width: u32) {
+        let (lo, hi) = if width == 3 { (addr - 1, addr + 1) } else { (addr, addr) };
+        let current = self.current;
+        self.reservations.retain(|&h, &mut r| h == current || r + 1 < lo || r - 1 > hi);
     }
 
     fn region(&self, addr: i64, access: Access) -> Result<Region, BusError> {
@@ -91,6 +134,7 @@ impl Bus {
             p if p > 0 && p <= self.ram_pages => Ok(Region::Ram),
             CONSOLE_PAGE if !device => Ok(Region::Console),
             POWER_PAGE if !device => Ok(Region::Power),
+            SLOTS_PAGE | LOCAL_PAGE if !device => Ok(Region::Harts),
             _ => Err(BusError::Fault(addr)),
         }
     }
@@ -137,6 +181,7 @@ impl Bus {
             Region::Console if addr == CONSOLE_IN => {
                 Ok(self.console.input.pop_front().unwrap_or(-1))
             }
+            Region::Harts => Ok(self.harts.read(addr, self.current)),
             Region::Console | Region::Power => Ok(0),
             Region::Boot | Region::Ram if width == 1 => Ok(self.get(addr)),
             Region::Boot | Region::Ram => Ok(self.get(addr - 1)
@@ -153,9 +198,14 @@ impl Bus {
                 }
             }
             Region::Power if addr == POWER_OFF => return Err(BusError::Halt(value)),
+            Region::Harts => self.harts.write(addr, self.current, value),
             Region::Power | Region::Boot => {}
-            Region::Ram if width == 1 => self.poke(addr, value),
+            Region::Ram if width == 1 => {
+                self.break_reservations(addr, 1);
+                self.poke(addr, value);
+            }
             Region::Ram => {
+                self.break_reservations(addr, 3);
                 let lo = low(value, TRYTE_TRITS);
                 let rest = (value - lo) / TRYTE_MOD;
                 let mid = low(rest, TRYTE_TRITS);
@@ -190,7 +240,8 @@ mod tests {
         assert_eq!(bus.read(0, 3, Access::Load), Ok(0));
         assert_eq!(bus.read(11 * PAGE, 3, Access::Load), Err(BusError::Fault(11 * PAGE)));
         assert_eq!(bus.read(CONSOLE_OUT, 3, Access::Fetch), Err(BusError::Fault(CONSOLE_OUT)));
-        assert_eq!(bus.read(-3 * PAGE, 3, Access::Load), Err(BusError::Fault(-3 * PAGE)));
+        assert_eq!(bus.read(-5 * PAGE, 3, Access::Load), Err(BusError::Fault(-5 * PAGE)));
+        assert_eq!(bus.read(-3 * PAGE, 3, Access::Fetch), Err(BusError::Fault(-3 * PAGE)));
         assert_eq!(bus.write(POWER_OFF, 3, 7), Err(BusError::Halt(7)));
     }
 
@@ -203,5 +254,23 @@ mod tests {
         bus.write(CONSOLE_OUT, 3, 'é' as i64).unwrap();
         bus.write(CONSOLE_OUT, 3, -5).unwrap(); // not a code point: ignored
         assert_eq!(bus.console.text(), "é");
+    }
+
+    #[test]
+    fn a_store_breaks_other_harts_reservations_only() {
+        let mut bus = Bus::new(10);
+        bus.current = 1;
+        bus.reserve(PAGE);
+        bus.current = 2;
+        bus.reserve(PAGE + 3);
+        bus.write(PAGE + 2, 1, 5).unwrap(); // hart 2's own word: kept
+        bus.current = 1;
+        assert!(bus.take_reservation(), "hart 2's store missed hart 1's word");
+        bus.reserve(PAGE);
+        bus.current = 2;
+        bus.write(PAGE + 1, 1, 5).unwrap();
+        assert!(bus.take_reservation());
+        bus.current = 1;
+        assert!(!bus.take_reservation());
     }
 }

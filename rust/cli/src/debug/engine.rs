@@ -128,7 +128,7 @@ impl Debugger {
     /// does not stop on it again.
     pub fn cont(&mut self, limit: u64) -> Stop {
         for n in 0..limit {
-            let pc = self.machine.hart.pc;
+            let pc = self.machine.boot_hart().pc;
             if n > 0 && self.breakpoints.values().any(|&a| a == pc) {
                 return Stop::new("breakpoint", self.breakpoint_message());
             }
@@ -141,7 +141,7 @@ impl Debugger {
 
     /// Step, treating a call as one step: run until it returns.
     pub fn next(&mut self) -> Stop {
-        let pc = self.machine.hart.pc;
+        let pc = self.machine.boot_hart().pc;
         let is_call = self
             .peek(pc, 3)
             .and_then(|w| isa::decode(w).ok())
@@ -153,7 +153,7 @@ impl Debugger {
         self.breakpoints.insert(0, return_to);
         let stop = self.cont(DEFAULT_LIMIT);
         self.breakpoints.remove(&0);
-        if stop.reason == "breakpoint" && self.machine.hart.pc == return_to {
+        if stop.reason == "breakpoint" && self.machine.boot_hart().pc == return_to {
             return Stop::step();
         }
         stop
@@ -176,9 +176,9 @@ impl Debugger {
         if let Some(code) = self.halted {
             return Some(Stop::new("halted", format!("the machine has powered off (exit {code})")));
         }
-        self.machine.hart.events = Some(Vec::new());
+        self.machine.boot_hart_mut().events = Some(Vec::new());
         let outcome = self.machine.step();
-        let events = self.machine.hart.events.take().unwrap_or_default();
+        let events = self.machine.boot_hart_mut().events.take().unwrap_or_default();
         if self.trace {
             for event in &events {
                 if let Event::Execute { pc, word } = *event {
@@ -192,7 +192,7 @@ impl Debugger {
                 self.halted = Some(code);
                 Some(Stop::new("halted", format!("powered off with exit code {code}")))
             }
-            Some(Outcome::Unhandled { cause, tval, pc, ring }) => {
+            Some(Outcome::Unhandled { cause, tval, pc, ring, .. }) => {
                 self.halted = Some(-1);
                 Some(Stop::new(
                     "unhandled",
@@ -259,7 +259,7 @@ impl Debugger {
     }
 
     fn breakpoint_message(&self) -> String {
-        let pc = self.machine.hart.pc;
+        let pc = self.machine.boot_hart().pc;
         let id = self.breakpoints.iter().find(|(id, a)| **a == pc && **id != 0).map(|(id, _)| *id);
         let label = id.map_or_else(|| "returned".to_string(), |id| format!("breakpoint {id}"));
         format!("{label} at {}", self.where_(pc))
@@ -314,7 +314,7 @@ impl Debugger {
     /// An assembler expression, where $name is a register and $pc the pc.
     pub fn evaluate(&self, text: &str) -> Result<i64, String> {
         let replaced = self.registers_in(text)?;
-        let pc = self.machine.hart.pc;
+        let pc = self.machine.boot_hart().pc;
         let value = evaluate(&replaced, &self.symbols, Some(pc as i128))
             .map_err(|e| e.message().to_string())?;
         i64::try_from(value).map_err(|_| format!("{value} is too large"))
@@ -361,10 +361,13 @@ impl Debugger {
             };
             let name: String = chars[i + 1..end].iter().collect();
             if name == "pc" {
-                out.push_str(&self.machine.hart.pc.to_string());
+                out.push_str(&self.machine.boot_hart().pc.to_string());
             } else {
-                let value =
-                    self.machine.hart.reg(&name).ok_or_else(|| format!("no register ${name}"))?;
+                let value = self
+                    .machine
+                    .boot_hart()
+                    .reg(&name)
+                    .ok_or_else(|| format!("no register ${name}"))?;
                 out.push_str(&format!("({value})"));
             }
             i = end;
@@ -389,7 +392,7 @@ impl Debugger {
 
     /// Memory as the current ring sees it, with no side effects.
     pub fn peek(&mut self, addr: i64, width: u32) -> Option<i64> {
-        let physical = self.machine.hart.probe(&mut self.machine.bus, addr)?;
+        let physical = self.machine.probe(0, addr)?;
         self.machine.bus.peek(physical, width)
     }
 

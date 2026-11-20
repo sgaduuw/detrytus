@@ -604,3 +604,30 @@ for review:
 
 Open: a wait-on-word instruction like Zawrs, and whether hart 0 may
 ever be removed (isa.md 13).
+
+### 2026-11-20 · Multiple harts: how the emulator runs them
+
+The hart controller of platform.md is built. Choices the proposal left
+to the emulator:
+
+- **Rounds.** Each step, the clock advances once and every running hart
+  takes one instruction, in hart-number order. Steps count rounds. This
+  keeps runs deterministic and the clock shared, and with one hart it is
+  exactly the old machine: every existing transcript and case passes
+  unchanged.
+- **`wfi` really waits.** With one hart, skipping time to the next timer
+  was enough. With several, a hart that ran on after `wfi` would rarely
+  line up with the others waiting, so time would never skip. A waiting
+  hart now sits rounds out until an interrupt is pending and enabled in
+  its `ie`; when all wait, time jumps to the next timer or hot-plug
+  change, and if nothing could wake them, they return at once.
+- **Interrupt routing.** The doorbell and hot-plug lines show in ring
+  +1's `ip`, or ring 0's when `ideleg` says so, as a trap routed by
+  `ideleg` would be.
+- **Reservations live on the bus.** Any store by another hart to a
+  reserved word breaks the reservation, so `lr`/`sc` loops are correct
+  across harts. A hart's own stores leave it alone.
+- **Stopped harts keep their last state** in the emulator, for tools to
+  read, though the ISA says they hold none: a start replaces it.
+- **Debugger.** It still shows and steps hart 0 only; selecting harts
+  and hot-plug commands are the next step.

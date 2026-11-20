@@ -21,6 +21,7 @@ checks each file's format, assembles each case and runs it on the core.
 | `cpu/` | integer and tritwise instructions, branches, memory, atomics |
 | `traps/` | traps, delegation, interrupts, the timer, single step |
 | `paging/` | translation, permission faults, superpages, the TLB |
+| `harts/` | several harts: starting and stopping, mailboxes, group sends, `wfi`, the shared clock, hot-plug |
 | `asm/` | the assembler: layout, local labels, sections, and its errors |
 | `examples/` | the programs in `examples/`, run as shipped |
 
@@ -61,6 +62,8 @@ expect.registers = { a1 = 7, a2 = -3 }
 | `ram_pages` | RAM size in pages; default 729 |
 | `max_steps` | step limit; default 100000 |
 | `input` | text queued on the console's input |
+| `harts` | harts present at reset, numbered outward from 0; default 1 |
+| `hotplug` | a list of `{ time = T, add = H }` or `{ time = T, remove = H }` |
 
 Exactly one of `program`, `source` and `sources`. Any key but `name`
 may also be given in `[defaults]`, and a case's own value wins. An
@@ -70,7 +73,7 @@ directory, so `.include` paths start there, and errors name the case:
 assembled text, prelude included.
 
 The machine is the platform of [`docs/platform.md`](../docs/platform.md),
-with its entropy source seeded with 1. The image is loaded and the hart
+with its entropy source seeded with 1. The image is loaded and hart 0
 starts at address 0 in ring +1.
 
 ### Expectations
@@ -81,7 +84,7 @@ Under `expect`. Exactly one outcome:
 |-----|--------------|
 | `exit_code` | power off with this code |
 | `step_limit = true` | still be running after `max_steps` steps |
-| `unhandled_cause` | stop on a trap with this cause, its bank's `tvec` being 0 |
+| `unhandled_cause` | stop on a trap with this cause, its bank's `tvec` being 0, on hart `unhandled_hart` (default 0) |
 | `asm_error` | fail to assemble, with exactly this message |
 
 `asm_error` is the message alone, without the file, line and source line
@@ -95,9 +98,9 @@ and, for a run, any of these checks on the state it stops in:
 | Key | Checks |
 |-----|--------|
 | `console` | the console's whole output, exactly |
-| `ring` | the hart's current ring |
-| `registers` | `{ name = value }`, by any register name (`a0`, `r1`, `sp`) |
-| `csrs` | `{ name = value }`, read with ring +1's privilege |
+| `ring` | hart 0's current ring |
+| `registers` | `{ name = value }`, hart 0's, by any register name (`a0`, `r1`, `sp`) |
+| `csrs` | `{ name = value }`, hart 0's, read with ring +1's privilege |
 | `words` | `{ "address" = value }`, the word centred on a physical address |
 | `trytes` | `{ "address" = value }`, a tryte at a physical address |
 

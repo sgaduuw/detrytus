@@ -6,9 +6,11 @@
 //! floating point and compressed bundles, which stop the machine as
 //! [`Stop::Unsupported`] rather than being approximated.
 //!
-//! Single-hart assumptions, as in Python: fences are no-ops, `wfi` skips
-//! time ahead to the next timer, and an `lr` reservation is lost only to
-//! a trap or a later `sc`.
+//! The machine steps harts one instruction at a time with no store
+//! buffering, so memory is sequentially consistent and fences are
+//! no-ops. The machine also keeps the clock and decides when a hart
+//! waiting in `wfi` runs again; an `lr` reservation is lost to a trap,
+//! a later `sc`, or another hart's store (kept by the bus).
 
 use std::collections::HashMap;
 
@@ -76,8 +78,16 @@ pub struct Hart {
     pub(crate) next_pc: i64,
     pub ring: i64,
     pub instret: i64,
+    /// The shared clock, as the machine last set it.
     pub time: i64,
     pub hartid: i64,
+    /// Set by `wfi`: the machine runs the hart again once an interrupt
+    /// is pending.
+    pub(crate) waiting: bool,
+    /// Interrupt lines from the hart controller, set by the machine:
+    /// software (the mailbox) and external (hot-plug events).
+    pub(crate) doorbell: bool,
+    pub(crate) external: bool,
     /// The trap banks of rings 0 and +1, indexed by ring.
     pub(crate) banks: [[i64; 9]; 2],
     /// CSRs that are plain storage.
@@ -95,16 +105,27 @@ pub struct Hart {
 }
 
 impl Hart {
-    /// A hart at reset: ring +1, pc 0. `seed` seeds the entropy CSR.
+    /// Hart 0 at reset: ring +1, pc 0. `seed` seeds the entropy CSR.
     pub fn new(seed: u32) -> Self {
+        Self::start(seed, 0, 0, 0)
+    }
+
+    /// Hart `hartid` in its reset state, starting at `pc` with `arg` in
+    /// a0 (docs/isa.md 5.4, 5.6).
+    pub fn start(seed: u32, hartid: i64, pc: i64, arg: i64) -> Self {
+        let mut regs = [0; 27];
+        regs[(isa::reg_number("a0").unwrap() + 13) as usize] = arg;
         Hart {
-            regs: [0; 27],
-            pc: 0,
-            next_pc: 0,
+            regs,
+            pc,
+            next_pc: pc,
             ring: 1,
             instret: 0,
             time: 0,
-            hartid: 0,
+            hartid,
+            waiting: false,
+            doorbell: false,
+            external: false,
             banks: [[0; 9]; 2],
             csrs: isa::stored_csrs().map(|n| (n, 0)).collect(),
             ptbr: Ptbr::decode(0),
@@ -164,8 +185,9 @@ impl Hart {
 
     // --- the fetch loop ----------------------------------------------------
 
+    /// Run one instruction, or take an interrupt, at the time the
+    /// machine has set.
     pub fn step(&mut self, bus: &mut Bus) -> Result<(), Stop> {
-        self.time += 1;
         let stepping = self.step_ring.take();
         if self.take_interrupt()? {
             return Ok(());
@@ -249,11 +271,16 @@ impl Hart {
     }
 
     fn load(&mut self, bus: &mut Bus, addr: i64, width: u32) -> Result<i64, Exception> {
+        Ok(self.load_at(bus, addr, width)?.0)
+    }
+
+    /// A load's value and the physical address it read.
+    fn load_at(&mut self, bus: &mut Bus, addr: i64, width: u32) -> Result<(i64, i64), Exception> {
         Self::aligned(addr, width)?;
         let physical = self.translate(bus, addr, mmu::Access::Load)?;
         let value = bus.read(physical, width, Access::Load).map_err(Self::bus_error(addr))?;
         self.record(Event::Access { addr, width, kind: AccessKind::Read });
-        Ok(value)
+        Ok((value, physical))
     }
 
     fn store(&mut self, bus: &mut Bus, addr: i64, width: u32, value: i64) -> Exec {
@@ -432,13 +459,15 @@ impl Hart {
         match d.op.kind {
             Kind::Lr => {
                 let addr = self.amo_addr(d)?;
-                let v = self.load(bus, addr, 3)?;
+                let (v, physical) = self.load_at(bus, addr, 3)?;
                 self.set_x(d.rd, v);
                 self.reservation = Some(addr);
+                bus.reserve(physical);
             }
             Kind::Sc => {
                 let addr = self.amo_addr(d)?;
-                let ok = self.reservation == Some(addr);
+                let held = bus.take_reservation();
+                let ok = self.reservation == Some(addr) && held;
                 self.reservation = None;
                 if ok {
                     self.store(bus, addr, 3, src)?;
@@ -462,8 +491,9 @@ impl Hart {
         match d.op.kind {
             Kind::Sys => Err(trap(isa::SYSCALL, 0)),
             Kind::Brk => Err(trap(isa::BREAKPOINT, self.pc)),
-            // A lone hart with no caches already satisfies these: nothing
-            // is reordered and the decode cache is keyed by word value.
+            // Harts run one instruction at a time with no caches, so these
+            // hold already: nothing is reordered, and the decode cache is
+            // keyed by word value.
             Kind::Fence | Kind::FenceI | Kind::Cclean | Kind::Cflush => Ok(()),
             Kind::Cinval => self.privileged(),
             Kind::Tret => self.tret(d),

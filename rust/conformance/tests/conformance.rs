@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use detrytus_asm::{AsmError, assemble};
 use detrytus_core::bus::Access;
 use detrytus_core::image;
-use detrytus_core::{Machine, Outcome};
+use detrytus_core::{Hotplug, Machine, Outcome};
 use toml::{Table, Value};
 
 const DEFAULT_RAM_PAGES: i64 = 729;
@@ -49,6 +49,8 @@ struct Case {
     ram_pages: i64,
     max_steps: i64,
     input: String,
+    harts: i64,
+    hotplug: Vec<(i64, Hotplug)>,
     expect: Table,
 }
 
@@ -61,7 +63,7 @@ fn text_of(raw: &Table, defaults: &Table, key: &str) -> String {
     setting(raw, defaults, key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-const CASE_KEYS: [&str; 9] = [
+const CASE_KEYS: [&str; 11] = [
     "name",
     "program",
     "prelude",
@@ -71,9 +73,12 @@ const CASE_KEYS: [&str; 9] = [
     "ram_pages",
     "max_steps",
     "input",
+    "harts",
+    "hotplug",
 ];
 const OUTCOMES: [&str; 4] = ["exit_code", "step_limit", "unhandled_cause", "asm_error"];
-const CHECKS: [&str; 6] = ["console", "registers", "csrs", "ring", "words", "trytes"];
+const CHECKS: [&str; 7] =
+    ["console", "registers", "csrs", "ring", "words", "trytes", "unhandled_hart"];
 
 fn unknown_keys(where_: &str, table: &Table, allowed: &[&str]) -> Result<(), String> {
     let mut unknown: Vec<&String> =
@@ -123,8 +128,34 @@ fn check_format(path: &str, data: &Table) -> Result<(), String> {
         if given != 1 {
             return Err(format!("{where_}: give exactly one of program, source, sources"));
         }
+        if expect.contains_key("unhandled_hart") && !expect.contains_key("unhandled_cause") {
+            return Err(format!("{where_}: unhandled_hart needs unhandled_cause"));
+        }
+        if let Some(plugs) = setting(raw, defaults, "hotplug") {
+            hotplug(plugs).map_err(|e| format!("{where_}: {e}"))?;
+        }
     }
     Ok(())
+}
+
+/// `hotplug = [{ time = 5, add = 1 }, { time = 9, remove = 1 }]`
+fn hotplug(value: &Value) -> Result<Vec<(i64, Hotplug)>, String> {
+    let bad =
+        || "hotplug entries are { time = T, add = H } or { time = T, remove = H }".to_string();
+    let entries = value.as_array().ok_or_else(bad)?;
+    entries
+        .iter()
+        .map(|e| {
+            let e = e.as_table().ok_or_else(bad)?;
+            unknown_keys("hotplug", e, &["time", "add", "remove"])?;
+            let time = e.get("time").and_then(Value::as_integer).ok_or_else(bad)?;
+            match (e.get("add"), e.get("remove")) {
+                (Some(h), None) => Ok((time, Hotplug::Add(h.as_integer().ok_or_else(bad)?))),
+                (None, Some(h)) => Ok((time, Hotplug::Remove(h.as_integer().ok_or_else(bad)?))),
+                _ => Err(bad()),
+            }
+        })
+        .collect()
 }
 
 fn load(file: &Path) -> Vec<Case> {
@@ -176,6 +207,8 @@ fn load(file: &Path) -> Vec<Case> {
                 max_steps: setting("max_steps")
                     .map_or(DEFAULT_MAX_STEPS, |v| v.as_integer().unwrap()),
                 input: text_of(raw, defaults, "input"),
+                harts: setting("harts").map_or(1, |v| v.as_integer().unwrap()),
+                hotplug: setting("hotplug").map_or_else(Vec::new, |v| hotplug(v).unwrap()),
                 expect: raw.get("expect").and_then(Value::as_table).cloned().unwrap_or_default(),
             }
         })
@@ -225,7 +258,9 @@ fn outcome_failure(expect: &Table, outcome: &Outcome) -> Option<String> {
     } else if expect.contains_key("step_limit") {
         matches!(outcome, Outcome::StepLimit)
     } else if expect.contains_key("unhandled_cause") {
-        matches!(outcome, Outcome::Unhandled { cause, .. } if *cause == int("unhandled_cause"))
+        let want_hart = expect.get("unhandled_hart").and_then(Value::as_integer).unwrap_or(0);
+        matches!(outcome, Outcome::Unhandled { cause, hart, .. }
+            if *cause == int("unhandled_cause") && *hart == want_hart)
     } else {
         false // expected an assembly error
     };
@@ -254,13 +289,13 @@ fn named_checks(machine: &mut Machine, expect: &Table, failures: &mut Vec<String
         })
     };
     for (name, value) in entries("csrs") {
-        let got = machine.hart.csr(&name).unwrap_or_else(|| panic!("no CSR {name}"));
+        let got = machine.boot_hart_mut().csr(&name).unwrap_or_else(|| panic!("no CSR {name}"));
         if got != value {
             failures.push(format!("csr {name}: wanted {value}, got {got}"));
         }
     }
     for (name, value) in entries("registers") {
-        let got = machine.hart.reg(&name).unwrap_or_else(|| panic!("no register {name}"));
+        let got = machine.boot_hart().reg(&name).unwrap_or_else(|| panic!("no register {name}"));
         if got != value {
             failures.push(format!("register {name}: wanted {value}, got {got}"));
         }
@@ -286,7 +321,12 @@ fn run(case: &Case) -> Vec<String> {
         Err(Ok(error)) => return assembly_failures(e, &error),
         Err(Err(problem)) => return vec![problem],
     };
-    let mut machine = Machine::new(case.ram_pages, 1);
+    let mut machine = Machine::with_harts(case.ram_pages, 1, case.harts);
+    for &(time, change) in &case.hotplug {
+        if let Err(problem) = machine.schedule(time, change) {
+            return vec![problem];
+        }
+    }
     for (addr, tryte) in trytes {
         machine.bus.poke(addr, tryte);
     }
@@ -300,9 +340,9 @@ fn run(case: &Case) -> Vec<String> {
         }
     }
     if let Some(want) = e.get("ring").and_then(Value::as_integer)
-        && machine.hart.ring != want
+        && machine.boot_hart().ring != want
     {
-        failures.push(format!("ring: wanted {want}, got {}", machine.hart.ring));
+        failures.push(format!("ring: wanted {want}, got {}", machine.boot_hart().ring));
     }
     named_checks(&mut machine, e, &mut failures);
     failures
@@ -362,6 +402,20 @@ fn malformed_case_files_are_refused() {
         ),
         (format!("{GOOD}expect.exit_code = 0\n{GOOD}expect.exit_code = 0\n"), "case names repeat"),
         (format!("{GOOD}expect.asm_error = \"e\"\nexpect.ring = 1\n"), "unknown keys [\"ring\"]"),
+        (
+            format!("{GOOD}expect.exit_code = 0\nexpect.unhandled_hart = 1\n"),
+            "unhandled_hart needs unhandled_cause",
+        ),
+        (
+            format!(
+                "{GOOD}expect.exit_code = 0\nhotplug = [{{ time = 1, add = 1, remove = 2 }}]\n"
+            ),
+            "hotplug entries are",
+        ),
+        (
+            format!("{GOOD}expect.exit_code = 0\nhotplug = [{{ time = 1, plug = 1 }}]\n"),
+            "unknown keys [\"plug\"]",
+        ),
     ];
     for (text, message) in cases {
         let problem = format_problem(&text).unwrap_or_else(|| panic!("accepted:\n{text}"));

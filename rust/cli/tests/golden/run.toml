@@ -723,3 +723,106 @@ stdout = ""
 stderr = '''
 detrytus: {tmp}/missing.s: No such file or directory
 '''
+
+[[case]]
+name = "harts example with stats"
+args = ["run", "--harts", "3", "--stats", "{root}/examples/harts.s"]
+status = 0
+stdout = '''
+hart +1 says hello
+hart -1 says hello
+'''
+stderr = '''
+
+detrytus: 244 steps, exit 0
+'''
+
+[[case]]
+name = "two harts traced"
+args = ["run", "--harts", "3", "--trace", "{here}/programs/harts.s"]
+status = 0
+stdout = "AB"
+stderr = '''
+[   0            0 r+1] addi s0, zero, -59022
+[   0            3 r+1] auipc t0, 0
+[   0            6 r+1] addi t0, t0, 36
+[   0            9 r+1] sw t0, -9(s0)
+[   0           12 r+1] addi t0, zero, 1
+[   0           15 r+1] sw t0, -3(s0)
+[   0           18 r+1] addi a0, zero, 65
+[   1           39 r+1] addi a0, zero, 66
+[   0           21 r+1] addi t6, zero, -19683
+[   1           42 r+1] addi t6, zero, -19683
+[   0           24 r+1] sw a0, 0(t6)
+[   1           45 r+1] sw a0, 0(t6)
+[   0           27 r+1] lw t0, -12(s0)
+[   1           48 r+1] addi t0, zero, -1
+[   0           30 r+1] bne t0, zero, 27
+[   1           51 r+1] addi t1, zero, -78732
+[   0           27 r+1] lw t0, -12(s0)
+[   1           54 r+1] sw t0, -3(t1)
+[   0           30 r+1] bne t0, zero, 27
+[   0           27 r+1] lw t0, -12(s0)
+[   0           30 r+1] bne t0, zero, 27
+[   0           33 r+1] addi t6, zero, -39366
+[   0           36 r+1] sw zero, 0(t6)
+'''
+
+[[case]]
+name = "an unhandled trap on another hart"
+args = ["run", "--harts", "3", "{here}/programs/hart-crash.s"]
+status = 70
+stdout = ""
+stderr = '''
+
+detrytus: unhandled trap: cause +5 at pc 21 in ring +1, tval 21 on hart 1
+'''
+
+[[case]]
+name = "harts out of range"
+args = ["run", "--harts", "730", "{here}/programs/harts.s"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...
+detrytus: --harts takes 1 to 729
+'''
+
+[[case]]
+name = "hart 0 cannot be unplugged"
+args = ["run", "--unplug", "5:0", "{here}/programs/harts.s"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...
+detrytus: hart 0 cannot be removed
+'''
+
+[[case]]
+name = "plug needs time and hart"
+args = ["run", "--plug", "5", "{here}/programs/harts.s"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...
+detrytus: --plug needs TIME:HART
+'''
+
+[[case]]
+name = "a plugged hart can be started"
+args = ["run", "--plug", "4:1", "--stats", "{here}/programs/harts.s"]
+status = 0
+stdout = "AB"
+stderr = '''
+
+detrytus: 17 steps, exit 0
+'''
