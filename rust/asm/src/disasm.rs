@@ -1,5 +1,5 @@
-//! Disassembler: one instruction word back to assembly text. Mirrors
-//! `detrytus/disasm.py`.
+//! Disassembler: one instruction word back to assembly text, ported
+//! from the original Python tools.
 
 use detrytus_core::isa::{self, Decoded, Format};
 use detrytus_core::trits::{field, low};

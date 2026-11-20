@@ -1,8 +1,8 @@
 //! One hart: registers, the fetch loop and what each instruction does.
 //! Traps, CSRs and interrupts are in `privileged.rs`.
 //!
-//! Mirrors `detrytus/cpu.py` and `detrytus/execute.py`: every integer,
-//! logic, memory, atomic, control and system instruction. Not yet:
+//! Every integer, logic, memory, atomic, control and system instruction
+//! (docs/isa.md 7), ported from the original Python core. Not yet:
 //! floating point and compressed bundles, which stop the machine as
 //! [`Stop::Unsupported`] rather than being approximated.
 //!
@@ -63,7 +63,7 @@ pub enum AccessKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     /// An instruction was fetched and decoded at pc, about to run.
-    Execute { pc: i64 },
+    Execute { pc: i64, word: i64 },
     /// A completed data access, at a virtual address.
     Access { addr: i64, width: u32, kind: AccessKind },
     /// A trap was entered (or found no handler).
@@ -194,7 +194,7 @@ impl Hart {
             BusError::Halt(code) => Exception::Stop(Stop::Halt(code)),
         })?;
         let d = self.decode(word)?;
-        self.record(Event::Execute { pc });
+        self.record(Event::Execute { pc, word });
         self.next_pc = wrap(pc + 3);
         self.run(bus, &d)?;
         self.pc = self.next_pc;

@@ -1,5 +1,5 @@
 //! The detrytus assembler in Rust (docs/assembler.md). A port of the
-//! Python assembler in `detrytus/asm/`, held to the same output: the
+//! Python assembler it replaced, held to the same output: the
 //! same image bytes and the same error messages for the same source
 //! (docs/rust-plan.md, phase 5).
 

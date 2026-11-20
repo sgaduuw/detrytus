@@ -1,5 +1,5 @@
 //! The debugger's engine: run control, breakpoints, watchpoints,
-//! inspection. Mirrors `detrytus/debug/engine.py`.
+//! inspection. Ported from the original Python tools.
 //!
 //! It drives a Machine one step at a time, with the hart recording what
 //! each step did, and decides when to stop. Program output and trace
@@ -181,9 +181,8 @@ impl Debugger {
         let events = self.machine.hart.events.take().unwrap_or_default();
         if self.trace {
             for event in &events {
-                if let Event::Execute { pc } = event {
-                    let (_, text) = self.disassemble(*pc, 1).remove(0);
-                    println!("   {:>24}  {text}", self.where_(*pc));
+                if let Event::Execute { pc, word } = *event {
+                    println!("   {:>24}  {}", self.where_(pc), disassemble(word, Some(pc)));
                 }
             }
         }

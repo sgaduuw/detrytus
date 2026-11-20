@@ -1,5 +1,5 @@
 //! Assembler expressions: integers, symbols, and + - * / % with
-//! parentheses (docs/assembler.md). Mirrors `detrytus/expr.py`.
+//! parentheses (docs/assembler.md). Ported from the original Python tools.
 //!
 //! Number forms: decimal (42), balanced ternary (0t+0-), hexadecimal
 //! (0x2a) and character literals ('a'). '.' is the current address.

@@ -6,21 +6,6 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
-      - run: uv sync
-      - name: Lint
-        run: uv run ruff check detrytus tests
-      - name: Format
-        run: uv run ruff format --check detrytus tests
-      - name: Types
-        run: uv run mypy
-      - name: Test
-        run: uv run pytest
-
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -33,20 +18,3 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
-
-  bindings:
-    runs-on: ubuntu-latest
-    env:
-      DETRYTUS_REQUIRE_RUST: "1"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
-      - name: Toolchain
-        run: rustup toolchain install stable --profile minimal
-      - run: uv sync
-      - name: Build the Rust backend
-        run: uv pip install ./rust/py
-      - name: Build the Rust command
-        run: cargo build -p detrytus-cli
-      - name: Both cores, case by case and step by step; both commands
-        run: uv run pytest tests/test_conformance.py tests/test_differential.py tests/test_cli_parity.py

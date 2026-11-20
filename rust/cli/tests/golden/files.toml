@@ -1,0 +1,100 @@
+# Includes, merged files, damaged images and illegal encodings.
+# Recorded from the Rust command, after checking the Python one printed
+# exactly the same (rust/cli/tests/golden.rs explains the format).
+
+[[case]]
+name = "includes resolve beside the including file"
+args = ["asm", "{here}/programs/include/main.s"]
+status = 0
+stdout = '''
+                     0  000000000000000000000+0++-+  addi a0, zero, 0              start:  li    a0, 0
+                     3  00000000000000+-00+00+0++-+  addi a0, a0, 2                addi  a0, a0, 2
+                     6  00000000000000+000+00+0++-+  addi a0, a0, 3                more:   addi  a0, a0, 3
+                     9  00000-+000000000000+++0++-+  addi t6, zero, -39366         li    t6, -39366
+                    12  0000000000000000+++00+000--  sw a0, 0(t6)                  sw    a0, 0(t6)
+'''
+stderr = ""
+
+[[case]]
+name = "an included program runs"
+args = ["run", "{here}/programs/include/main.s"]
+status = 5
+stdout = ""
+stderr = ""
+
+[[case]]
+name = "an include cycle"
+args = ["asm", "{here}/programs/include/cycle.s"]
+status = 65
+stdout = ""
+stderr = '''
+detrytus: {here}/programs/include/cycle.s:2: cycle.s includes itself
+    .include "cycle.s"
+'''
+
+[[case]]
+name = "an error inside an included file"
+args = ["asm", "{here}/programs/include/broken.s"]
+status = 65
+stdout = ""
+stderr = '''
+detrytus: {here}/programs/include/lib/bad.s:2: unknown instruction 'frob'
+    frob  a0
+'''
+
+[[case]]
+name = "a name two files define differently is dropped"
+args = ["debug", "{here}/programs/first.s", "{here}/programs/second.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+p only_first
+p only_second
+p start
+x 3000 1
+c
+'''
+status = 0
+stdout = '''
+3  0t0000000000000000000000000+0
+3003  0t0000000000000000000++0+0+-0
+error: undefined symbol 'start'
+  3000 <only_first+2997>               34  0t00000000000000000000000++-+
+stopped: powered off with exit code 1
+'''
+stderr = ""
+
+[[case]]
+name = "a truncated image"
+args = ["run", "{here}/programs/truncated.dti"]
+status = 65
+stdout = ""
+stderr = '''
+detrytus: image is truncated
+'''
+
+[[case]]
+name = "illegal encodings disassemble with the reason"
+args = ["asm", "-"]
+stdin = '''
+.word 0
+.word 129684970
+.word 190524
+.word -4238186
+.word 960
+.word 7277
+.word 213
+.word 3487683469
+.word 100
+'''
+status = 0
+stdout = '''
+                     0  000000000000000000000000000  .word 0  # illegal: opcode 0  .word 0
+                     3  000000000+0000+00+-00+0000+  .word 129684970  # illegal: fn must be zero  .word 129684970
+                     6  000000000000000+0+-00+00++0  .word 190524  # illegal: rs2 must be zero  .word 190524
+                     9  000000000000-0+00+-00+0-0++  .word -4238186  # illegal: ordering trits must be 0 or +  .word -4238186
+                    12  00000000000000000000++00--0  .word 960  # illegal: reserved branch condition 4  .word 960
+                    15  000000000000000000+0+000---  .word 7277  # illegal: trits 7..6 must be zero  .word 7277
+                    18  000000000000000000000+0-0-0  .word 213  # illegal: rd must be zero  .word 213
+                    21  000000+000000+--0+-00+0--++  .word 3487683469  # illegal: imm above the CSR number must be zero  .word 3487683469
+                    24  0000000000000000000000++-0+  .word 100  # illegal: opcode 100  .word 100
+'''
+stderr = ""

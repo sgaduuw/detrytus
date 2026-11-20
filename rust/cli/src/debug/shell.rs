@@ -1,6 +1,6 @@
-//! The interactive debugger: a command shell over the engine. Mirrors
-//! `detrytus/debug/shell.py`, including how Python's `cmd.Cmd` parses a
-//! line and prints help, so both debuggers answer every command alike.
+//! The interactive debugger: a command shell over the engine. It copies
+//! the Python debugger it replaced, down to how Python's `cmd.Cmd` parses
+//! a line and prints help, so its sessions read as they always did.
 
 use std::collections::BTreeSet;
 use std::io::{BufRead, Write};

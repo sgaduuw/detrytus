@@ -1,5 +1,5 @@
 //! Paged virtual memory: the page walk, permission checks and the TLB
-//! (docs/isa.md 9). Mirrors `detrytus/mmu.py`.
+//! (docs/isa.md 9). Ported from the original Python tools.
 //!
 //! The TLB keeps every successful translation until `fence.vm` removes
 //! it and never evicts on its own: the strictest behaviour the spec

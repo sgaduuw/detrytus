@@ -1,6 +1,6 @@
 //! Integer and tritwise operations, as pure functions of word values.
 //! Each implements one rule of docs/isa.md section 7 and returns a value
-//! already in word range. Mirrors `detrytus/alu.py`.
+//! already in word range. Ported from the original Python tools.
 
 use crate::trits::{WORD_MOD, WORD_TRITS, field, low, pow3, split_high, wrap, wrap_wide};
 

@@ -1,9 +1,10 @@
 //! Runs the conformance suite (conformance/, format in its README) on
 //! the Rust assembler and core.
 //!
-//! Cases are read from the same TOML files as the Python runner and
-//! assembled here. The Python runner validates the files' format, so
-//! this one trusts it.
+//! Cases are TOML files under conformance/ (format in its README); this
+//! runner checks the format strictly, so a misspelt key or a case
+//! without an outcome fails instead of passing unchecked, then
+//! assembles each case and runs it.
 
 use std::collections::HashSet;
 use std::fs;
@@ -60,8 +61,77 @@ fn text_of(raw: &Table, defaults: &Table, key: &str) -> String {
     setting(raw, defaults, key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
+const CASE_KEYS: [&str; 9] = [
+    "name",
+    "program",
+    "prelude",
+    "postlude",
+    "source",
+    "sources",
+    "ram_pages",
+    "max_steps",
+    "input",
+];
+const OUTCOMES: [&str; 4] = ["exit_code", "step_limit", "unhandled_cause", "asm_error"];
+const CHECKS: [&str; 6] = ["console", "registers", "csrs", "ring", "words", "trytes"];
+
+fn unknown_keys(where_: &str, table: &Table, allowed: &[&str]) -> Result<(), String> {
+    let mut unknown: Vec<&String> =
+        table.keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort();
+    Err(format!("{where_}: unknown keys {unknown:?}"))
+}
+
+/// The format's rules, which the Python runner used to enforce.
+fn check_format(path: &str, data: &Table) -> Result<(), String> {
+    unknown_keys(path, data, &["defaults", "case"])?;
+    let empty = Table::new();
+    let defaults = data.get("defaults").and_then(Value::as_table).unwrap_or(&empty);
+    let default_keys: Vec<&str> = CASE_KEYS.iter().copied().filter(|k| *k != "name").collect();
+    unknown_keys(&format!("{path} [defaults]"), defaults, &default_keys)?;
+    let cases = data.get("case").and_then(Value::as_array).filter(|c| !c.is_empty());
+    let cases = cases.ok_or(format!("{path}: no cases"))?;
+    let mut names = std::collections::HashSet::new();
+    for raw in cases {
+        let raw = raw.as_table().ok_or(format!("{path}: a case is not a table"))?;
+        let name = raw.get("name").and_then(Value::as_str).filter(|n| !n.contains('/'));
+        let name = name.ok_or(format!("{path}: every case needs a name, without '/'"))?;
+        let where_ = format!("{path}: case {name:?}");
+        if !names.insert(name) {
+            return Err(format!("{path}: case names repeat"));
+        }
+        let mut keys: Vec<&str> = CASE_KEYS.to_vec();
+        keys.push("expect");
+        unknown_keys(&where_, raw, &keys)?;
+        let expect = raw.get("expect").and_then(Value::as_table).unwrap_or(&empty);
+        if expect.contains_key("asm_error") {
+            unknown_keys(&format!("{where_} [expect]"), expect, &["asm_error", "asm_error_line"])?;
+        } else {
+            let allowed: Vec<&str> = OUTCOMES.iter().chain(&CHECKS).copied().collect();
+            unknown_keys(&format!("{where_} [expect]"), expect, &allowed)?;
+        }
+        if OUTCOMES.iter().filter(|o| expect.contains_key(**o)).count() != 1 {
+            return Err(format!("{where_}: give exactly one of {OUTCOMES:?}"));
+        }
+        let given = ["program", "source", "sources"]
+            .iter()
+            .filter(|k| setting(raw, defaults, k).is_some())
+            .count();
+        if given != 1 {
+            return Err(format!("{where_}: give exactly one of program, source, sources"));
+        }
+    }
+    Ok(())
+}
+
 fn load(file: &Path) -> Vec<Case> {
     let data: Table = fs::read_to_string(file).unwrap().parse().unwrap();
+    if let Err(problem) = check_format(&file.display().to_string(), &data) {
+        panic!("{problem}");
+    }
     let empty = Table::new();
     let defaults = data.get("defaults").and_then(Value::as_table).unwrap_or(&empty);
     let relative = file.strip_prefix(root()).unwrap().with_extension("");
@@ -253,4 +323,48 @@ fn conformance_suite() {
     }
     println!("{} passed, {} failed", cases.len() - problems.len(), problems.len());
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+// --- the format checks themselves ------------------------------------------
+
+fn format_problem(text: &str) -> Option<String> {
+    check_format("cases.toml", &text.parse::<Table>().unwrap()).err()
+}
+
+const GOOD: &str = "[[case]]\nname = \"x\"\nprogram = \"nop\"\n";
+
+#[test]
+fn a_well_formed_case_passes_the_format_check() {
+    assert_eq!(format_problem(&format!("{GOOD}expect.exit_code = 0\n")), None);
+    let asm = "[[case]]\nname = \"x\"\nprogram = \"frob\"\nexpect.asm_error = \"e\"\nexpect.asm_error_line = 1\n";
+    assert_eq!(format_problem(asm), None);
+}
+
+#[test]
+fn malformed_case_files_are_refused() {
+    let cases = [
+        (format!("{GOOD}expect.exit_code = 0\nspeed = 1\n"), "unknown keys [\"speed\"]"),
+        (format!("{GOOD}expect.exit_cod = 0\n"), "unknown keys [\"exit_cod\"]"),
+        (GOOD.to_string(), "exactly one of [\"exit_code\""),
+        (
+            format!("{GOOD}expect.exit_code = 0\nexpect.step_limit = true\n"),
+            "exactly one of [\"exit_code\"",
+        ),
+        (
+            format!("{GOOD}source = \"a.s\"\nexpect.exit_code = 0\n"),
+            "exactly one of program, source",
+        ),
+        ("[[case]]\nprogram = \"nop\"\nexpect.exit_code = 0\n".to_string(), "needs a name"),
+        ("[defaults]\nram_pages = 3\n".to_string(), "no cases"),
+        (
+            format!("[defaults]\nname = \"x\"\n{GOOD}expect.exit_code = 0\n"),
+            "[defaults]: unknown keys",
+        ),
+        (format!("{GOOD}expect.exit_code = 0\n{GOOD}expect.exit_code = 0\n"), "case names repeat"),
+        (format!("{GOOD}expect.asm_error = \"e\"\nexpect.ring = 1\n"), "unknown keys [\"ring\"]"),
+    ];
+    for (text, message) in cases {
+        let problem = format_problem(&text).unwrap_or_else(|| panic!("accepted:\n{text}"));
+        assert!(problem.contains(message), "{problem:?} lacks {message:?}");
+    }
 }

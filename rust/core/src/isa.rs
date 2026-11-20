@@ -1,8 +1,8 @@
 //! The instruction set as data: opcodes, formats, fields, registers and
 //! trap causes, and decoding with the spec's legality rules.
 //!
-//! Mirrors `detrytus/isa.py` and `docs/isa.md` section 7. The opcode
-//! table is checked against the spec by `tests/spec_sync.rs`.
+//! The table is `docs/isa.md` section 7, and `tests/spec_sync.rs`
+//! checks the two agree.
 
 use crate::trits::{field, low};
 

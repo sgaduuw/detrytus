@@ -16,3 +16,5 @@ path = "src/main.rs"
 detrytus-asm = { version = "0.1.0", path = "../asm" }
 detrytus-core = { version = "0.1.0", path = "../core" }
 
+[dev-dependencies]
+toml = "0.8"

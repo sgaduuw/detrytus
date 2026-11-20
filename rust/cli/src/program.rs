@@ -1,5 +1,5 @@
 //! Files to a loadable program: assembly sources, `.dti` images, or `-`
-//! for source on stdin, merged as `detrytus/image.py` merges them.
+//! for source on stdin, merged as the Python tools merged them.
 
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read;

@@ -1,5 +1,5 @@
 //! Source text to statements: comments, labels, includes, operands.
-//! Mirrors `detrytus/asm/source.py`.
+//! Ported from the original Python tools.
 //!
 //! Two transformations happen here, before layout sees anything:
 //! .include splices another file's statements in place, and numeric

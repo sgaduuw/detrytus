@@ -1,5 +1,5 @@
 //! The two passes: lay out statements and bind labels, then encode.
-//! Mirrors `detrytus/asm/core.py`.
+//! Ported from the original Python tools.
 //!
 //! A statement's size must not change between the passes, so anything
 //! whose size depends on a value (li) decides its size in pass one,

@@ -1,12 +1,14 @@
-//! The detrytus command line in Rust (docs/rust-plan.md, phase 5).
+//! The `detrytus` command: `asm`, `run` and `debug`.
 //!
-//! `detrytus asm` and `detrytus run`, behaving as the Python command
-//! does: the same output, messages and exit statuses for the same files.
-//! The debugger is still Python.
+//! Its output, messages and exit statuses are those of the Python
+//! command it replaced (docs/rust-plan.md), held there by the recorded
+//! transcripts in tests/golden/.
 
 use std::io::Write;
 use std::process::ExitCode;
 
+use detrytus_asm::disasm::disassemble;
+use detrytus_core::hart::Event;
 use detrytus_core::trits::low;
 use detrytus_core::{Machine, Outcome};
 
@@ -16,7 +18,7 @@ mod program;
 use program::{Loaded, load, load_one, strerror};
 
 const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] FILE...
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
@@ -35,6 +37,7 @@ struct RunArgs {
     ram_pages: i64,
     max_steps: u64,
     stats: bool,
+    trace: bool,
 }
 
 /// A failure that ends the command: its message and exit status.
@@ -61,14 +64,20 @@ fn number<T: std::str::FromStr>(flag: &str, value: Option<String>) -> Result<T, 
 }
 
 fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
-    let mut run =
-        RunArgs { files: Vec::new(), ram_pages: 729, max_steps: 10_000_000, stats: false };
+    let mut run = RunArgs {
+        files: Vec::new(),
+        ram_pages: 729,
+        max_steps: 10_000_000,
+        stats: false,
+        trace: false,
+    };
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--ram-pages" => run.ram_pages = number(&arg, args.next())?,
             "--max-steps" => run.max_steps = number(&arg, args.next())?,
             "--stats" => run.stats = true,
+            "--trace" => run.trace = true,
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -150,8 +159,18 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     let mut stdout = std::io::stdout();
     let (mut done, mut printed) = (0u64, 0usize);
     loop {
-        let chunk = CHUNK.min(args.max_steps - done);
+        // Tracing runs one step at a time, printing what each executed.
+        let chunk = if args.trace { 1 } else { CHUNK.min(args.max_steps - done) };
+        let ring = machine.hart.ring;
+        if args.trace {
+            machine.hart.events = Some(Vec::new());
+        }
         let outcome = machine.run(chunk);
+        for event in machine.hart.events.take().unwrap_or_default() {
+            if let Event::Execute { pc, word } = event {
+                eprintln!("[{pc:>12} r{ring:+}] {}", disassemble(word, Some(pc)));
+            }
+        }
         let text = machine.bus.console.text();
         // Output is best effort, as in Python: a closed pipe ends nothing.
         let _ = stdout.write_all(&text.as_bytes()[printed..]).and_then(|()| stdout.flush());
