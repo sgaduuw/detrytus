@@ -42,8 +42,32 @@ pub(crate) fn trap(cause: i64, tval: i64) -> Exception {
     Exception::Trap { cause, tval }
 }
 
-fn unsupported(what: &str) -> Exception {
-    Exception::Stop(Stop::Unsupported(format!("{what} is not implemented in the Rust core yet")))
+/// Something neither core implements yet; the message is the Python
+/// core's, word for word.
+fn unsupported(message: &str) -> Exception {
+    Exception::Stop(Stop::Unsupported(message.to_string()))
+}
+
+/// What a data access did, for a debugger's watchpoints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessKind {
+    Read,
+    Write,
+    /// An atomic read-modify-write.
+    Update,
+}
+
+/// Something that happened during a step, recorded when
+/// [`Hart::events`] is on: what a debugger needs to stop at
+/// watchpoints and caught traps, and to trace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// An instruction was fetched and decoded at pc, about to run.
+    Execute { pc: i64 },
+    /// A completed data access, at a virtual address.
+    Access { addr: i64, width: u32, kind: AccessKind },
+    /// A trap was entered (or found no handler).
+    Trap { cause: i64, tval: i64, tpc: i64 },
 }
 
 pub struct Hart {
@@ -65,6 +89,9 @@ pub struct Hart {
     pub(crate) step_ring: Option<i64>,
     pub(crate) entropy: Entropy,
     cache: HashMap<i64, Result<Decoded, isa::Illegal>>,
+    /// When Some, every [`Event`] is appended here; a debugger drains it
+    /// after each step. None (the default) costs nothing.
+    pub events: Option<Vec<Event>>,
 }
 
 impl Hart {
@@ -86,6 +113,7 @@ impl Hart {
             step_ring: None,
             entropy: Entropy::new(seed),
             cache: HashMap::new(),
+            events: None,
         }
     }
 
@@ -158,7 +186,7 @@ impl Hart {
 
     fn execute(&mut self, bus: &mut Bus, pc: i64) -> Exec {
         if low(pc, 1) != 0 {
-            return Err(unsupported("compressed bundles (slot B)"));
+            return Err(unsupported("compressed bundles (slot B) are not implemented"));
         }
         let physical = self.translate(bus, pc, mmu::Access::Fetch)?;
         let word = bus.read(physical, 3, Access::Fetch).map_err(|e| match e {
@@ -166,6 +194,7 @@ impl Hart {
             BusError::Halt(code) => Exception::Stop(Stop::Halt(code)),
         })?;
         let d = self.decode(word)?;
+        self.record(Event::Execute { pc });
         self.next_pc = wrap(pc + 3);
         self.run(bus, &d)?;
         self.pc = self.next_pc;
@@ -174,7 +203,7 @@ impl Hart {
 
     fn decode(&mut self, word: i64) -> Result<Decoded, Exception> {
         if low(word, 5) == isa::BUNDLE_OPCODE {
-            return Err(unsupported("compressed bundles"));
+            return Err(unsupported("compressed bundles are not implemented"));
         }
         match self.cache.entry(word).or_insert_with(|| isa::decode(word)) {
             Ok(d) => Ok(*d),
@@ -213,16 +242,36 @@ impl Hart {
         }
     }
 
+    pub(crate) fn record(&mut self, event: Event) {
+        if let Some(events) = &mut self.events {
+            events.push(event);
+        }
+    }
+
     fn load(&mut self, bus: &mut Bus, addr: i64, width: u32) -> Result<i64, Exception> {
         Self::aligned(addr, width)?;
         let physical = self.translate(bus, addr, mmu::Access::Load)?;
-        bus.read(physical, width, Access::Load).map_err(Self::bus_error(addr))
+        let value = bus.read(physical, width, Access::Load).map_err(Self::bus_error(addr))?;
+        self.record(Event::Access { addr, width, kind: AccessKind::Read });
+        Ok(value)
     }
 
     fn store(&mut self, bus: &mut Bus, addr: i64, width: u32, value: i64) -> Exec {
         Self::aligned(addr, width)?;
         let physical = self.translate(bus, addr, mmu::Access::Store)?;
-        bus.write(physical, width, value).map_err(Self::bus_error(addr))
+        bus.write(physical, width, value).map_err(Self::bus_error(addr))?;
+        self.record(Event::Access { addr, width, kind: AccessKind::Write });
+        Ok(())
+    }
+
+    /// Where addr points for the current ring, without side effects: no
+    /// permission check, nothing cached, None where nothing is mapped.
+    /// For debuggers.
+    pub fn probe(&self, bus: &mut Bus, addr: i64) -> Option<i64> {
+        if self.ring > 0 || self.ptbr.mode != 1 {
+            return Some(addr);
+        }
+        mmu::probe(bus, addr, self.ptbr)
     }
 
     /// Atomic read-modify-write of a word; returns the old value. One
@@ -238,6 +287,7 @@ impl Hart {
         let physical = self.translate(bus, addr, mmu::Access::Amo)?;
         let old = bus.read(physical, 3, Access::Load).map_err(Self::bus_error(addr))?;
         bus.write(physical, 3, update(old)).map_err(Self::bus_error(addr))?;
+        self.record(Event::Access { addr, width: 3, kind: AccessKind::Update });
         Ok(old)
     }
 

@@ -9,7 +9,7 @@ pub mod error;
 pub mod expr;
 pub mod operands;
 pub mod pseudo;
-mod pyrepr;
+pub mod pyrepr;
 pub mod source;
 pub mod text;
 

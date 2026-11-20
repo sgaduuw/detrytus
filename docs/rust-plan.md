@@ -113,15 +113,16 @@ green.
    against 16.7 s on Python). A differential runner steps the
    conformance programs and 300 random programs on both cores and
    compares their whole state after every step; it runs in CI.
-5. **Rust command line.** `detrytus-cli run` for `.dti` images (done:
-   `rust/cli`, binary `detrytus`), then the assembler ported to Rust
+5. **Rust command line** (done). `detrytus-cli run` for `.dti` images
+   (`rust/cli`, binary `detrytus`), then the assembler ported to Rust
    with the assembler tests moved into the conformance suite where they
-   can be (done: `rust/asm`, and `detrytus asm`; `run` takes sources),
-   then the debugger. Each tool switches over when it passes the same
+   can be (`rust/asm`, and `detrytus asm`; `run` takes sources), then
+   the debugger (`detrytus debug`, its stopping points driven by events
+   the core records). Each tool switches over when it passes the same
    cases as its Python version: `tests/test_cli_parity.py` requires the
    same stdout, stderr, exit status and image bytes from both commands
-   on every conformance program, the examples and a corpus of broken
-   source.
+   on every conformance program, the examples, a corpus of broken
+   source and scripted debugger sessions.
 6. **Switchover.** Rust becomes the default; the Python core, bindings
    and tools are removed once nothing depends on them. trylobite moves
    to the Rust command line.

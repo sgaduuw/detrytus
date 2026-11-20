@@ -224,3 +224,91 @@ def test_a_missing_file_is_reported_alike(tmp_path):
         assert py_status == rs_status == 66
         assert missing in py_err
         assert rs_err.startswith(f"detrytus: {missing}: ")
+
+
+# --- the debugger --------------------------------------------------------------
+
+DEBUGGEE = """
+        .equ  POWER_OFF, -39366
+        .equ  DATA, 19683
+        la    t0, handler
+        csrw  mtvec, t0
+start:
+begin:  li    s0, DATA              # two labels: source order and name order differ
+        li    a0, 5
+        call  double
+        la    t2, double
+        jalr  ra, 0(t2)             # a call that is not jal
+        sw    a0, 0(s0)
+        lw    a1, 0(s0)
+        sys
+after:  li    t0, POWER_OFF
+        sw    a1, 0(t0)
+double: add   a0, a0, a0
+        ret
+handler:
+        csrr  t1, mtpc
+        addi  t1, t1, 3
+        csrw  mtpc, t1
+        tret
+"""
+
+# Sessions that use every command, its aliases and its errors.
+SESSIONS = {
+    "basics": "regs\nstep\ns 3\nn\ninfo\nregs\nc\nstep\nregs",
+    "breaks": "b double\nb after\ninfo\nc\nregs\nc\nc\nd 1\ninfo\nd\ninfo\nc",
+    "watch": "w DATA\nw DATA+1 r\nwatch DATA rw\ninfo\nc\nc\nc\nc",
+    "catch": "catch syscall\nc\nregs\ncatch off\ncatch 4 -1 timer\ninfo\ncatch all\nc\n"
+    "catch\ninfo",
+    "inspect": "p 1+2\np $a0\np $pc + 3\np $r-1\np $nope\np DATA * 2\nx 0\nx start 2\n"
+    "x -19683 1\ndisas\ndisas start 3\ncsr mtvec\ncsr ptbr\ncsr 12345\ncsr\np",
+    "errors": "s x\nd 99\nwatch\nb\ntrace maybe\nbogus\nStep\n!x\n?\nhelp\nhelp step\n"
+    "help s\nhelp EOF\nhelp nothing\ncatch foo\nx\nexamine 1 2 3",
+    "trace": "trace on\ns 4\ntrace off\ns\nrestart\nb double\nc\nn\nn\nn",
+    "restart": "w DATA\nc\nrestart\ninfo\nc\nc\nc\nstep",
+    "quit": "s\nq\ns",
+    "next": "n\nn\nn\nn\nn\nn\nn\nn\nn\nregs",
+}
+
+# A program with no trap handler: it stops on an unhandled trap.
+CRASH = "start:  li    a0, 1\n        brk\n        li    a0, 2\n"
+
+
+def _debuggees(tmp_path: Path) -> dict[str, list[str]]:
+    program = tmp_path / "debuggee.s"
+    program.write_text(DEBUGGEE)
+    crash = tmp_path / "crash.s"
+    crash.write_text(CRASH)
+    # The debuggee as an image: its labels come back in name order.
+    image = tmp_path / "debuggee.dti"
+    subprocess.run(
+        [sys.executable, "-m", "detrytus.cli", "asm", str(program), "-o", str(image)],
+        check=True,
+    )
+    return {
+        "debuggee": [str(program)],
+        "image": [str(image)],
+        "crash": [str(crash)],
+        "bsearch": [str(ROOT / "examples" / "bsearch.s")],
+        "paging": [str(ROOT / "examples" / "paging.s")],
+    }
+
+
+@pytest.mark.parametrize("session", SESSIONS)
+@pytest.mark.parametrize("target", ["debuggee", "image", "crash", "bsearch", "paging"])
+def test_debug_sessions_match(session, target, tmp_path):
+    files = _debuggees(tmp_path)[target]
+    script = tmp_path / "commands.txt"
+    script.write_text(SESSIONS[session] + "\n")
+    python, rust = _both("debug", *files, "-b", "start", "-x", str(script), "--batch")
+    assert rust == python
+    assert python[0] == 0
+
+
+@pytest.mark.parametrize("session", ["basics", "watch", "errors"])
+def test_interactive_debug_sessions_match(session, tmp_path):
+    # Commands on stdin, prompts and all, ending at end of input.
+    files = _debuggees(tmp_path)["debuggee"]
+    python, rust = _both("debug", *files, stdin=SESSIONS[session] + "\n")
+    assert rust == python
+    assert "(dt) " in python[1]

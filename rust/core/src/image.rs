@@ -140,6 +140,155 @@ pub fn dump<V: std::fmt::Display>(
     out
 }
 
+/// An image's labels and symbols, in the order its metadata lists them
+/// (sorted by name, as the writer sorts them).
+pub type Names = Vec<(String, i64)>;
+
+/// Read the metadata's {"labels": {...}, "symbols": {...}}: the one
+/// JSON shape the writer produces.
+pub fn parse_meta(data: &[u8]) -> Result<(Names, Names), String> {
+    let mut r = Reader { data, pos: 0 };
+    if r.take(4)? != MAGIC {
+        return Err("not a detrytus image (or an unknown version)".into());
+    }
+    let len = r.u32()? as usize;
+    let text = std::str::from_utf8(r.take(len)?).map_err(|_| "bad image metadata")?;
+    let mut json = Json { chars: text.chars().collect(), pos: 0 };
+    let mut tables = std::collections::HashMap::new();
+    json.expect('{')?;
+    loop {
+        let key = json.string()?;
+        json.expect(':')?;
+        tables.insert(key, json.table()?);
+        if !json.comma('}')? {
+            break;
+        }
+    }
+    let take =
+        |t: &mut std::collections::HashMap<String, Names>, k: &str| t.remove(k).unwrap_or_default();
+    let labels = take(&mut tables, "labels");
+    Ok((labels, take(&mut tables, "symbols")))
+}
+
+/// Just enough JSON for image metadata: objects of strings to integers.
+struct Json {
+    chars: Vec<char>,
+    pos: usize,
+}
+
+impl Json {
+    fn skip(&mut self) {
+        while self.chars.get(self.pos).is_some_and(|c| c.is_whitespace()) {
+            self.pos += 1;
+        }
+    }
+
+    fn next(&mut self) -> Result<char, String> {
+        self.skip();
+        let c = *self.chars.get(self.pos).ok_or("bad image metadata: cut short")?;
+        self.pos += 1;
+        Ok(c)
+    }
+
+    fn expect(&mut self, want: char) -> Result<(), String> {
+        let c = self.next()?;
+        if c == want {
+            Ok(())
+        } else {
+            Err(format!("bad image metadata: {c:?} where {want:?} belongs"))
+        }
+    }
+
+    /// After an item: true for ',', false for the closing bracket.
+    fn comma(&mut self, close: char) -> Result<bool, String> {
+        match self.next()? {
+            ',' => Ok(true),
+            c if c == close => Ok(false),
+            c => Err(format!("bad image metadata: {c:?}")),
+        }
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        self.expect('"')?;
+        let mut out = String::new();
+        let mut pending: Option<u32> = None; // a high surrogate
+        loop {
+            let c = *self.chars.get(self.pos).ok_or("bad image metadata: open string")?;
+            self.pos += 1;
+            match c {
+                '"' => return Ok(out),
+                '\\' => {
+                    let e = *self.chars.get(self.pos).ok_or("bad image metadata")?;
+                    self.pos += 1;
+                    let simple = match e {
+                        'n' => Some('\n'),
+                        't' => Some('\t'),
+                        'r' => Some('\r'),
+                        'b' => Some('\u{8}'),
+                        'f' => Some('\u{c}'),
+                        '/' => Some('/'),
+                        '"' | '\\' => Some(e),
+                        'u' => None,
+                        _ => return Err("bad image metadata: escape".into()),
+                    };
+                    if let Some(c) = simple {
+                        out.push(c);
+                        continue;
+                    }
+                    let hex: String = self
+                        .chars
+                        .get(self.pos..self.pos + 4)
+                        .ok_or("bad image metadata")?
+                        .iter()
+                        .collect();
+                    self.pos += 4;
+                    let unit =
+                        u32::from_str_radix(&hex, 16).map_err(|_| "bad image metadata: \\u")?;
+                    match (pending.take(), unit) {
+                        (Some(high), 0xDC00..=0xDFFF) => {
+                            out.push(
+                                char::from_u32(0x10000 + ((high - 0xD800) << 10) + (unit - 0xDC00))
+                                    .unwrap_or('\u{FFFD}'),
+                            );
+                        }
+                        (_, 0xD800..=0xDBFF) => pending = Some(unit),
+                        (_, u) => out.push(char::from_u32(u).unwrap_or('\u{FFFD}')),
+                    }
+                }
+                c => out.push(c),
+            }
+        }
+    }
+
+    fn integer(&mut self) -> Result<i64, String> {
+        self.skip();
+        let start = self.pos;
+        while self.chars.get(self.pos).is_some_and(|c| *c == '-' || c.is_ascii_digit()) {
+            self.pos += 1;
+        }
+        let text: String = self.chars[start..self.pos].iter().collect();
+        text.parse().map_err(|_| format!("bad image metadata: number {text:?}"))
+    }
+
+    fn table(&mut self) -> Result<Names, String> {
+        self.expect('{')?;
+        let mut out = Vec::new();
+        self.skip();
+        if self.chars.get(self.pos) == Some(&'}') {
+            self.pos += 1;
+            return Ok(out);
+        }
+        loop {
+            let key = self.string()?;
+            self.expect(':')?;
+            out.push((key, self.integer()?));
+            if !self.comma('}')? {
+                return Ok(out);
+            }
+        }
+    }
+}
+
 /// Parse an image's segments.
 pub fn parse(data: &[u8]) -> Result<Vec<Segment>, String> {
     let mut r = Reader { data, pos: 0 };
@@ -210,6 +359,17 @@ mod tests {
         // One tryte, value 1: nine trits +,0,...,0 padded to ten. Python
         // writes bytes 122 and 121 for it (see unpacks_five_trits_to_a_byte).
         assert_eq!(pack(&[1]), vec![122, 121]);
+    }
+
+    #[test]
+    fn metadata_reads_back() {
+        let labels: BTreeMap<String, i64> =
+            [("b".to_string(), 3), ("a\u{e9}".to_string(), -1)].into_iter().collect();
+        let symbols: BTreeMap<String, i64> = [("X".to_string(), 7)].into_iter().collect();
+        let data = dump(&BTreeMap::new(), &labels, &symbols);
+        let (l, s) = parse_meta(&data).unwrap();
+        assert_eq!(l, vec![("a\u{e9}".to_string(), -1), ("b".to_string(), 3)]);
+        assert_eq!(s, vec![("X".to_string(), 7)]);
     }
 
     #[test]

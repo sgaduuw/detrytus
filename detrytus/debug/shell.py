@@ -10,6 +10,7 @@ from typing import IO
 from detrytus import isa
 from detrytus.debug.engine import Debugger, Stop
 from detrytus.expr import ExprError
+from detrytus.trap import Trap
 from detrytus.trits import format_trits
 
 ALIASES = {
@@ -201,6 +202,8 @@ class DebugShell(cmd.Cmd):
         ring, h.ring = h.ring, 1  # look without being stopped by privilege
         try:
             value = h.read_csr(number)
+        except Trap:
+            raise UsageError(f"no CSR {number}") from None
         finally:
             h.ring = ring
         self.say(

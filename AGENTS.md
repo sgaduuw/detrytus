@@ -85,7 +85,7 @@ stays out of your diff.
 | `rust/core/examples/run.rs` | runs `.dti` images on the Rust core, for trying and timing it |
 | `rust/py/` | the optional `detrytus-rs` package: Python bindings for the Rust core |
 | `rust/asm/src/` | the Rust assembler: `expr`, `source`, `operands`, `pseudo`, `assembler`, `disasm` |
-| `rust/cli/` | the Rust `detrytus` command: `asm` and `run` |
+| `rust/cli/` | the Rust `detrytus` command: `asm`, `run` and `debug` (`program.rs` loads files, `debug/` is the engine and shell) |
 | `rust/conformance/` | the Rust conformance runner (tests only) |
 | `detrytus/rust.py` | wraps those bindings in the Python core's interface |
 | `rust/core/tests/` | the Rust spec sync test |
@@ -189,11 +189,11 @@ fail instead when `DETRYTUS_REQUIRE_RUST` is set, as in CI.
 `tests/test_differential.py` runs both cores step by step and compares
 their whole state; a change to either core that it flags is a
 disagreement to resolve, with the Python core as the reference.
-`tests/test_cli_parity.py` runs the Rust and Python `detrytus asm` and
-`detrytus run` on every conformance program, the examples and a corpus
-of broken source, and wants identical stdout, stderr, exit status and
-image bytes; it needs `cargo build` first, and a change to either
-command's output changes both.
+`tests/test_cli_parity.py` runs the Rust and Python `detrytus asm`,
+`run` and `debug` on every conformance program, the examples, a corpus
+of broken source and scripted debugger sessions, and wants identical
+stdout, stderr, exit status and image bytes; it needs `cargo build`
+first, and a change to either command's output changes both.
 
 ## Git and pull requests
 

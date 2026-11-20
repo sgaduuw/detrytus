@@ -141,8 +141,8 @@ devices), `image.rs` (reading `.dti`), `hart.rs` (the fetch loop and
 instructions), `privileged.rs` (traps, interrupts, CSRs), `mmu.rs`,
 `entropy.rs` and `machine.rs`. `rust/py/` holds its Python bindings,
 `rust/asm/` the assembler, and `rust/cli/` a Rust `detrytus` command
-with `asm` and `run`, giving the same output, images and exit statuses
-as the Python one (the debugger is still Python only):
+with `asm`, `run` and `debug`, giving the same output, images, debugger
+sessions and exit statuses as the Python one:
 
 ```bash
 cargo run --release -p detrytus-cli -- run examples/hello.s
