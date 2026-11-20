@@ -1,7 +1,22 @@
-//! `.dti` images, the format `detrytus asm -o` writes (layout in
-//! `detrytus/image.py`). Reading skips the JSON metadata (labels and
-//! symbols), which is for tools; writing produces exactly the bytes the
-//! Python writer does, metadata included.
+//! `.dti` images, the format `detrytus asm -o` writes.
+//!
+//! Layout, all integers little-endian:
+//!
+//! ```text
+//! magic        4 bytes   b"DTI" and a format version byte (1)
+//! meta length  u32
+//! meta         UTF-8 JSON: {"labels": {name: addr}, "symbols": {name: value}}
+//!              keys sorted, as Python's json.dumps(sort_keys=True) wrote it
+//! segments     u32 count, then for each:
+//!     start    i64       address of the first tryte
+//!     trytes   u32       how many trytes follow
+//!     data     ceil(9 * trytes / 5) bytes
+//! ```
+//!
+//! Data packs the trytes' trits, least significant first, five to a
+//! byte: a byte is sum((trit_i + 1) * 3^i), at most 242 (docs/isa.md 11).
+//! The last byte is padded with zero trits. The format, metadata
+//! included, is byte for byte what the original Python tools wrote.
 
 use std::collections::BTreeMap;
 
@@ -111,9 +126,8 @@ fn pack(trytes: &[i64]) -> Vec<u8> {
         .collect()
 }
 
-/// An image file: trytes by address, labels and symbols, as
-/// `detrytus/image.py` writes it (metadata keys sorted, segments in
-/// address order).
+/// An image file: trytes by address, labels and symbols (metadata keys
+/// sorted, segments in address order).
 pub fn dump<V: std::fmt::Display>(
     trytes: &BTreeMap<i64, i64>,
     labels: &BTreeMap<String, V>,

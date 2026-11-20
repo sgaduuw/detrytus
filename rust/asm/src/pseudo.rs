@@ -1,5 +1,5 @@
 //! Pseudo-instructions: each expands to one or two machine
-//! instructions. Mirrors `detrytus/asm/pseudo.py`.
+//! instructions. Ported from the original Python tools.
 
 use detrytus_core::isa;
 use detrytus_core::trits::{WORD_MAX, half, low, pow3, split_high};

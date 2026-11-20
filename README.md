@@ -21,10 +21,9 @@ control and system instruction, plus traps, delegation, interrupts, the
 timer, single step and paged virtual memory. Floating point, compressed
 bundles and debug triggers are specified but not implemented yet.
 
-The first implementation was Python. It is being retired
-([`docs/rust-plan.md`](docs/rust-plan.md), phase 6): the Rust tools
-produce exactly its output, checked by tests, and run trylobite about 16
-times faster.
+The first implementation was Python. The Rust tools replaced it
+([`docs/rust-plan.md`](docs/rust-plan.md)), producing exactly its output
+before it was removed, and run trylobite about 16 times faster.
 
 ## Usage
 
@@ -52,16 +51,11 @@ detrytus asm examples/bsearch.s
 detrytus debug examples/bsearch.s
 ```
 
-The Python tools still work, until they are removed: `uv sync`, then
-`uv run detrytus ...` with the same commands. They also have
-`run --trace`, which prints every instruction; in Rust, `trace on` in
-the debugger does that.
-
 `run` assembles a program, loads it at address 0 and runs it until it
 writes to the power-off device. It takes several files, sources or
 `.dti` images written by `asm -o`, and loads them together. `debug` stops before the first
 instruction for stepping, breakpoints, watchpoints and inspection. `--stats` prints
-the step count. `asm` prints a listing with each word's trits
+the step count and `--trace` every instruction. `asm` prints a listing with each word's trits
 and its disassembly.
 
 - [`docs/assembler.md`](docs/assembler.md): source syntax, directives
@@ -69,8 +63,8 @@ and its disassembly.
 - [`docs/platform.md`](docs/platform.md): the emulated memory map and
   devices.
 - [`docs/debugger.md`](docs/debugger.md): the debugger's commands.
-- [`docs/rust-plan.md`](docs/rust-plan.md): the plan for moving the
-  implementation to Rust.
+- [`docs/rust-plan.md`](docs/rust-plan.md): how the implementation
+  moved from Python to Rust.
 - [`examples/`](examples/): runnable programs.
 - [`conformance/`](conformance/README.md): the conformance suite,
   machine behaviour as data that any implementation runs.
@@ -89,60 +83,17 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-and, while the Python tools remain, the Python ones (`uv run pytest`
-also compares the two command lines once `cargo build` has run):
-
-```bash
-uv run pytest
-```
-
-```bash
-uv run mypy
-```
-
-```bash
-uv run ruff check detrytus tests
-```
-
-```bash
-uv run ruff format --check detrytus tests
-```
-
 ## Layout
 
-| Module | Job |
-|--------|-----|
-| `trits.py` | balanced-ternary arithmetic on Python ints |
-| `isa.py` | the instruction set as data: opcodes, formats, CSRs, encode and decode |
-| `alu.py` | integer and tritwise operations as pure functions |
-| `execute.py` | what each instruction does: one handler per mnemonic, in one table |
-| `trap.py` | the exceptions that carry traps |
-| `mmu.py` | paged virtual memory: the walk, permission checks, the TLB |
-| `cpu.py` | one hart: fetch loop, traps, interrupts, CSRs |
-| `bus.py` | physical memory and device routing |
-| `devices.py` | console and power control |
-| `machine.py` | the platform wired together |
-| `expr.py` | assembler expressions |
-| `image.py` | the `.dti` image file format, and merging images |
-| `asm/` | the assembler: `source` (parsing, includes, local labels), `operands`, `pseudo`-instructions, `core` passes |
-| `disasm.py` | the disassembler |
-| `debug/` | the debugger: `engine` runs and inspects, `shell` is the front end |
-| `conformance.py` | the conformance suite's runner |
-| `rust.py` | the optional Rust core behind the Python core's interface |
-| `cli.py` | the `detrytus` command |
-
-The Rust core, `rust/core/src/`, mirrors the machine half of that:
-`trits.rs`, `isa.rs`, `alu.rs`, `bus.rs` (memory and the built-in
-devices), `image.rs` (reading `.dti`), `hart.rs` (the fetch loop and
-instructions), `privileged.rs` (traps, interrupts, CSRs), `mmu.rs`,
-`entropy.rs` and `machine.rs`. `rust/py/` holds its Python bindings,
-`rust/asm/` the assembler, and `rust/cli/` a Rust `detrytus` command
-with `asm`, `run` and `debug`, giving the same output, images, debugger
-sessions and exit statuses as the Python one:
-
-```bash
-cargo run --release -p detrytus-cli -- run examples/hello.s
-```
+| Path | Job |
+|------|-----|
+| `rust/core/` | the machine: trits, the instruction set, the hart, privilege, paging, the bus and devices, images; no dependencies |
+| `rust/asm/` | the assembler and disassembler |
+| `rust/cli/` | the `detrytus` command: `asm`, `run` and `debug` |
+| `rust/conformance/` | runs the conformance suite on the assembler and core |
+| `conformance/` | the conformance suite, as data |
+| `docs/` | the specification and the tools' manuals |
+| `examples/` | runnable programs |
 
 ## The shape of it
 

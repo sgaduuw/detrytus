@@ -143,7 +143,7 @@ two programs that each have a `start`, is left out of the merged symbol
 table rather than resolved to the wrong one.
 
 The format packs five trits into each byte; the layout is described at
-the top of `detrytus/image.py`.
+the top of `rust/core/src/image.rs`.
 
 ## Operand forms
 

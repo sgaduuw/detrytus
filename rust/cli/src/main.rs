@@ -1,8 +1,8 @@
-//! The detrytus command line in Rust (docs/rust-plan.md, phase 5).
+//! The `detrytus` command: `asm`, `run` and `debug`.
 //!
-//! `detrytus asm` and `detrytus run`, behaving as the Python command
-//! does: the same output, messages and exit statuses for the same files.
-//! The debugger is still Python.
+//! Its output, messages and exit statuses are those of the Python
+//! command it replaced (docs/rust-plan.md), held there by the recorded
+//! transcripts in tests/golden/.
 
 use std::io::Write;
 use std::process::ExitCode;

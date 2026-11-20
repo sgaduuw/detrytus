@@ -545,3 +545,32 @@ both debuggers: one trylobite test reads a page table in physical
 memory after the run, which it did through the Python machine object,
 and `examine` reads through the stopped program's page tables instead.
 
+### 2026-11-20 · Python removed; what replaced its tests
+
+The last step of the switchover deletes the Python package, its tests,
+the `detrytus-rs` bindings and the step-by-step comparison of the two
+cores. Nothing they checked was dropped:
+
+- **The command's output** is held to 171 golden transcripts
+  (`rust/cli/tests/golden/`): listings, a corpus of broken source, run
+  output and traces, debugger sessions, includes, merged files, a
+  damaged image and illegal encodings. Each was recorded from the Rust
+  command after checking the Python one printed exactly the same, so the
+  parity the comparison tests enforced is now a fixed record.
+- **Machine and assembler behaviour** stays in the conformance suite,
+  whose format the Rust runner now checks as strictly as the Python
+  runner did.
+- **The spec** is checked by the Rust spec test, which gained the CSR
+  numbers and all seven truth tables that only the Python test covered.
+- **`run --trace`**, the one Python feature the Rust command lacked,
+  was added first, and its output matched Python's on every conformance
+  program.
+
+The comparison of the two cores step by step has no successor: with one
+implementation there is nothing to compare. The entropy source still
+reproduces CPython's stream for a given seed, which no longer matters
+but costs nothing.
+
+Development now needs only a Rust toolchain; CI is one job of `cargo
+fmt`, `clippy` and `test`.
+

@@ -1,5 +1,5 @@
 //! The debugger's engine: run control, breakpoints, watchpoints,
-//! inspection. Mirrors `detrytus/debug/engine.py`.
+//! inspection. Ported from the original Python tools.
 //!
 //! It drives a Machine one step at a time, with the hart recording what
 //! each step did, and decides when to stop. Program output and trace

@@ -1,5 +1,10 @@
 # Rust implementation plan
 
+**Done.** All six phases are complete: detrytus is Rust only, and the
+Python implementation was removed on 2026-11-20. The plan is kept as the
+record of how the move was made; paths it names under `detrytus/` and
+`tests/` are gone.
+
 The Python emulator has done its job: it pinned the ISA down while a
 real kernel (trylobite) was written against it. It is now the
 bottleneck: even after the translation speed-up in sgaduuw/detrytus#8,
@@ -123,7 +128,7 @@ green.
    same stdout, stderr, exit status and image bytes from both commands
    on every conformance program, the examples, a corpus of broken
    source and scripted debugger sessions.
-6. **Switchover** (in progress). Rust becomes the default; the Python
+6. **Switchover** (done). Rust becomes the default; the Python
    core, bindings and tools are removed once nothing depends on them.
    trylobite moves to the Rust command line. In three steps, as the
    owner agreed: (1) Rust is the default in the docs, and the debugger
@@ -133,7 +138,10 @@ green.
    its CI installs it with `cargo install` at a pinned commit; (3) the
    Python package and bindings are removed, the conformance suite
    becomes the main test of the Rust tools, and the parity and
-   differential tests go with Python.
+   differential tests go with Python. Before step 3 removed it, every
+   input the parity tests compared was recorded as a golden transcript
+   (`rust/cli/tests/golden/`), from Rust output checked identical to
+   Python's, so the agreement is kept as a test.
 
 ## Design notes for the core
 

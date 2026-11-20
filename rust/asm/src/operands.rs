@@ -1,5 +1,5 @@
 //! Operand text to instruction fields, and the encoding of one
-//! instruction. Mirrors `detrytus/asm/operands.py`.
+//! instruction. Ported from the original Python tools.
 
 use detrytus_core::isa::{self, Format, Op};
 use detrytus_core::trits::{WORD_TRITS, half, pow3};

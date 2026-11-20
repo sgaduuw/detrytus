@@ -2,21 +2,17 @@
 
 Machine and assembler behaviour, stored as data: each case is an
 assembly program and what assembling and running it must produce. Any
-implementation of detrytus runs the same cases, so they outlive the
-Python tools they were first written for (see
+implementation of detrytus could run the same cases: they were first
+run on the Python tools, then held the Rust ones to the same results
+before the Python ones were removed (see
 [`docs/rust-plan.md`](../docs/rust-plan.md)).
-
-```bash
-uv run pytest tests/test_conformance.py
-```
 
 ```bash
 cargo test -p detrytus-conformance
 ```
 
-The Python runner is [`detrytus/conformance.py`](../detrytus/conformance.py);
-the Rust one, [`rust/conformance/tests/conformance.rs`](../rust/conformance/tests/conformance.rs),
-assembles each case with the Rust assembler and runs it on the Rust core.
+The runner, [`rust/conformance/tests/conformance.rs`](../rust/conformance/tests/conformance.rs),
+checks each file's format, assembles each case and runs it on the core.
 
 ## Layout
 
@@ -113,10 +109,8 @@ Unknown keys are errors, so a misspelt expectation cannot pass silently.
 ## Adding a case
 
 Behaviour a program can observe, and how the assembler lays a program
-out or rejects it, belongs here, not in a Python or Rust test. Then make
-sure the case can fail: break the code it guards, watch the case go
-red, and restore it (AGENTS.md, Tests). What only a tool's interface
-shows (listing text, the debugger, the image format, include files on
-disk, the command line) is tested in `tests/`, and
-`tests/test_cli_parity.py` holds the two command lines to the same
-output.
+out or rejects it, belongs here, not in a Rust test. Then make sure the
+case can fail: break the code it guards, watch the case go red, and
+restore it (AGENTS.md, Tests). What only the command's interface shows
+(listing text, the debugger, include files on disk, messages) is held to
+the transcripts in `rust/cli/tests/golden/`.

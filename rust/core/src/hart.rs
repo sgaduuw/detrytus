@@ -1,8 +1,8 @@
 //! One hart: registers, the fetch loop and what each instruction does.
 //! Traps, CSRs and interrupts are in `privileged.rs`.
 //!
-//! Mirrors `detrytus/cpu.py` and `detrytus/execute.py`: every integer,
-//! logic, memory, atomic, control and system instruction. Not yet:
+//! Every integer, logic, memory, atomic, control and system instruction
+//! (docs/isa.md 7), ported from the original Python core. Not yet:
 //! floating point and compressed bundles, which stop the machine as
 //! [`Stop::Unsupported`] rather than being approximated.
 //!

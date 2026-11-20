@@ -1,6 +1,5 @@
 //! The hart's privileged side: traps, interrupts, CSRs, `tret` and `wfi`
-//! (docs/isa.md 8). Mirrors the matching parts of `detrytus/cpu.py` and
-//! `detrytus/execute.py`.
+//! (docs/isa.md 8), ported from the original Python core.
 
 use crate::hart::{Exception, Exec, Hart, Stop, trap};
 use crate::isa::{self, IE, IP, TCAUSE, TIMECMP, TPC, TSTATUS, TVAL, TVEC};
