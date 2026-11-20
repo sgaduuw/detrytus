@@ -151,6 +151,27 @@ impl Machine {
         Ok(())
     }
 
+    /// The harts that will run an instruction in the next step, after
+    /// any time skip that step would make: for a debugger to check its
+    /// breakpoints against before stepping.
+    pub fn prepare_round(&mut self) -> Vec<i64> {
+        let order = self.bus.harts.running().to_vec();
+        if order.iter().all(|h| self.harts[h].waiting) {
+            self.skip_idle_time(&order);
+        }
+        let time = self.time + 1;
+        order
+            .into_iter()
+            .filter(|h| {
+                let hart = self.harts.get_mut(h).unwrap();
+                let now = std::mem::replace(&mut hart.time, time);
+                let runs = !hart.waiting || hart.wakeable();
+                hart.time = now;
+                runs
+            })
+            .collect()
+    }
+
     /// Run until the program powers off, stops, or reaches `max_steps`.
     pub fn run(&mut self, max_steps: u64) -> Outcome {
         for steps in 0..max_steps {

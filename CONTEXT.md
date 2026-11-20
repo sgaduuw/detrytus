@@ -631,3 +631,13 @@ to the emulator:
   read, though the ISA says they hold none: a start replaces it.
 - **Debugger.** It still shows and steps hart 0 only; selecting harts
   and hot-plug commands are the next step.
+
+### 2026-11-20 · Debugging several harts
+
+The debugger keeps the machine's rounds: a step runs every running hart
+one instruction, so a session reproduces a run exactly. One hart is in
+focus for inspection, and any hart can stop the run: a breakpoint,
+watchpoint or caught trap on another hart moves the focus there, as an
+all-stop debugger does. Stepping a single hart while the others wait
+would be legal under the memory model, but would make a debugging
+session diverge from `run`, which is worth more.

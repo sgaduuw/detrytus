@@ -1,0 +1,185 @@
+# detrytus debug with several harts: the hart in focus, hot-plug, and
+# stopping points on harts other than 0.
+
+[[case]]
+name = "a session across three harts"
+args = ["debug", "--harts", "3", "{root}/examples/harts.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+hart
+hart -1
+hart 5
+b worker
+c
+hart
+p $pc
+c
+hart 0
+hart 1
+trace on
+s 2
+trace off
+s
+hart
+unplug 0
+unplug 1 200
+plug 4
+plug
+plug 4 5 6
+info
+restart
+info
+c
+'''
+status = 0
+stdout = '''
+    -1  stopped
+*    0  running  pc 0 <start>  ring +1
+     1  stopped
+error: hart -1 has not run yet
+error: hart 5 is not present
+breakpoint 1 at 126 <worker>
+stopped: breakpoint 1 at 126 <worker> on hart 1
+=> 126 <worker>  [hart 1, ring +1]  csrrw t0, hartid, zero
+    -1  stopped
+     0  running  pc 24 <start+24>  ring +1
+*    1  running  pc 126 <worker>  ring +1
+126  0t000000000000000000000+---00
+stopped: breakpoint 1 at 126 <worker> on hart -1
+=> 126 <worker>  [hart -1, ring +1]  csrrw t0, hartid, zero
+=> 33 <start+33>  [hart 0, ring +1]  addi t0, zero, 27
+=> 135 <worker+9>  [hart 1, ring +1]  addi t0, zero, -1
+   [  -1]             126 <worker>  csrrw t0, hartid, zero
+   [   0]            33 <start+33>  addi t0, zero, 27
+   [   1]           135 <worker+9>  addi t0, zero, -1
+   [  -1]           129 <worker+3>  addi t1, zero, -59049
+   [   0]            36 <start+36>  csrrw zero, mie, t0
+   [   1]          138 <worker+12>  addi t1, zero, -78732
+=> 141 <worker+15>  [hart 1, ring +1]  sw t0, -3(t1)
+=> 144 <hart+1>  [hart 1 stopped, ring +1]  .word 44167845101  # illegal: opcode 104
+    -1  running  pc 135 <worker+9>  ring +1
+     0  running  pc 42 <start+42>  ring +1
+*    1  stopped  pc 144 <hart+1>  ring +1
+error: hart 0 cannot be removed
+hart 1 will be asked to go at time 200
+hart 4 will be plugged in at time 15
+error: give a hart, and optionally a time
+error: give a hart, and optionally a time
+  1: break at 126 <worker>
+  catch: off
+  unplug hart 1 at time 200
+  plug hart 4 at time 15
+=> 0 <start>  [hart 0, ring +1]  addi s0, zero, -59022
+  1: break at 126 <worker>
+  catch: off
+  unplug hart 1 at time 200
+  plug hart 4 at time 15
+stopped: breakpoint 1 at 126 <worker> on hart 1
+=> 126 <worker>  [hart 1, ring +1]  csrrw t0, hartid, zero
+'''
+stderr = ""
+
+[[case]]
+name = "a watchpoint on another hart"
+args = ["debug", "--harts", "3", "{here}/programs/hart-store.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+watch 19683
+c
+p $pc
+regs
+c
+'''
+status = 0
+stdout = '''
+watchpoint 1 on 19682..19684 (w), now 0
+stopped: watchpoint 1: write at 19683 <handler+19641>: 0 -> 5 on hart 1
+=> 39 <second+18>  [hart 1, ring +1]  brk
+39  0t00000000000000000000000+++0
+  a0               0     a1               0     a2               0
+  a3               0     a4               0     a5               0
+  t0           19683     t1               5     t2               0
+  t3               0     t4               0     t5               0
+  t6               0     s0               0     s1               0
+  s2               0     s3               0     s4               0
+  s5               0     s6               0     s7               0
+  s8               0     gp               0     tp               0
+  ra               0     sp               0
+  pc 39 <second+18>   ring +1
+stopped: powered off with exit code 0
+'''
+stderr = ""
+
+[[case]]
+name = "catching a trap on another hart"
+args = ["debug", "--harts", "3", "{here}/programs/hart-store.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+catch breakpoint
+c
+hart
+csr mtcause
+c
+'''
+status = 0
+stdout = '''
+catching trap causes [5]
+stopped: trap cause +5 at 39 <second+18>, tval 39 on hart 1
+=> 42 <handler>  [hart 1, ring +1]  addi t6, zero, -39366
+    -1  stopped
+     0  running  pc 18 <spin>  ring +1
+*    1  running  pc 42 <handler>  ring +1
+mtcause = 5  0t000000000000000000000000+--
+stopped: powered off with exit code 0
+'''
+stderr = ""
+
+[[case]]
+name = "one hart lists itself"
+args = ["debug", "{here}/programs/harts.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+hart
+hart 1
+s 6
+hart
+'''
+status = 0
+stdout = '''
+*    0  running  pc 0  ring +1
+error: hart 1 is not present
+=> 18  [ring +1]  addi a0, zero, 65
+*    0  running  pc 18  ring +1
+'''
+stderr = ""
+
+[[case]]
+name = "a plugged hart in the debugger"
+args = ["debug", "--plug", "3:1", "{here}/programs/harts.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+s 3
+hart
+c
+'''
+status = 0
+stdout = '''
+=> 9  [hart 0, ring +1]  sw t0, -9(s0)
+*    0  running  pc 9  ring +1
+     1  stopped
+ABstopped: powered off with exit code 0
+'''
+stderr = ""
+
+[[case]]
+name = "an unhandled trap on another hart"
+args = ["debug", "--harts", "3", "{here}/programs/hart-crash.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+c
+hart
+p $pc
+'''
+status = 0
+stdout = '''
+stopped: unhandled trap: cause +5 at pc 21 in ring +1, tval 21 on hart 1
+    -1  stopped
+     0  running  pc 18 <spin>  ring +1
+*    1  running  pc 21 <second>  ring +1
+21  0t00000000000000000000000+-+0
+'''
+stderr = ""

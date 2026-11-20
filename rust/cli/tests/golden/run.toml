@@ -787,7 +787,8 @@ stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
-       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
 detrytus: --harts takes 1 to 729
 '''
 
@@ -800,7 +801,8 @@ stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
-       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
 detrytus: hart 0 cannot be removed
 '''
 
@@ -813,7 +815,8 @@ stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
-       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
 detrytus: --plug needs TIME:HART
 '''
 

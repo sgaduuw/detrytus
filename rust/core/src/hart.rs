@@ -175,6 +175,11 @@ impl Hart {
         csrs
     }
 
+    /// Whether the hart is waiting in `wfi`.
+    pub fn waiting(&self) -> bool {
+        self.waiting
+    }
+
     pub fn reservation(&self) -> Option<i64> {
         self.reservation
     }
