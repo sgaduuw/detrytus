@@ -123,9 +123,17 @@ green.
    same stdout, stderr, exit status and image bytes from both commands
    on every conformance program, the examples, a corpus of broken
    source and scripted debugger sessions.
-6. **Switchover.** Rust becomes the default; the Python core, bindings
-   and tools are removed once nothing depends on them. trylobite moves
-   to the Rust command line.
+6. **Switchover** (in progress). Rust becomes the default; the Python
+   core, bindings and tools are removed once nothing depends on them.
+   trylobite moves to the Rust command line. In three steps, as the
+   owner agreed: (1) Rust is the default in the docs, and the debugger
+   gains `xp` for reading physical memory, which trylobite's tests need
+   once they can no longer reach into a Python machine; (2) trylobite's
+   tests call the `detrytus` binary instead of the Python package, and
+   its CI installs it with `cargo install` at a pinned commit; (3) the
+   Python package and bindings are removed, the conformance suite
+   becomes the main test of the Rust tools, and the parity and
+   differential tests go with Python.
 
 ## Design notes for the core
 

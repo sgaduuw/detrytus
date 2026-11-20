@@ -526,3 +526,22 @@ the documented form never worked; and `csr` with an unknown number let
 the CPU's internal trap escape and crash the debugger, where it now says
 `no CSR N`.
 
+### 2026-11-20 · The switchover: how trylobite and installs move off Python
+
+With every Python tool matched by a Rust one, phase 6 removes Python.
+Two choices, the owner's, made on my recommendation:
+
+- **trylobite's tests stay in Python but call the `detrytus` binary**
+  as a subprocess (`asm`, `run`, and `debug` scripts for memory), rather
+  than being rewritten in Rust. trylobite keeps pytest and needs no
+  Rust code of its own.
+- **detrytus installs with `cargo install`** (from a checkout or from
+  git), with trylobite's CI pinning a commit. Prebuilt release binaries
+  would be friendlier but need a release workflow; they can come later.
+
+Done in three steps: Rust the default in the docs, trylobite moved,
+then Python removed. The first step adds `xp`, examine-physical, to
+both debuggers: one trylobite test reads a page table in physical
+memory after the run, which it did through the Python machine object,
+and `examine` reads through the stopped program's page tables instead.
+

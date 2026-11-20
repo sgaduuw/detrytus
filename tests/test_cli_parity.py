@@ -268,6 +268,7 @@ SESSIONS = {
     "restart": "w DATA\nc\nrestart\ninfo\nc\nc\nc\nstep",
     "quit": "s\nq\ns",
     "next": "n\nn\nn\nn\nn\nn\nn\nn\nn\nregs",
+    "physical": "c\nxp DATA 2\nxp 0\nxp -19683 1\nxp\nhelp xp\nhelp",
 }
 
 # A program with no trap handler: it stops on an unhandled trap.

@@ -42,7 +42,7 @@ const CAUSES: [(&str, i64); 9] = [
 
 /// Each command's help, as `inspect.cleandoc` leaves the Python
 /// docstring; `help CMD` prints it.
-const HELP: [(&str, &str); 18] = [
+const HELP: [(&str, &str); 19] = [
     ("EOF", "quit: leave the debugger. Alias: q"),
     (
         "break",
@@ -73,10 +73,14 @@ const HELP: [(&str, &str); 18] = [
         "watch",
         "watch ADDR [r|w|rw]: stop after an access to ADDR (default w). Alias: w\n\nAn aligned ADDR watches the word centred on it, any other one tryte.\nAddresses are virtual, as the program sees them.",
     ),
+    (
+        "xp",
+        "xp ADDR [N]: show N words of physical memory from ADDR (default 4).\n\nUnlike examine, ADDR is not translated: it reads RAM and the boot\npage as they are, whatever ring and page table are current.",
+    ),
 ];
 
 /// `help` with no topic: cmd.Cmd's columns of documented commands.
-const HELP_LIST: &str = "\nDocumented commands (type help <topic>):\n========================================\nEOF    catch     csr     disas    help  next   quit  restart  trace\nbreak  continue  delete  examine  info  print  regs  step     watch\n\n";
+const HELP_LIST: &str = "\nDocumented commands (type help <topic>):\n========================================\nEOF    catch     csr     disas    help  next   quit  restart  trace  xp\nbreak  continue  delete  examine  info  print  regs  step     watch\n\n";
 
 fn format_trits(value: i64) -> String {
     let mut x = value;
@@ -187,6 +191,7 @@ impl Shell {
             }
             "examine" => self.do_examine(arg),
             "disas" => self.do_disas(arg),
+            "xp" => self.do_xp(arg),
             "trace" => {
                 self.dbg.trace = match strip(arg) {
                     "on" => true,
@@ -371,6 +376,21 @@ impl Shell {
                 Some(w) => format!("{w:>15}  0t{}", format_trits(w)),
             };
             self.say(&format!("{:>24}  {shown}", self.dbg.where_(a)));
+        }
+        Ok(false)
+    }
+
+    /// examine, but of physical memory: no translation.
+    fn do_xp(&mut self, arg: &str) -> Done {
+        let (expr, count) = Self::addr_and_count(arg, 4);
+        let addr = self.dbg.evaluate(&expr)?;
+        for i in 0..count as i64 {
+            let a = addr + 3 * i;
+            let shown = match self.dbg.machine.bus.peek(a, 3) {
+                None => "<unmapped>".to_string(),
+                Some(w) => format!("{w:>15}  0t{}", format_trits(w)),
+            };
+            self.say(&format!("{a:>24}  {shown}"));
         }
         Ok(false)
     }

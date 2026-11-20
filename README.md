@@ -15,59 +15,53 @@ The name is detritus with a tryte in it.
 ## Status
 
 The instruction set is a draft, specified in [`docs/isa.md`](docs/isa.md).
-A Python emulator and assembler implement its integer core: every
-integer, tritwise, memory, atomic, control and system instruction, plus
-traps, delegation, interrupts, the timer, single step and paged virtual
-memory. Floating point, compressed bundles and debug triggers are
-specified but not implemented yet. The implementation is moving to
-Rust, in steps laid out in [`docs/rust-plan.md`](docs/rust-plan.md):
-the Rust core in [`rust/core/`](rust/core/) now implements everything
-the Python one does and passes the whole conformance suite, about 16
-times faster on trylobite. The Python tools can run on it through the
-optional `detrytus-rs` package (below); the Python core stays the
-reference.
+The `detrytus` command, written in Rust, assembles, runs and debugs
+programs for its integer core: every integer, tritwise, memory, atomic,
+control and system instruction, plus traps, delegation, interrupts, the
+timer, single step and paged virtual memory. Floating point, compressed
+bundles and debug triggers are specified but not implemented yet.
+
+The first implementation was Python. It is being retired
+([`docs/rust-plan.md`](docs/rust-plan.md), phase 6): the Rust tools
+produce exactly its output, checked by tests, and run trylobite about 16
+times faster.
 
 ## Usage
 
-Requires [uv](https://docs.astral.sh/uv/).
+Requires a Rust toolchain, 1.88 or later.
 
 ```bash
-uv sync
+cargo install --path rust/cli
+```
+
+or, without a checkout:
+
+```bash
+cargo install --git https://github.com/sgaduuw/detrytus detrytus-cli
 ```
 
 ```bash
-uv run detrytus run examples/hello.s
+detrytus run examples/hello.s
 ```
 
 ```bash
-uv run detrytus asm examples/bsearch.s
+detrytus asm examples/bsearch.s
 ```
 
 ```bash
-uv run detrytus debug examples/bsearch.s
+detrytus debug examples/bsearch.s
 ```
 
-To run on the Rust core, build the optional package (this needs a Rust
-toolchain, 1.88 or later) and pick the backend:
-
-```bash
-uv pip install ./rust/py
-```
-
-```bash
-uv run detrytus run examples/hello.s --backend rust
-```
-
-`DETRYTUS_BACKEND=rust` makes it the default for `run` and for code
-that builds machines with `detrytus.machine.create`. The debugger and
-`--trace` need the Python core. `uv sync` removes the package again, so
-reinstall it after syncing.
+The Python tools still work, until they are removed: `uv sync`, then
+`uv run detrytus ...` with the same commands. They also have
+`run --trace`, which prints every instruction; in Rust, `trace on` in
+the debugger does that.
 
 `run` assembles a program, loads it at address 0 and runs it until it
 writes to the power-off device. It takes several files, sources or
 `.dti` images written by `asm -o`, and loads them together. `debug` stops before the first
-instruction for stepping, breakpoints, watchpoints and inspection. `--trace` prints every instruction and
-`--stats` the step count. `asm` prints a listing with each word's trits
+instruction for stepping, breakpoints, watchpoints and inspection. `--stats` prints
+the step count. `asm` prints a listing with each word's trits
 and its disassembly.
 
 - [`docs/assembler.md`](docs/assembler.md): source syntax, directives
@@ -81,8 +75,22 @@ and its disassembly.
 - [`conformance/`](conformance/README.md): the conformance suite,
   machine behaviour as data that any implementation runs.
 
-Development checks, all run in CI (the Rust ones need a Rust
-toolchain, 1.88 or later):
+Development checks, all run in CI:
+
+```bash
+cargo test
+```
+
+```bash
+cargo clippy --all-targets -- -D warnings
+```
+
+```bash
+cargo fmt --check
+```
+
+and, while the Python tools remain, the Python ones (`uv run pytest`
+also compares the two command lines once `cargo build` has run):
 
 ```bash
 uv run pytest
@@ -98,18 +106,6 @@ uv run ruff check detrytus tests
 
 ```bash
 uv run ruff format --check detrytus tests
-```
-
-```bash
-cargo test
-```
-
-```bash
-cargo clippy --all-targets -- -D warnings
-```
-
-```bash
-cargo fmt --check
 ```
 
 ## Layout

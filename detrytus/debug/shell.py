@@ -227,6 +227,21 @@ class DebugShell(cmd.Cmd):
             )
             self.say(f"{self.dbg.where(a):>24}  {shown}")
 
+    def do_xp(self, arg: str) -> None:
+        """xp ADDR [N]: show N words of physical memory from ADDR (default 4).
+
+        Unlike examine, ADDR is not translated: it reads RAM and the boot
+        page as they are, whatever ring and page table are current."""
+        expr, count = self._addr_and_count(arg, 4)
+        addr = self.dbg.evaluate(expr)
+        for i in range(count):
+            a = addr + 3 * i
+            word = self.dbg.machine.bus.peek(a, 3)
+            shown = (
+                "<unmapped>" if word is None else f"{word:>15}  0t{format_trits(word)}"
+            )
+            self.say(f"{a:>24}  {shown}")
+
     def do_disas(self, arg: str) -> None:
         """disas [ADDR] [N]: disassemble N words from ADDR (default: the pc, 8)."""
         expr, count = self._addr_and_count(arg, 8)

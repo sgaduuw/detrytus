@@ -120,9 +120,11 @@ tables and fails if the code disagrees. So:
 ## Python and Rust move together
 
 While both implementations exist, a change to machine or assembler
-behaviour changes both, and a conformance case pins it down. Python is
-the reference: when they disagree, Python is right until the spec says
-otherwise. The Rust assembler reproduces the Python one's output
+behaviour changes both, and a conformance case pins it down. Since the
+switchover began (docs/rust-plan.md, phase 6) Rust is the default and
+the implementation that stays; the Python tools must keep matching it
+until they are removed, and the parity tests make any disagreement
+fail. The Rust assembler reproduces the Python one's output
 exactly, image bytes and error messages included, so a change to a
 message changes both.
 
