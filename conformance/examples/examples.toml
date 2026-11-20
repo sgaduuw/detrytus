@@ -22,3 +22,16 @@ expect.console = "user: hello from virtual page 1\nfirmware: system call from ri
 name = "sections"
 source = "../../examples/sections.s"
 expect.exit_code = 0
+
+[[case]]
+name = "harts greet each other"
+source = "../../examples/harts.s"
+harts = 3
+expect.exit_code = 0
+expect.console = "hart +1 says hello\nhart -1 says hello\n"
+
+[[case]]
+name = "harts needs three harts"
+source = "../../examples/harts.s"
+expect.exit_code = 1
+expect.console = "this example needs three harts: run it with --harts 3\n"

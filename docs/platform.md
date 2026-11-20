@@ -11,8 +11,8 @@ the platform (`isa.md` 8.5 and 12.3).
 | 1 .. 729 | RAM (`--ram-pages` changes the count) |
 | -1 | console |
 | -2 | power control |
-| -3 | hart controller: one slot per hart (proposed, below) |
-| -4 | hart controller: this hart's slot, group send, events (proposed) |
+| -3 | hart controller: one slot per hart (Harts, below) |
+| -4 | hart controller: this hart's slot, group send, events |
 | -5 .. -12 | reserved for more harts |
 
 A page is 19,683 trytes centred on a multiple of 19,683, so page `p`
@@ -33,23 +33,31 @@ RAM pages too; only the program writes are checked.
 `time` forward to the earliest enabled timer compare, since a lone hart
 has nothing else to wait for.
 
-With several harts (proposed): the harts take one step each per round,
-in hart-number order, and `time` advances by one per round, so every
-hart reads the same clock and runs stay deterministic. `wfi` skips time
-forward only when every running hart is waiting, to the earliest moment
-any of them could wake: an enabled timer compare or a scheduled hot-plug
-event.
+With several harts, each step is a round: `time` advances by one, then
+every running hart takes one step, in hart-number order, so every hart
+reads the same clock and runs stay deterministic. A hart started during
+a round first runs in the next one. `--max-steps` and `--stats` count
+rounds. With one hart this is the same machine as before.
 
-## Harts (proposed)
+`wfi` waits: the hart sits rounds out until an interrupt is pending and
+enabled in its `ie` (in either bank, whatever the rings and `IE` bits).
+When every running hart is waiting, time skips forward to the earliest
+moment one could wake: an enabled timer compare or a scheduled hot-plug
+change. If nothing could ever wake them, they all return from `wfi` at
+once, which the ISA allows.
 
-*Proposed in isa.md 0.5 (5.6); not implemented yet.* The emulator has
-one hart until this is built; the layout below is for review.
+## Harts
 
-The reference platform allows up to 729 harts, numbered −364..+364, one
-27-tryte slot each in page −3. `--harts N` will choose which are
-present at reset (N harts, filled outward from 0 in tree order: 0, then
-−1 and +1, then the rest of the middle nine, and so on). Pages −5..−12
+isa.md 5.6 describes harts; this is the reference platform's side.
+
+The platform allows up to 729 harts, numbered −364..+364, one 27-tryte
+slot each in page −3. `run --harts N` (default 1) makes N harts present
+at reset, numbered outward from 0: 0, −1, +1, −2, +2, and so on, so 3
+harts are a triad, 9 the middle nine, 27 the middle 27. Pages −5..−12
 are reserved so a later platform can grow past 729.
+
+`examples/harts.s` starts the two other harts of a triad and greets them
+by message.
 
 ### Per-hart slots (page −3)
 
@@ -81,7 +89,8 @@ word, centred on the address given.
   matters; a send never fails silently.
 - **Doorbell.** Hart `h`'s software interrupt (cause −3, `ip` trit 3)
   is pending while COUNT > 0, ORed with the bit software can set
-  itself. Reading RECEIVE until it is empty clears it.
+  itself. Reading RECEIVE until it is empty clears it. It appears in
+  ring +1's `ip`, or ring 0's when `ideleg` trit 3 is `+`.
 - **Own slot only.** RECEIVE and CONTROL −1 act only from the hart that
   owns the slot; from another hart a read of RECEIVE gives 0 and takes
   nothing.
@@ -99,7 +108,7 @@ reach its own mailbox without computing its address from `hartid`.
 |---------|----------|--------|-----------|
 | C−12 .. C+12 | own slot | as above | the accessing hart's slot in page −3 |
 | C+27 | TARGET | rw, per hart | a hart number naming a subtree |
-| C+30 | SPAN | rw, per hart | `k`, 0..6: the subtree is every hart whose number agrees with TARGET except in its lowest `k` trits |
+| C+30 | SPAN | rw, per hart | `k`, 0..6 (a write outside is clamped): the subtree is every hart whose number agrees with TARGET except in its lowest `k` trits |
 | C+33 | GSEND | wo | sends the word to every running hart in the subtree except the sender |
 | C+36 | LAST | ro, per hart | the last send's result: +1 accepted by all, −1 refused by at least one, 0 none yet |
 | C−27 | HARTS | ro | slots on this platform: 729 |
@@ -114,11 +123,15 @@ reach its own mailbox without computing its address from `hartid`.
   nothing while the others still receive the word.
 - **Hot-plug events.** Kind +1: hart `h` has been added and is stopped,
   ready to start. Kind −1: removal of hart `h` is requested; the kernel
-  moves its work away and the hart stops itself, after which the
-  platform may remove it. The external interrupt (cause −2) of hart
-  EVENT_HART is pending while events are queued. The emulator schedules
-  hot-plug from the command line or the debugger, at a fixed `time`, so
-  runs stay deterministic.
+  moves its work away and the hart stops itself, and the platform
+  removes it as it stops. A hart already stopped when removal is asked
+  for goes at once (the event still says so). Hart 0 cannot be removed.
+  The external interrupt (cause −2) of hart EVENT_HART is pending while
+  events are queued, in ring +1's `ip` or ring 0's as `ideleg` trit 2
+  says.
+- **Scheduling hot-plug.** `run --plug TIME:HART` adds a hart and
+  `--unplug TIME:HART` asks for one to go, when `time` reaches TIME, so
+  runs stay deterministic. Each may be given more than once.
 
 ## Emulator behaviour outside the ISA
 
@@ -129,6 +142,12 @@ reach its own mailbox without computing its address from `hartid`.
   status 124).
 - Features not implemented yet stop the emulator with a message (exit
   status 69): floating point, compressed bundles and debug triggers.
+- An unhandled trap on a hart other than 0 names the hart: "... tval 21
+  on hart 1".
+- With more than one hart, `run --trace` puts the hart's number first
+  on each line.
+- The debugger shows and steps hart 0 only, so far; the others run
+  alongside it, a round per step.
 
 ## Paging
 

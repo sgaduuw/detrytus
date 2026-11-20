@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use detrytus_asm::disasm::disassemble;
 use detrytus_core::hart::Event;
 use detrytus_core::trits::low;
-use detrytus_core::{Machine, Outcome};
+use detrytus_core::{Hotplug, Machine, Outcome};
 
 mod debug;
 mod program;
@@ -18,7 +18,8 @@ mod program;
 use program::{Loaded, load, load_one, strerror};
 
 const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] FILE...
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
@@ -38,6 +39,8 @@ struct RunArgs {
     max_steps: u64,
     stats: bool,
     trace: bool,
+    harts: i64,
+    hotplug: Vec<(i64, Hotplug)>,
 }
 
 /// A failure that ends the command: its message and exit status.
@@ -70,6 +73,8 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         max_steps: 10_000_000,
         stats: false,
         trace: false,
+        harts: 1,
+        hotplug: Vec::new(),
     };
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
@@ -78,6 +83,22 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--max-steps" => run.max_steps = number(&arg, args.next())?,
             "--stats" => run.stats = true,
             "--trace" => run.trace = true,
+            "--harts" => {
+                run.harts = number(&arg, args.next())?;
+                if !(1..=729).contains(&run.harts) {
+                    return Err(usage("--harts takes 1 to 729"));
+                }
+            }
+            "--plug" | "--unplug" => {
+                let spec = args.next().unwrap_or_default();
+                let (time, hart) = spec
+                    .split_once(':')
+                    .and_then(|(t, h)| Some((t.parse().ok()?, h.parse().ok()?)))
+                    .ok_or_else(|| usage(&format!("{arg} needs TIME:HART")))?;
+                let change =
+                    if arg == "--plug" { Hotplug::Add(hart) } else { Hotplug::Remove(hart) };
+                run.hotplug.push((time, change));
+            }
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -152,23 +173,31 @@ fn sign(n: i64) -> String {
 }
 
 fn run(args: RunArgs) -> Result<u8, Fail> {
-    let mut machine = Machine::new(args.ram_pages, seed());
+    let mut machine = Machine::with_harts(args.ram_pages, seed(), args.harts);
+    for &(time, change) in &args.hotplug {
+        machine.schedule(time, change).map_err(|e| usage(&e))?;
+    }
     for (addr, tryte) in load(&args.files)?.trytes {
         machine.bus.poke(addr, tryte);
+    }
+    // With more than one hart, trace lines say which ran each instruction.
+    let several = args.harts > 1 || !args.hotplug.is_empty();
+    if args.trace {
+        machine.record_events(true);
     }
     let mut stdout = std::io::stdout();
     let (mut done, mut printed) = (0u64, 0usize);
     loop {
         // Tracing runs one step at a time, printing what each executed.
         let chunk = if args.trace { 1 } else { CHUNK.min(args.max_steps - done) };
-        let ring = machine.hart.ring;
-        if args.trace {
-            machine.hart.events = Some(Vec::new());
-        }
+        let rings: Vec<(i64, i64)> = machine.harts().map(|(h, hart)| (h, hart.ring)).collect();
         let outcome = machine.run(chunk);
-        for event in machine.hart.events.take().unwrap_or_default() {
+        for (h, event) in machine.take_events() {
             if let Event::Execute { pc, word } = event {
-                eprintln!("[{pc:>12} r{ring:+}] {}", disassemble(word, Some(pc)));
+                // A hart started this step has no ring recorded: it began in +1.
+                let ring = rings.iter().find(|(r, _)| *r == h).map_or(1, |(_, ring)| *ring);
+                let who = if several { format!("{h:>4} ") } else { String::new() };
+                eprintln!("[{who}{pc:>12} r{ring:+}] {}", disassemble(word, Some(pc)));
             }
         }
         let text = machine.bus.console.text();
@@ -190,9 +219,12 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
                     return Err(Fail::after_output(message, STEP_LIMIT));
                 }
             }
-            Outcome::Unhandled { cause, tval, pc, ring } => {
-                let what =
+            Outcome::Unhandled { hart, cause, tval, pc, ring } => {
+                let mut what =
                     format!("cause {} at pc {pc} in ring {}, tval {tval}", sign(cause), sign(ring));
+                if hart != 0 {
+                    what += &format!(" on hart {hart}");
+                }
                 return Err(Fail::after_output(format!("unhandled trap: {what}"), UNHANDLED_TRAP));
             }
             Outcome::Unsupported(what) => {

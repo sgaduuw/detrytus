@@ -1,0 +1,523 @@
+# Several harts and the hart controller (docs/isa.md 5.6, docs/platform.md
+# Harts). Hart 0 boots; the others start stopped. A case's `harts` says how
+# many are present, numbered outward from 0 (0, -1, +1, -2, ...).
+#
+# The prelude names the controller's registers: a slot register of hart h
+# is at SLOTS + 27*h + REGISTER, and LOCAL + REGISTER is the accessing
+# hart's own. Results go in RAM at DATA.
+
+[defaults]
+harts = 3
+prelude = '''
+        .equ  SLOTS, -59049
+        .equ  LOCAL, -78732
+        .equ  STATE, -12
+        .equ  START_PC, -9
+        .equ  START_ARG, -6
+        .equ  CONTROL, -3
+        .equ  SEND, 0
+        .equ  RECEIVE, 3
+        .equ  COUNT, 6
+        .equ  TARGET, 27
+        .equ  SPAN, 30
+        .equ  GSEND, 33
+        .equ  LAST, 36
+        .equ  HARTS, -27
+        .equ  EVENT_HART, -30
+        .equ  EVENT, -33
+        .equ  POWER, -39366
+        .equ  DATA, 19683
+'''
+
+[[case]]
+name = "a started hart begins at START_PC with its argument"
+program = '''
+        li    s0, SLOTS + 27
+        lw    t0, STATE(s0)       # hart 1: present, stopped
+        li    t1, SLOTS + 54
+        lw    t1, STATE(t1)       # hart 2: absent with 3 harts
+        li    s1, DATA
+        sw    t0, 6(s1)
+        sw    t1, 9(s1)
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 42
+        sw    t0, START_ARG(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        lw    t0, STATE(s0)
+        sw    t0, 12(s1)          # running at once
+wait:   lw    t0, STATE(s0)
+        bnez  t0, wait
+        lw    a0, 0(s1)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+second: li    s0, DATA
+        sw    a0, 0(s0)
+        csrr  t0, hartid
+        sw    t0, 3(s0)
+        li    t0, -1
+        li    t1, LOCAL
+        sw    t0, CONTROL(t1)     # stop
+        brk                       # a stopped hart runs nothing more
+'''
+expect.exit_code = 42
+expect.words = { "19683" = 42, "19686" = 1, "19689" = 0, "19692" = -1, "19695" = 1 }
+
+[[case]]
+name = "the controller reports 729 slots"
+harts = 1
+program = '''
+        li    t0, LOCAL
+        lw    a0, HARTS(t0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 729
+
+[[case]]
+name = "every hart reads the same clock"
+# A started hart first runs in the round after it was started, the same
+# round as the boot hart's next instruction, so both read the same time.
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        csrr  s1, time
+wait:   lw    t0, STATE(s0)
+        bnez  t0, wait
+        li    t0, DATA
+        lw    t0, 0(t0)
+        sub   a0, t0, s1
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+second: csrr  t0, time
+        li    t1, DATA
+        sw    t0, 0(t1)
+        li    t0, -1
+        li    t1, LOCAL
+        sw    t0, CONTROL(t1)
+'''
+expect.exit_code = 0
+
+[[case]]
+name = "a message rings the doorbell"
+# Hart 1 waits with the software interrupt enabled; its handler drains the
+# mailbox and stops once both messages have arrived.
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        li    t0, 7
+        sw    t0, SEND(s0)
+        li    t0, 8
+        sw    t0, SEND(s0)
+wait:   lw    t0, STATE(s0)
+        bnez  t0, wait
+        li    t0, DATA
+        lw    a0, 0(t0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+second: la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+000          # ie trit 3: software
+        csrw  mie, t0
+        li    t0, 0t+0            # tstatus.IE = +
+        csrw  mtstatus, t0
+idle:   wfi
+        j     idle
+handler:
+        li    s0, LOCAL
+drain:  lw    t0, RECEIVE(s0)
+        add   s1, s1, t0
+        bnez  t0, drain
+        csrr  t0, mip
+        li    t1, 15
+        beq   s1, t1, done
+        tret
+done:   li    t1, DATA
+        sw    s1, 0(t1)
+        csrr  t2, mtcause
+        sw    t2, 3(t1)
+        sw    t0, 6(t1)           # ip once the mailbox is empty
+        li    t0, -1
+        sw    t0, CONTROL(s0)
+'''
+expect.exit_code = 15
+# cause -3; ip keeps only the timer trit (timecmp is 0), the doorbell is off.
+expect.words = { "19686" = -3, "19689" = 3 }
+
+[[case]]
+name = "a full mailbox refuses the tenth message"
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, spin
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        li    s1, LOCAL
+        li    t2, 10
+        li    a0, 0
+send:   sw    t2, SEND(s0)
+        lw    t0, LAST(s1)
+        add   a0, a0, t0
+        addi  t2, t2, -1
+        bnez  t2, send
+        li    t1, DATA
+        lw    t0, COUNT(s0)
+        sw    t0, 0(t1)
+        lw    t0, RECEIVE(s0)     # not ours: takes nothing
+        sw    t0, 3(t1)
+        lw    t0, COUNT(s0)
+        sw    t0, 6(t1)
+        li    t0, SLOTS - 27      # hart -1 is present but stopped
+        sw    t2, SEND(t0)
+        lw    t0, LAST(s1)
+        sw    t0, 9(t1)
+        li    t6, POWER
+        sw    a0, 0(t6)
+spin:   j     spin
+'''
+expect.exit_code = 8              # nine accepted (+1), one refused (-1)
+expect.words = { "19683" = 9, "19686" = 0, "19689" = 9, "19692" = -1 }
+
+[[case]]
+name = "a group send reaches the running harts of a triad"
+# Harts -1, +1 and +2 are started; a send to the triad around 0 reaches -1
+# and +1 but not the sender or +2. Each worker stores what it received at
+# DATA + 3*hartid and stops.
+harts = 9
+program = '''
+        la    t0, worker
+        li    t1, 1
+        li    s0, SLOTS - 27
+        sw    t0, START_PC(s0)
+        sw    t1, CONTROL(s0)
+        li    s0, SLOTS + 27
+        sw    t0, START_PC(s0)
+        sw    t1, CONTROL(s0)
+        li    s0, SLOTS + 54
+        sw    t0, START_PC(s0)
+        sw    t1, CONTROL(s0)
+        li    s1, LOCAL
+        sw    zero, TARGET(s1)
+        sw    t1, SPAN(s1)
+        li    t0, 5
+        sw    t0, GSEND(s1)
+        li    s0, SLOTS - 27
+w1:     lw    t0, STATE(s0)
+        bnez  t0, w1
+        li    s0, SLOTS + 27
+w2:     lw    t0, STATE(s0)
+        bnez  t0, w2
+        li    s0, SLOTS + 54
+        lw    t0, STATE(s0)
+        li    t1, DATA
+        sw    t0, 9(t1)           # +2 still running, nothing received
+        lw    a0, LAST(s1)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+worker: li    s0, LOCAL
+poll:   lw    t0, COUNT(s0)
+        beqz  t0, poll
+        lw    t1, RECEIVE(s0)
+        csrr  t2, hartid
+        add   t3, t2, t2
+        add   t3, t3, t2
+        li    t4, DATA
+        add   t3, t3, t4
+        sw    t1, 0(t3)
+        li    t0, -1
+        sw    t0, CONTROL(s0)
+'''
+expect.exit_code = 1
+expect.words = { "19680" = 5, "19683" = 0, "19686" = 5, "19689" = 0, "19692" = 1 }
+
+[[case]]
+name = "only a hart can stop itself"
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, spin
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        li    t0, -1
+        sw    t0, CONTROL(s0)
+        lw    a0, STATE(s0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+spin:   j     spin
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "stopping discards the mailbox"
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        sw    t0, SEND(s0)
+        sw    t0, SEND(s0)
+wait:   lw    t0, STATE(s0)
+        bnez  t0, wait
+        lw    a0, COUNT(s0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+second: li    s0, LOCAL
+poll:   lw    t0, COUNT(s0)
+        addi  t0, t0, -2
+        bnez  t0, poll            # both messages waiting, unread
+        li    t0, -1
+        sw    t0, CONTROL(s0)
+'''
+expect.exit_code = 0
+
+[[case]]
+name = "a restarted hart starts afresh"
+# The worker adds s1 to its argument and leaves 100 in s1; started a
+# second time, it finds s1 back at 0.
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, worker
+        sw    t0, START_PC(s0)
+        li    t0, 5
+        sw    t0, START_ARG(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+w1:     lw    t1, STATE(s0)
+        bnez  t1, w1
+        li    t1, 7
+        sw    t1, START_ARG(s0)
+        sw    t0, CONTROL(s0)
+w2:     lw    t1, STATE(s0)
+        bnez  t1, w2
+        li    t0, DATA
+        lw    a0, 0(t0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+worker: add   t0, a0, s1
+        li    t1, DATA
+        sw    t0, 0(t1)
+        li    s1, 100
+        li    t0, -1
+        li    t1, LOCAL
+        sw    t0, CONTROL(t1)
+'''
+expect.exit_code = 7
+
+[[case]]
+name = "another hart's store breaks a reservation"
+program = '''
+        li    s1, DATA
+        lr    t0, (s1)
+        li    s0, SLOTS + 27
+        la    t0, writer
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+wait:   lw    t0, STATE(s0)
+        bnez  t0, wait
+        li    t0, 9
+        sc    a0, t0, (s1)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+writer: li    t1, DATA
+        li    t0, 3
+        st    t0, 1(t1)           # one tryte of the reserved word
+        li    t0, -1
+        li    t1, LOCAL
+        sw    t0, CONTROL(t1)
+'''
+expect.exit_code = 1
+expect.words = { "19683" = 1162261467 }   # 3 in the high tryte
+
+[[case]]
+name = "wfi waits for a message"
+# Interrupts are off (tstatus.IE = 0), so the doorbell only ends the wait.
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        li    t1, 20
+delay:  addi  t1, t1, -1
+        bnez  t1, delay
+        sw    t0, SEND(s0)
+wait:   lw    t0, STATE(s0)
+        bnez  t0, wait
+        li    t0, DATA
+        lw    a0, 0(t0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+second: li    t0, 0t+000
+        csrw  mie, t0
+        wfi
+        li    s0, LOCAL
+        lw    t0, COUNT(s0)
+        li    t1, DATA
+        sw    t0, 0(t1)
+        li    t0, -1
+        sw    t0, CONTROL(s0)
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "time skips ahead only when every hart waits"
+# Each hart waits for its own timer, with interrupts off. Hart 1 wakes at
+# 501 and stops; hart 0 wakes at 1001. Without skipping, 100 steps would
+# not reach either.
+max_steps = 100
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        li    t0, 1000
+        csrw  mtimecmp, t0
+        li    t0, 0t+0
+        csrw  mie, t0
+        wfi
+        csrr  a0, time
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+second: li    t0, 500
+        csrw  mtimecmp, t0
+        li    t0, 0t+0
+        csrw  mie, t0
+        wfi
+        csrr  t0, time
+        li    t1, DATA
+        sw    t0, 0(t1)
+        li    t0, -1
+        li    t1, LOCAL
+        sw    t0, CONTROL(t1)
+'''
+expect.exit_code = 1001
+expect.words = { "19683" = 501 }
+
+[[case]]
+name = "a plugged-in hart is announced and can be started"
+harts = 1
+hotplug = [{ time = 30, add = 1 }]
+program = '''
+        la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+00           # ie trit 2: external
+        csrw  mie, t0
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+idle:   wfi
+        j     idle
+handler:
+        csrr  s2, mtcause
+        li    s1, LOCAL
+        lw    s3, EVENT(s1)
+        lw    s4, EVENT(s1)       # only one event
+        li    s0, SLOTS + 27
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+wait:   lw    t0, STATE(s0)
+        bnez  t0, wait
+        li    t0, DATA
+        lw    a0, 0(t0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+second: csrr  t0, hartid
+        li    t1, DATA
+        sw    t0, 0(t1)
+        li    t0, -1
+        li    t1, LOCAL
+        sw    t0, CONTROL(t1)
+'''
+expect.exit_code = 1
+expect.registers = { s2 = -2, s3 = 4, s4 = 0 }
+
+[[case]]
+name = "a hart asked to go stops itself and is removed"
+harts = 2
+hotplug = [{ time = 40, remove = -1 }]
+program = '''
+        li    s0, SLOTS - 27
+        la    t0, worker
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+00
+        csrw  mie, t0
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+idle:   j     idle
+handler:
+        li    s1, LOCAL
+        lw    a0, EVENT(s1)
+        li    t0, DATA
+        sw    a0, 0(t0)           # tell the worker to go
+wait:   lw    t0, STATE(s0)
+        bgez  t0, wait            # until it is absent
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+worker: li    s0, DATA
+poll:   lw    t0, 0(s0)
+        beqz  t0, poll
+        li    t0, -1
+        li    t1, LOCAL
+        sw    t0, CONTROL(t1)
+'''
+expect.exit_code = -4             # removal requested (-1) of hart -1
+expect.registers = { s2 = 0 }
+
+[[case]]
+name = "an unhandled trap names its hart"
+program = '''
+        li    s0, SLOTS + 27
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+spin:   j     spin
+second: brk
+'''
+expect.unhandled_cause = 5
+expect.unhandled_hart = 1
+
+[[case]]
+name = "the doorbell goes to ring +1 unless delegated"
+harts = 1
+program = '''
+        li    t0, LOCAL
+        sw    t0, SEND(t0)        # a hart may message itself
+        csrr  a1, mip
+        csrr  a2, sip
+        li    t1, 0t+000
+        csrw  ideleg, t1
+        csrr  a3, mip
+        csrr  a4, sip
+        li    t6, POWER
+        sw    zero, 0(t6)
+'''
+expect.exit_code = 0
+# Both timer trits are pending (timecmp is 0); trit 3 follows ideleg.
+expect.registers = { a1 = 30, a2 = 3, a3 = 3, a4 = 30 }

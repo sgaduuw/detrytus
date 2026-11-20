@@ -240,8 +240,8 @@ impl Shell {
     }
 
     pub fn show_current(&mut self) {
-        let pc = self.dbg.machine.hart.pc;
-        let ring = self.dbg.machine.hart.ring;
+        let pc = self.dbg.machine.boot_hart().pc;
+        let ring = self.dbg.machine.boot_hart().ring;
         let (_, text) = self.dbg.disassemble(pc, 1).remove(0);
         self.say(&format!("=> {}  [ring {ring:+}]  {text}", self.dbg.where_(pc)));
     }
@@ -321,7 +321,7 @@ impl Shell {
     fn do_regs(&mut self) -> Done {
         // Arguments and temporaries, then saved registers, then gp, tp, ra, sp.
         let order: Vec<i64> = (1..=13).chain((-13..=-1).rev()).collect();
-        let hart = &self.dbg.machine.hart;
+        let hart = &self.dbg.machine.boot_hart();
         let cells: Vec<String> = order
             .iter()
             .map(|&r| {
@@ -349,7 +349,7 @@ impl Shell {
         let value = self
             .dbg
             .machine
-            .hart
+            .boot_hart_mut()
             .csr_by_number(number)
             .ok_or_else(|| format!("no CSR {number}"))?;
         let shown = isa::csr_name(number).unwrap_or_else(|| number.to_string());
@@ -397,7 +397,7 @@ impl Shell {
 
     fn do_disas(&mut self, arg: &str) -> Done {
         let (expr, count) = Self::addr_and_count(arg, 8);
-        let pc = self.dbg.machine.hart.pc;
+        let pc = self.dbg.machine.boot_hart().pc;
         let addr = if expr.is_empty() { pc } else { self.dbg.evaluate(&expr)? };
         for (a, text) in self.dbg.disassemble(addr, count) {
             let mark = if a == pc { "=>" } else { "  " };

@@ -52,11 +52,39 @@ impl Hart {
         Ok(())
     }
 
-    /// ip for a ring's bank, with the timer trit computed from time.
+    /// ip for a ring's bank, with the timer trit computed from time and
+    /// the hart controller's lines added to the bank `ideleg` routes
+    /// them to (ring +1 unless delegated).
     fn pending(&self, ring: i64) -> i64 {
         let bank = &self.banks[bank_index(ring)];
         let timer = if self.time >= bank[TIMECMP] { 1 } else { 0 };
-        set_trit(bank[IP], 1, timer)
+        let mut ip = set_trit(bank[IP], 1, timer);
+        let ideleg = self.csrs[&isa::IDELEG];
+        for (line, i) in [(self.external, 2), (self.doorbell, 3)] {
+            let routed = if field(ideleg, i, 1) == 1 { 0 } else { 1 };
+            if line && routed == ring {
+                ip = set_trit(ip, i, 1);
+            }
+        }
+        ip
+    }
+
+    /// Whether an interrupt is pending and enabled in `ie` in either
+    /// bank, whatever the rings and IE bits: what ends a `wfi`.
+    pub(crate) fn wakeable(&self) -> bool {
+        [0, 1].into_iter().any(|ring| {
+            let (ip, ie) = (self.pending(ring), self.banks[bank_index(ring)][IE]);
+            (1..=3).any(|i| field(ip, i, 1) == 1 && field(ie, i, 1) == 1)
+        })
+    }
+
+    /// The earliest enabled timer compare after the current time.
+    pub(crate) fn timer_deadline(&self) -> Option<i64> {
+        self.banks
+            .iter()
+            .filter(|b| field(b[IE], 1, 1) == 1 && b[TIMECMP] > self.time)
+            .map(|b| b[TIMECMP])
+            .min()
     }
 
     fn interruptible(&self, ring: i64) -> bool {
@@ -182,17 +210,9 @@ impl Hart {
         Ok(())
     }
 
-    /// Nothing but the timer can wake a lone hart, so skip ahead to the
-    /// earliest enabled timer instead of spinning.
+    /// Wait: the machine runs this hart again when an interrupt is
+    /// pending, skipping time ahead if every hart is waiting.
     pub(crate) fn wfi(&mut self) {
-        let deadline = self
-            .banks
-            .iter()
-            .filter(|b| field(b[IE], 1, 1) == 1 && b[TIMECMP] > self.time)
-            .map(|b| b[TIMECMP])
-            .min();
-        if let Some(t) = deadline {
-            self.time = t;
-        }
+        self.waiting = true;
     }
 }
