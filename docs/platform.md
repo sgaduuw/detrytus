@@ -146,8 +146,8 @@ reach its own mailbox without computing its address from `hartid`.
   on hart 1".
 - With more than one hart, `run --trace` puts the hart's number first
   on each line.
-- The debugger shows and steps hart 0 only, so far; the others run
-  alongside it, a round per step.
+- The debugger steps a round at a time and looks at one hart, the one
+  in focus (`docs/debugger.md`, Several harts).
 
 ## Paging
 

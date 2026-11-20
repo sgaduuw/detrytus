@@ -1,18 +1,23 @@
 //! The debugger's engine: run control, breakpoints, watchpoints,
 //! inspection. Ported from the original Python tools.
 //!
-//! It drives a Machine one step at a time, with the hart recording what
+//! It drives a Machine one step at a time, with the harts recording what
 //! each step did, and decides when to stop. Program output and trace
 //! lines go straight to stdout, in the order they happen.
+//!
+//! A step is a round: every running hart runs one instruction. One hart
+//! is in focus, the one the inspection commands look at; a breakpoint,
+//! watchpoint or caught trap on any hart stops the run and moves the
+//! focus there.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 
 use detrytus_asm::disasm::disassemble;
 use detrytus_asm::expr::{Symbols, evaluate};
-use detrytus_core::hart::{AccessKind, Event};
+use detrytus_core::hart::{AccessKind, Event, Hart};
 use detrytus_core::isa;
-use detrytus_core::{Machine, Outcome};
+use detrytus_core::{Hotplug, Machine, Outcome};
 
 use crate::program::Program;
 
@@ -61,6 +66,11 @@ pub struct Debugger {
     program: Program,
     symbols: Symbols,
     ram_pages: i64,
+    harts: i64,
+    /// Hot-plug changes, kept so a restart makes them again.
+    pub hotplug: Vec<(i64, Hotplug)>,
+    /// The hart the inspection commands look at.
+    pub focus: i64,
     pub machine: Machine,
     /// Id 0 is the temporary breakpoint of `next`.
     pub breakpoints: BTreeMap<u64, i64>,
@@ -74,12 +84,15 @@ pub struct Debugger {
 }
 
 impl Debugger {
-    pub fn new(program: Program, ram_pages: i64) -> Self {
+    pub fn new(program: Program, ram_pages: i64, harts: i64, hotplug: Vec<(i64, Hotplug)>) -> Self {
         let symbols: Symbols = program.symbols.iter().cloned().collect::<HashMap<_, _>>();
         let mut dbg = Debugger {
             program,
             symbols,
             ram_pages,
+            harts,
+            hotplug,
+            focus: 0,
             machine: Machine::new(ram_pages, 1),
             breakpoints: BTreeMap::new(),
             watches: BTreeMap::new(),
@@ -95,9 +108,15 @@ impl Debugger {
 
     // --- the machine -------------------------------------------------------
 
-    /// A fresh machine with the program loaded. Stopping points stay.
+    /// A fresh machine with the program loaded. Stopping points and
+    /// hot-plug changes stay.
     pub fn restart(&mut self) {
-        self.machine = Machine::new(self.ram_pages, 1);
+        self.machine = Machine::with_harts(self.ram_pages, 1, self.harts);
+        for &(time, change) in &self.hotplug {
+            self.machine.schedule(time, change).expect("checked when it was given");
+        }
+        self.machine.record_events(true);
+        self.focus = 0;
         for (&addr, &tryte) in &self.program.trytes {
             self.machine.bus.poke(addr, tryte);
         }
@@ -109,6 +128,35 @@ impl Debugger {
             let value = self.watched_value(first, last);
             self.watches.get_mut(&id).unwrap().value = value;
         }
+    }
+
+    /// Whether there can be more than one hart: messages then say which.
+    pub fn several(&self) -> bool {
+        self.harts > 1 || !self.hotplug.is_empty()
+    }
+
+    /// " on hart N" when there can be several harts.
+    fn on_hart(&self, h: i64) -> String {
+        if self.several() { format!(" on hart {h}") } else { String::new() }
+    }
+
+    /// The hart in focus.
+    pub fn hart(&self) -> &Hart {
+        self.machine.hart(self.focus).unwrap_or_else(|| self.hart())
+    }
+
+    pub fn hart_mut(&mut self) -> &mut Hart {
+        let focus = if self.machine.hart(self.focus).is_some() { self.focus } else { 0 };
+        self.machine.hart_mut(focus).unwrap()
+    }
+
+    /// Plug a hart in, or ask for one to go, at `time` (default: the next
+    /// step). Returns the time.
+    pub fn hotplug(&mut self, change: Hotplug, time: Option<i64>) -> Result<i64, String> {
+        let time = time.unwrap_or(self.machine.time + 1);
+        self.machine.schedule(time, change)?;
+        self.hotplug.push((time, change));
+        Ok(time)
     }
 
     // --- run control -------------------------------------------------------
@@ -128,9 +176,10 @@ impl Debugger {
     /// does not stop on it again.
     pub fn cont(&mut self, limit: u64) -> Stop {
         for n in 0..limit {
-            let pc = self.machine.boot_hart().pc;
-            if n > 0 && self.breakpoints.values().any(|&a| a == pc) {
-                return Stop::new("breakpoint", self.breakpoint_message());
+            if n > 0
+                && let Some(stop) = self.breakpoint_hit()
+            {
+                return stop;
             }
             if let Some(stop) = self.step_once() {
                 return stop;
@@ -141,7 +190,7 @@ impl Debugger {
 
     /// Step, treating a call as one step: run until it returns.
     pub fn next(&mut self) -> Stop {
-        let pc = self.machine.boot_hart().pc;
+        let pc = self.hart().pc;
         let is_call = self
             .peek(pc, 3)
             .and_then(|w| isa::decode(w).ok())
@@ -153,7 +202,7 @@ impl Debugger {
         self.breakpoints.insert(0, return_to);
         let stop = self.cont(DEFAULT_LIMIT);
         self.breakpoints.remove(&0);
-        if stop.reason == "breakpoint" && self.machine.boot_hart().pc == return_to {
+        if stop.reason == "breakpoint" && self.hart().pc == return_to {
             return Stop::step();
         }
         stop
@@ -176,28 +225,33 @@ impl Debugger {
         if let Some(code) = self.halted {
             return Some(Stop::new("halted", format!("the machine has powered off (exit {code})")));
         }
-        self.machine.boot_hart_mut().events = Some(Vec::new());
         let outcome = self.machine.step();
-        let events = self.machine.boot_hart_mut().events.take().unwrap_or_default();
+        let events = self.machine.take_events();
         if self.trace {
-            for event in &events {
-                if let Event::Execute { pc, word } = *event {
-                    println!("   {:>24}  {}", self.where_(pc), disassemble(word, Some(pc)));
+            for &(h, event) in &events {
+                if let Event::Execute { pc, word } = event {
+                    let who = if self.several() { format!("[{h:>4}] ") } else { String::new() };
+                    println!("   {who}{:>24}  {}", self.where_(pc), disassemble(word, Some(pc)));
                 }
             }
         }
         self.flush_console();
+        if self.machine.hart(self.focus).is_none() {
+            self.focus = 0; // the hart in focus was removed
+        }
         match outcome {
             Some(Outcome::Exit { code, .. }) => {
                 self.halted = Some(code);
                 Some(Stop::new("halted", format!("powered off with exit code {code}")))
             }
-            Some(Outcome::Unhandled { cause, tval, pc, ring, .. }) => {
+            Some(Outcome::Unhandled { hart, cause, tval, pc, ring }) => {
                 self.halted = Some(-1);
+                self.focus = hart;
+                let on = self.on_hart(hart);
                 Some(Stop::new(
                     "unhandled",
                     format!(
-                        "unhandled trap: cause {cause:+} at pc {pc} in ring {ring:+}, tval {tval}"
+                        "unhandled trap: cause {cause:+} at pc {pc} in ring {ring:+}, tval {tval}{on}"
                     ),
                 ))
             }
@@ -209,22 +263,25 @@ impl Debugger {
         }
     }
 
-    fn caught_trap(&self, events: &[Event]) -> Option<Stop> {
+    fn caught_trap(&mut self, events: &[(i64, Event)]) -> Option<Stop> {
         let catch = self.catch.as_ref()?;
-        events.iter().find_map(|e| match *e {
+        let (h, cause, tval, tpc) = events.iter().find_map(|&(h, e)| match e {
             Event::Trap { cause, tval, tpc } if catch.is_empty() || catch.contains(&cause) => {
-                Some(Stop::new(
-                    "trap",
-                    format!("trap cause {cause:+} at {}, tval {tval}", self.where_(tpc)),
-                ))
+                Some((h, cause, tval, tpc))
             }
             _ => None,
-        })
+        })?;
+        self.focus = h;
+        let on = self.on_hart(h);
+        Some(Stop::new(
+            "trap",
+            format!("trap cause {cause:+} at {}, tval {tval}{on}", self.where_(tpc)),
+        ))
     }
 
-    fn watch_hit(&mut self, events: &[Event]) -> Option<Stop> {
-        for event in events {
-            let Event::Access { addr, width, kind } = *event else { continue };
+    fn watch_hit(&mut self, events: &[(i64, Event)]) -> Option<Stop> {
+        for &(h, event) in events {
+            let Event::Access { addr, width, kind } = event else { continue };
             let kind = match kind {
                 AccessKind::Read => "r",
                 AccessKind::Write => "w",
@@ -236,6 +293,7 @@ impl Debugger {
                 .find(|(_, w)| w.hit(addr, width, kind))
                 .map(|(id, w)| (*id, w.first, w.last));
             if let Some((id, first, last)) = hit {
+                self.focus = h;
                 let new = self.watched_value(first, last);
                 let watch = self.watches.get_mut(&id).unwrap();
                 let old = std::mem::replace(&mut watch.value, new);
@@ -249,20 +307,42 @@ impl Debugger {
                 } else {
                     format!(": {} -> {}", show(old), show(new))
                 };
+                let on = self.on_hart(h);
                 return Some(Stop::new(
                     "watchpoint",
-                    format!("watchpoint {id}: {verb} at {}{change}", self.where_(addr)),
+                    format!("watchpoint {id}: {verb} at {}{change}{on}", self.where_(addr)),
                 ));
             }
         }
         None
     }
 
-    fn breakpoint_message(&self) -> String {
-        let pc = self.machine.boot_hart().pc;
-        let id = self.breakpoints.iter().find(|(id, a)| **a == pc && **id != 0).map(|(id, _)| *id);
-        let label = id.map_or_else(|| "returned".to_string(), |id| format!("breakpoint {id}"));
-        format!("{label} at {}", self.where_(pc))
+    /// A breakpoint at the pc of a hart about to run, the hart in focus
+    /// first; the focus moves to it. The temporary breakpoint of `next`
+    /// (id 0) is only for the hart in focus.
+    fn breakpoint_hit(&mut self) -> Option<Stop> {
+        let mut harts = self.machine.prepare_round();
+        harts.sort_by_key(|&h| h != self.focus);
+        for h in harts {
+            let pc = self.machine.hart(h).unwrap().pc;
+            let ids: Vec<u64> = self
+                .breakpoints
+                .iter()
+                .filter(|(id, a)| **a == pc && (**id != 0 || h == self.focus))
+                .map(|(id, _)| *id)
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            self.focus = h;
+            let label = ids
+                .iter()
+                .find(|id| **id != 0)
+                .map_or_else(|| "returned".to_string(), |id| format!("breakpoint {id}"));
+            let on = self.on_hart(h);
+            return Some(Stop::new("breakpoint", format!("{label} at {}{on}", self.where_(pc))));
+        }
+        None
     }
 
     // --- breakpoints, watchpoints ------------------------------------------
@@ -314,7 +394,7 @@ impl Debugger {
     /// An assembler expression, where $name is a register and $pc the pc.
     pub fn evaluate(&self, text: &str) -> Result<i64, String> {
         let replaced = self.registers_in(text)?;
-        let pc = self.machine.boot_hart().pc;
+        let pc = self.hart().pc;
         let value = evaluate(&replaced, &self.symbols, Some(pc as i128))
             .map_err(|e| e.message().to_string())?;
         i64::try_from(value).map_err(|_| format!("{value} is too large"))
@@ -361,13 +441,9 @@ impl Debugger {
             };
             let name: String = chars[i + 1..end].iter().collect();
             if name == "pc" {
-                out.push_str(&self.machine.boot_hart().pc.to_string());
+                out.push_str(&self.hart().pc.to_string());
             } else {
-                let value = self
-                    .machine
-                    .boot_hart()
-                    .reg(&name)
-                    .ok_or_else(|| format!("no register ${name}"))?;
+                let value = self.hart().reg(&name).ok_or_else(|| format!("no register ${name}"))?;
                 out.push_str(&format!("({value})"));
             }
             i = end;
@@ -392,7 +468,7 @@ impl Debugger {
 
     /// Memory as the current ring sees it, with no side effects.
     pub fn peek(&mut self, addr: i64, width: u32) -> Option<i64> {
-        let physical = self.machine.probe(0, addr)?;
+        let physical = self.machine.probe(self.focus, addr)?;
         self.machine.bus.peek(physical, width)
     }
 

@@ -279,14 +279,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -452,8 +454,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 '''
 stderr = ""
@@ -720,14 +723,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -883,8 +888,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 '''
 stderr = ""
@@ -1171,14 +1177,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -1356,8 +1364,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 '''
 stderr = ""
@@ -1633,14 +1642,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -1806,8 +1817,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 '''
 stderr = ""
@@ -2095,14 +2107,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -2273,8 +2287,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 '''
 stderr = ""
@@ -2406,14 +2421,16 @@ detrytus debugger. 'help' lists commands; 'help CMD' explains one.
 (dt) 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 (dt) 
 Documented commands (type help <topic>):
 ========================================
-EOF    catch     csr     disas    help  next   quit  restart  trace  xp
-break  continue  delete  examine  info  print  regs  step     watch
+EOF    continue  disas    help  plug   regs     trace   xp
+break  csr       examine  info  print  restart  unplug
+catch  delete    hart     next  quit   step     watch 
 
 (dt) step [N]: run N instructions (default 1). Alias: s
 (dt) *** No help on s

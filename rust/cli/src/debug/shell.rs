@@ -7,6 +7,8 @@ use std::io::{BufRead, Write};
 
 use detrytus_asm::pyrepr::repr;
 use detrytus_asm::text::{is_space, strip};
+use detrytus_core::Hotplug;
+use detrytus_core::harts::{self, ABSENT, RUNNING, STOPPED};
 use detrytus_core::isa;
 use detrytus_core::trits::low;
 
@@ -42,7 +44,7 @@ const CAUSES: [(&str, i64); 9] = [
 
 /// Each command's help, as `inspect.cleandoc` leaves the Python
 /// docstring; `help CMD` prints it.
-const HELP: [(&str, &str); 19] = [
+const HELP: [(&str, &str); 22] = [
     ("EOF", "quit: leave the debugger. Alias: q"),
     (
         "break",
@@ -60,15 +62,27 @@ const HELP: [(&str, &str); 19] = [
     ("delete", "delete [ID]: remove a breakpoint or watchpoint, or all of them. Alias: d"),
     ("disas", "disas [ADDR] [N]: disassemble N words from ADDR (default: the pc, 8)."),
     ("examine", "examine ADDR [N]: show N words from ADDR (default 4). Alias: x"),
+    (
+        "hart",
+        "hart [N]: list the harts, or look at hart N.\n\nregs, csr, print, examine, disas and next then use hart N. A step\nruns every running hart one instruction, whichever is in focus.",
+    ),
     ("help", "List available commands with \"help\" or detailed help with \"help cmd\"."),
     ("info", "info: list breakpoints, watchpoints and caught traps. Alias: i"),
     ("next", "next: step, running a whole call as one step. Alias: n"),
+    (
+        "plug",
+        "plug HART [TIME]: plug a hart in at TIME (default: the next step).\n\nThe hart arrives stopped, and the hart controller announces it.",
+    ),
     ("print", "print EXPR: evaluate, with $name for registers. Alias: p"),
     ("quit", "quit: leave the debugger. Alias: q"),
     ("regs", "regs: show every register, the pc and the ring."),
     ("restart", "restart: reload the program on a fresh machine; breakpoints stay."),
     ("step", "step [N]: run N instructions (default 1). Alias: s"),
     ("trace", "trace on|off: print every instruction as it runs."),
+    (
+        "unplug",
+        "unplug HART [TIME]: ask for a hart to go at TIME (default: the next step).\n\nThe hart controller asks the program; the hart goes once it stops.",
+    ),
     (
         "watch",
         "watch ADDR [r|w|rw]: stop after an access to ADDR (default w). Alias: w\n\nAn aligned ADDR watches the word centred on it, any other one tryte.\nAddresses are virtual, as the program sees them.",
@@ -80,7 +94,7 @@ const HELP: [(&str, &str); 19] = [
 ];
 
 /// `help` with no topic: cmd.Cmd's columns of documented commands.
-const HELP_LIST: &str = "\nDocumented commands (type help <topic>):\n========================================\nEOF    catch     csr     disas    help  next   quit  restart  trace  xp\nbreak  continue  delete  examine  info  print  regs  step     watch\n\n";
+const HELP_LIST: &str = "\nDocumented commands (type help <topic>):\n========================================\nEOF    continue  disas    help  plug   regs     trace   xp\nbreak  csr       examine  info  print  restart  unplug\ncatch  delete    hart     next  quit   step     watch \n\n";
 
 fn format_trits(value: i64) -> String {
     let mut x = value;
@@ -182,6 +196,9 @@ impl Shell {
                 self.dbg.delete(id).map(|()| false)
             }
             "info" => self.do_info(),
+            "hart" => self.do_hart(arg),
+            "plug" => self.do_plug(arg, Hotplug::Add),
+            "unplug" => self.do_plug(arg, Hotplug::Remove),
             "regs" => self.do_regs(),
             "csr" => self.do_csr(arg),
             "print" => {
@@ -240,10 +257,68 @@ impl Shell {
     }
 
     pub fn show_current(&mut self) {
-        let pc = self.dbg.machine.boot_hart().pc;
-        let ring = self.dbg.machine.boot_hart().ring;
+        let (pc, ring) = (self.dbg.hart().pc, self.dbg.hart().ring);
         let (_, text) = self.dbg.disassemble(pc, 1).remove(0);
-        self.say(&format!("=> {}  [ring {ring:+}]  {text}", self.dbg.where_(pc)));
+        let mut place = format!("ring {ring:+}");
+        if self.dbg.several() {
+            let state = match self.dbg.machine.bus.harts.state(self.dbg.focus) {
+                RUNNING => "",
+                _ => " stopped",
+            };
+            place = format!("hart {}{state}, {place}", self.dbg.focus);
+        }
+        self.say(&format!("=> {}  [{place}]  {text}", self.dbg.where_(pc)));
+    }
+
+    /// `hart`: every present hart; `hart N`: look at hart N.
+    fn do_hart(&mut self, arg: &str) -> Done {
+        if strip(arg).is_empty() {
+            for h in -harts::MAX_HART..=harts::MAX_HART {
+                let state = match self.dbg.machine.bus.harts.state(h) {
+                    ABSENT => continue,
+                    STOPPED => "stopped",
+                    _ => "running",
+                };
+                let mark = if h == self.dbg.focus { '*' } else { ' ' };
+                let mut line = format!("{mark} {h:>4}  {state}");
+                if let Some(hart) = self.dbg.machine.hart(h) {
+                    let wait = if hart.waiting() && state == "running" { ", in wfi" } else { "" };
+                    let (pc, ring) = (hart.pc, hart.ring);
+                    line += &format!("  pc {}  ring {ring:+}{wait}", self.dbg.where_(pc));
+                }
+                self.say(&line);
+            }
+            return Ok(false);
+        }
+        let h = self.dbg.evaluate(arg)?;
+        if self.dbg.machine.hart(h).is_none() {
+            let why = match self.dbg.machine.bus.harts.state(h) {
+                ABSENT => "is not present",
+                _ => "has not run yet",
+            };
+            return Err(format!("hart {h} {why}"));
+        }
+        self.dbg.focus = h;
+        self.show_current();
+        Ok(false)
+    }
+
+    /// `plug HART [TIME]` and `unplug HART [TIME]`.
+    fn do_plug(&mut self, arg: &str, change: fn(i64) -> Hotplug) -> Done {
+        let words: Vec<&str> = arg.split(is_space).filter(|w| !w.is_empty()).collect();
+        let (hart, time) = match words.as_slice() {
+            [h] => (self.dbg.evaluate(h)?, None),
+            [h, t] => (self.dbg.evaluate(h)?, Some(self.dbg.evaluate(t)?)),
+            _ => return Err("give a hart, and optionally a time".into()),
+        };
+        let change = change(hart);
+        let time = self.dbg.hotplug(change, time)?;
+        let what = match change {
+            Hotplug::Add(_) => "plugged in",
+            Hotplug::Remove(_) => "asked to go",
+        };
+        self.say(&format!("hart {hart} will be {what} at time {time}"));
+        Ok(false)
     }
 
     pub fn do_break(&mut self, arg: &str) -> Done {
@@ -315,13 +390,20 @@ impl Shell {
             Some(c) => list_repr(c),
         };
         self.say(&format!("  catch: {catch}"));
+        for (time, change) in &self.dbg.hotplug {
+            let (verb, h) = match change {
+                Hotplug::Add(h) => ("plug", h),
+                Hotplug::Remove(h) => ("unplug", h),
+            };
+            self.say(&format!("  {verb} hart {h} at time {time}"));
+        }
         Ok(false)
     }
 
     fn do_regs(&mut self) -> Done {
         // Arguments and temporaries, then saved registers, then gp, tp, ra, sp.
         let order: Vec<i64> = (1..=13).chain((-13..=-1).rev()).collect();
-        let hart = &self.dbg.machine.boot_hart();
+        let hart = self.dbg.hart();
         let cells: Vec<String> = order
             .iter()
             .map(|&r| {
@@ -346,12 +428,8 @@ impl Shell {
             Some(n) => n,
             None => self.dbg.evaluate(&name)?,
         };
-        let value = self
-            .dbg
-            .machine
-            .boot_hart_mut()
-            .csr_by_number(number)
-            .ok_or_else(|| format!("no CSR {number}"))?;
+        let value =
+            self.dbg.hart_mut().csr_by_number(number).ok_or_else(|| format!("no CSR {number}"))?;
         let shown = isa::csr_name(number).unwrap_or_else(|| number.to_string());
         self.say(&format!("{shown} = {value}  0t{}", format_trits(value)));
         Ok(false)
@@ -397,7 +475,7 @@ impl Shell {
 
     fn do_disas(&mut self, arg: &str) -> Done {
         let (expr, count) = Self::addr_and_count(arg, 8);
-        let pc = self.dbg.machine.boot_hart().pc;
+        let pc = self.dbg.hart().pc;
         let addr = if expr.is_empty() { pc } else { self.dbg.evaluate(&expr)? };
         for (a, text) in self.dbg.disassemble(addr, count) {
             let mark = if a == pc { "=>" } else { "  " };

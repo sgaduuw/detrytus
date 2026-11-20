@@ -20,7 +20,8 @@ use program::{Loaded, load, load_one, strerror};
 const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
-       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] FILE...";
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
 const USAGE_ERROR: u8 = 2;
@@ -83,21 +84,8 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--max-steps" => run.max_steps = number(&arg, args.next())?,
             "--stats" => run.stats = true,
             "--trace" => run.trace = true,
-            "--harts" => {
-                run.harts = number(&arg, args.next())?;
-                if !(1..=729).contains(&run.harts) {
-                    return Err(usage("--harts takes 1 to 729"));
-                }
-            }
-            "--plug" | "--unplug" => {
-                let spec = args.next().unwrap_or_default();
-                let (time, hart) = spec
-                    .split_once(':')
-                    .and_then(|(t, h)| Some((t.parse().ok()?, h.parse().ok()?)))
-                    .ok_or_else(|| usage(&format!("{arg} needs TIME:HART")))?;
-                let change =
-                    if arg == "--plug" { Hotplug::Add(hart) } else { Hotplug::Remove(hart) };
-                run.hotplug.push((time, change));
+            "--harts" | "--plug" | "--unplug" => {
+                hart_option(&arg, args.next(), &mut run.harts, &mut run.hotplug)?
             }
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
@@ -109,6 +97,32 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         return Err(usage("run needs at least one file"));
     }
     Ok(run)
+}
+
+/// --harts N, --plug TIME:HART or --unplug TIME:HART, checked here so
+/// that a bad one is a usage error before anything runs.
+fn hart_option(
+    flag: &str,
+    value: Option<String>,
+    harts: &mut i64,
+    hotplug: &mut Vec<(i64, Hotplug)>,
+) -> Result<(), Fail> {
+    if flag == "--harts" {
+        *harts = number(flag, value)?;
+        if !(1..=729).contains(harts) {
+            return Err(usage("--harts takes 1 to 729"));
+        }
+        return Ok(());
+    }
+    let (time, hart) = value
+        .as_deref()
+        .and_then(|v| v.split_once(':'))
+        .and_then(|(t, h)| Some((t.parse().ok()?, h.parse().ok()?)))
+        .ok_or_else(|| usage(&format!("{flag} needs TIME:HART")))?;
+    let change = if flag == "--plug" { Hotplug::Add(hart) } else { Hotplug::Remove(hart) };
+    Machine::new(1, 1).schedule(time, change).map_err(|e| usage(&e))?;
+    hotplug.push((time, change));
+    Ok(())
 }
 
 fn format_trits(word: i64) -> String {
@@ -175,7 +189,7 @@ fn sign(n: i64) -> String {
 fn run(args: RunArgs) -> Result<u8, Fail> {
     let mut machine = Machine::with_harts(args.ram_pages, seed(), args.harts);
     for &(time, change) in &args.hotplug {
-        machine.schedule(time, change).map_err(|e| usage(&e))?;
+        machine.schedule(time, change).expect("checked when parsed");
     }
     for (addr, tryte) in load(&args.files)?.trytes {
         machine.bus.poke(addr, tryte);
@@ -246,6 +260,7 @@ fn seed() -> u32 {
 fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     let (mut files, mut ram_pages, mut breaks, mut commands, mut batch) =
         (Vec::new(), 729, Vec::new(), None, false);
+    let (mut harts, mut hotplug) = (1, Vec::new());
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -257,6 +272,9 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
                 commands = Some(args.next().ok_or_else(|| usage("-x needs a file"))?)
             }
             "--batch" => batch = true,
+            "--harts" | "--plug" | "--unplug" => {
+                hart_option(&arg, args.next(), &mut harts, &mut hotplug)?
+            }
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -267,7 +285,9 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
         return Err(usage("debug needs at least one file"));
     }
     let program = load(&files)?;
-    let mut shell = debug::shell::Shell { dbg: debug::engine::Debugger::new(program, ram_pages) };
+    let mut shell = debug::shell::Shell {
+        dbg: debug::engine::Debugger::new(program, ram_pages, harts, hotplug),
+    };
     for expr in &breaks {
         shell.onecmd(&format!("break {expr}"));
     }

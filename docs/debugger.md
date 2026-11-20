@@ -14,7 +14,9 @@ detrytus debug examples/bsearch.s -b bsearch -x commands.txt --batch
 
 `-b ADDR` sets a breakpoint before starting (repeatable), `-x FILE` runs
 debugger commands from a file first, and `--batch` exits once they are
-done, which makes sessions scriptable.
+done, which makes sessions scriptable. `--harts N`, `--plug TIME:HART`
+and `--unplug TIME:HART` set up harts as for `run` (see Several harts,
+below).
 
 ## Commands
 
@@ -36,6 +38,9 @@ done, which makes sessions scriptable.
 | `xp ADDR [N]` | | N words of physical memory from ADDR, untranslated |
 | `disas [ADDR] [N]` | | disassemble N words (default: 8 from the pc) |
 | `trace on\|off` | | print every instruction as it runs |
+| `hart [N]` | | list the harts, or look at hart N |
+| `plug HART [TIME]` | | plug a hart in at TIME (default: the next step) |
+| `unplug HART [TIME]` | | ask for a hart to go at TIME (default: the next step) |
 | `quit` | `q` | leave |
 
 `help CMD` explains any of them.
@@ -59,6 +64,30 @@ centred there; on any other address, the single tryte.
 `misaligned`, `access`, `syscall`, `breakpoint`, `fetch-fault`,
 `load-fault`, `store-fault`, `timer`. It stops once the trap has been
 taken, at the first instruction of the handler.
+
+## Several harts
+
+A step is a round of the machine (`docs/platform.md`, Time): every
+running hart runs one instruction. `step 3` is three rounds, whichever
+hart is in focus.
+
+One hart is **in focus**: `regs`, `csr`, `print` (`$pc`, `$a0`),
+`examine`, `disas`, `watch` values and `next` use it, and addresses are
+translated with its page table. `hart` lists every present hart, marking
+the one in focus with `*`, with its pc and ring once it has run; `hart
+N` moves the focus to hart N.
+
+A breakpoint stops any hart about to run the instruction at its address
+(the hart in focus is checked first); a watchpoint stops on any hart's
+access; `catch` on any hart's trap. Each moves the focus to the hart
+that stopped, and when there can be several harts, messages and the
+`=>` line name it: `stopped: breakpoint 1 at 126 <worker> on hart 1`.
+`next` waits for the call to return on the hart in focus.
+
+`plug` and `unplug` schedule hot-plug at a time on the shared clock, as
+`--plug` and `--unplug` do. `info` lists the changes, and `restart`
+makes them again, as it keeps breakpoints. Focus returns to hart 0 on
+`restart`, and when the hart in focus is removed.
 
 ## Looking never changes the machine
 
