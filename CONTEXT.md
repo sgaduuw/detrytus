@@ -854,3 +854,19 @@ differently. Left out: `lw`/`sw` with small offsets (about 1%, since
 structure offsets are larger than 2 trits reach) and `la` (an `auipc`
 and `addi` pair, 12% of the static code), which wants gp-relative
 addressing rather than a slot.
+
+### 2026-11-21 · `.assert` rather than `.error`
+
+trylobite wanted a way for `include/kernel.s` to say "build shell.s or
+demo.s" when assembled alone. The assembler has no conditionals, so a
+bare `.error` would fire every time. `.assert E, "MESSAGE"` is one
+directive instead of a conditional-assembly system: E is checked in
+pass two, when every symbol is known, so `defined(NAME)` answers the
+same wherever it is asked (and is refused outside `.assert`, where pass
+one would see only the symbols so far). Comparisons joined the
+expressions so a layout constant can be checked, as in
+`.assert PCB_SIZE == 117, "..."`. Conditionals can still come if a
+build ever needs to vary its code.
+
+Unknown escapes (`\b`) became errors at the same time: they used to
+stand for the character itself.

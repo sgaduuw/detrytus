@@ -87,6 +87,17 @@ expect.exit_code = 39
 expect.trytes = { "299" = 92, "300" = 34, "301" = 39, "302" = 10, "303" = 9, "304" = 0 }
 
 [[case]]
+name = "an .assert that holds emits nothing and sees later symbols"
+program = '''
+        .assert defined(done) * (done == 9), "done is the fourth word"
+start:  li    a0, 5 > 2
+        li    t6, -39366
+        sw    a0, 0(t6)
+done:   .word 0
+'''
+expect.exit_code = 1
+
+[[case]]
 name = "local labels: 1b is the nearest before, 1f the next after"
 program = '''
         li    a0, 0

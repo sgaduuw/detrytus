@@ -343,6 +343,11 @@ fn rename_local_labels(stmts: &mut [Statement]) -> Result<(), AsmError> {
         }
         let mut renamed = Vec::with_capacity(s.operands.len());
         for op in &s.operands {
+            // A quoted operand, such as an .assert message, is text.
+            if op.starts_with('"') {
+                renamed.push(op.clone());
+                continue;
+            }
             renamed.push(replace_local_refs(op, |number, back| {
                 resolve_local(&defs, i, s, number, back)
             })?);
