@@ -22,6 +22,7 @@ checks each file's format, assembles each case and runs it on the core.
 | `traps/` | traps, delegation, interrupts, the timer, single step |
 | `paging/` | translation, permission faults, superpages, the TLB |
 | `harts/` | several harts: starting and stopping, mailboxes, group sends, `wfi`, the shared clock, hot-plug |
+| `devices/` | the interrupt controller and console input states |
 | `asm/` | the assembler: layout, local labels, sections, and its errors |
 | `examples/` | the programs in `examples/`, run as shipped |
 
@@ -62,6 +63,7 @@ expect.registers = { a1 = 7, a2 = -3 }
 | `ram_pages` | RAM size in pages; default 729 |
 | `max_steps` | step limit; default 100000 |
 | `input` | text queued on the console's input |
+| `console_open` | `true` leaves the console open once `input` is read, as the debugger does: reads give `CONSOLE_EMPTY` (−1) rather than `CONSOLE_CLOSED` (−2); default false, as `run` |
 | `harts` | harts present at reset, numbered outward from 0; default 1 |
 | `hotplug` | a list of `{ time = T, add = H }` or `{ time = T, remove = H }` |
 

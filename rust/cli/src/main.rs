@@ -219,6 +219,8 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     if let Some(path) = &args.input {
         machine.bus.console.feed(&read_input(path)?);
     }
+    // Nothing can type into a run: once its input is read, no more comes.
+    machine.bus.console.closed = true;
     // With more than one hart, trace lines say which ran each instruction.
     let several = args.harts > 1 || !args.hotplug.is_empty();
     if args.trace {

@@ -16,6 +16,8 @@ detrytus debug examples/bsearch.s -b bsearch -x commands.txt --batch
 debugger commands from a file first, and `--batch` exits once they are
 done, which makes sessions scriptable. `--input FILE` queues the file's
 text on the console's input, as for `run`, and again on every `restart`.
+Unlike `run`, the debugger keeps the console open once that text is
+read, so `input` can add more; `eof` closes it.
 `--harts N`, `--plug TIME:HART`
 and `--unplug TIME:HART` set up harts as for `run` (see Several harts,
 below).
@@ -44,6 +46,7 @@ below).
 | `plug HART [TIME]` | | plug a hart in at TIME (default: the next step) |
 | `unplug HART [TIME]` | | ask for a hart to go at TIME (default: the next step) |
 | `input TEXT` | | queue TEXT on the console's input; `\n` newline, `\t` tab, `\s` space, `\\` backslash |
+| `eof` | | close the console's input: once what is queued is read, console in reads `CONSOLE_CLOSED` (−2), not `CONSOLE_EMPTY` (−1); `restart` opens it again |
 | `quit` | `q` | leave |
 
 `help CMD` explains any of them.

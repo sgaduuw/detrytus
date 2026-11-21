@@ -44,7 +44,7 @@ const CAUSES: [(&str, i64); 9] = [
 
 /// Each command's help, as `inspect.cleandoc` leaves the Python
 /// docstring; `help CMD` prints it.
-const HELP: [(&str, &str); 23] = [
+const HELP: [(&str, &str); 24] = [
     ("EOF", "quit: leave the debugger. Alias: q"),
     (
         "break",
@@ -61,6 +61,10 @@ const HELP: [(&str, &str); 23] = [
     ("csr", "csr NAME|NUMBER: show a CSR, read as ring +1 would."),
     ("delete", "delete [ID]: remove a breakpoint or watchpoint, or all of them. Alias: d"),
     ("disas", "disas [ADDR] [N]: disassemble N words from ADDR (default: the pc, 8)."),
+    (
+        "eof",
+        "eof: close the console's input.\n\nOnce what is queued is read, console in reads CONSOLE_CLOSED (-2)\ninstead of CONSOLE_EMPTY (-1): no more input will come. restart opens\nit again.",
+    ),
     ("examine", "examine ADDR [N]: show N words from ADDR (default 4). Alias: x"),
     (
         "hart",
@@ -98,7 +102,7 @@ const HELP: [(&str, &str); 23] = [
 ];
 
 /// `help` with no topic: cmd.Cmd's columns of documented commands.
-const HELP_LIST: &str = "\nDocumented commands (type help <topic>):\n========================================\nEOF    continue  disas    help   next   quit     step    watch\nbreak  csr       examine  info   plug   regs     trace   xp   \ncatch  delete    hart     input  print  restart  unplug\n\n";
+const HELP_LIST: &str = "\nDocumented commands (type help <topic>):\n========================================\nEOF    continue  disas    hart  input  print  restart  unplug\nbreak  csr       eof      help  next   quit   step     watch \ncatch  delete    examine  info  plug   regs   trace    xp    \n\n";
 
 fn format_trits(value: i64) -> String {
     let mut x = value;
@@ -228,6 +232,10 @@ impl Shell {
             "input" => {
                 let text = unescape(arg)?;
                 self.dbg.machine.bus.console.feed(&text);
+                Ok(false)
+            }
+            "eof" => {
+                self.dbg.machine.bus.console.closed = true;
                 Ok(false)
             }
             "regs" => self.do_regs(),

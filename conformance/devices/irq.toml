@@ -1,0 +1,230 @@
+# Device interrupts and console input states (docs/platform.md, Device
+# interrupts and Console input states). The interrupt controller is page
+# -13, centred on IRQ; source s's registers are at IRQ + 9*s + -3/0/+3.
+# Source 1 is console input. Results go in RAM at DATA.
+
+[defaults]
+prelude = '''
+        .equ  IRQ, -255879
+        .equ  CLAIM, -3
+        .equ  COMPLETE, 0
+        .equ  SOURCES, 3
+        .equ  PENDING1, 6
+        .equ  ENABLE1, 9
+        .equ  ROUTE1, 12
+        .equ  PENDING2, 15
+        .equ  ENABLE2, 18
+        .equ  ROUTE2, 21
+        .equ  ENABLE3, 27
+        .equ  CONSOLE_IN, -19680
+        .equ  CONSOLE_EMPTY, -1
+        .equ  CONSOLE_CLOSED, -2
+        .equ  SLOTS, -59049
+        .equ  START_PC, -9
+        .equ  CONTROL, -3
+        .equ  LOCAL, -78732
+        .equ  POWER, -39366
+        .equ  DATA, 19683
+'''
+
+[[case]]
+name = "an open console reads CONSOLE_EMPTY once its input is used up"
+input = "a"
+console_open = true
+program = '''
+        li    t0, CONSOLE_IN
+        lw    s2, 0(t0)
+        lw    s3, 0(t0)
+        lw    s4, 0(t0)
+        li    a0, 0
+'''
+postlude = "li t6, POWER\nsw a0, 0(t6)"
+expect.exit_code = 0
+expect.registers = { s2 = 97, s3 = -1, s4 = -1 }
+
+[[case]]
+name = "a closed console reads its input, then CONSOLE_CLOSED"
+input = "a"
+program = '''
+        li    t0, CONSOLE_IN
+        lw    s2, 0(t0)
+        lw    s3, 0(t0)
+        lw    s4, 0(t0)
+        li    a0, 0
+'''
+postlude = "li t6, POWER\nsw a0, 0(t6)"
+expect.exit_code = 0
+expect.registers = { s2 = 97, s3 = -2, s4 = -2 }
+
+[[case]]
+name = "the controller's registers read back, and missing sources read 0"
+input = "a"
+console_open = true
+program = '''
+        li    s1, IRQ
+        lw    s2, SOURCES(s1)
+        lw    s3, PENDING1(s1)    # input waiting
+        lw    s4, PENDING2(s1)    # no block device yet
+        li    t0, 1
+        sw    t0, ENABLE1(s1)
+        lw    s5, ENABLE1(s1)
+        li    t0, 7               # not +1: stored as 0
+        sw    t0, ENABLE2(s1)
+        lw    s6, ENABLE2(s1)
+        li    t0, -4
+        sw    t0, ROUTE2(s1)
+        lw    s7, ROUTE2(s1)
+        li    t0, 1
+        sw    t0, ENABLE3(s1)     # no source 3
+        lw    s8, ENABLE3(s1)
+        lw    a1, CLAIM(s1)       # enabled and pending, but no interrupt needed to claim
+        lw    a2, CLAIM(s1)       # in service now
+        li    t0, CONSOLE_IN
+        lw    t0, 0(t0)
+        lw    a3, PENDING1(s1)    # read: nothing waiting, and still open
+        li    a0, 0
+'''
+postlude = "li t6, POWER\nsw a0, 0(t6)"
+expect.exit_code = 0
+expect.registers = { s2 = 2, s3 = 1, s4 = 0, s5 = 1, s6 = 0, s7 = -4, s8 = 0, a1 = 1, a2 = 0, a3 = 0 }
+
+[[case]]
+name = "a masked source does not interrupt"
+input = "a"
+program = '''
+        la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+00           # ie trit 2: external
+        csrw  mie, t0
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+        li    t0, 200
+spin:   addi  t0, t0, -1
+        bnez  t0, spin
+        li    a0, 0
+        li    t6, POWER
+        sw    a0, 0(t6)
+handler:
+        li    a0, 99
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 0
+
+[[case]]
+name = "console input wakes wfi, and the handler claims, serves and completes it"
+input = "Z"
+program = '''
+        la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+00
+        csrw  mie, t0
+        li    s1, IRQ
+        li    t0, 1
+        sw    t0, ENABLE1(s1)
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+idle:   wfi
+        j     idle
+handler:
+        csrr  s2, mtcause
+        lw    s3, CLAIM(s1)
+        lw    s4, CLAIM(s1)       # nothing else to claim
+        li    t0, CONSOLE_IN
+        lw    s5, 0(t0)           # the character
+        lw    s6, 0(t0)           # closed: the source stays pending
+        sw    s3, COMPLETE(s1)
+        lw    s7, CLAIM(s1)       # still pending, so claimable again
+        mv    a0, s5
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 90
+expect.registers = { s2 = -2, s3 = 1, s4 = 0, s6 = -2, s7 = 1 }
+
+[[case]]
+name = "a source in service does not interrupt again until it is completed"
+input = "Z"
+console_open = true
+program = '''
+        la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+00
+        csrw  mie, t0
+        li    s1, IRQ
+        li    t0, 1
+        sw    t0, ENABLE1(s1)
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+        li    s2, 0               # handler entries
+idle:   j     idle
+handler:
+        addi  s2, s2, 1
+        li    t0, 2
+        beq   s2, t0, done
+        lw    s3, CLAIM(s1)
+        li    t0, 0t+0            # interrupts on again: no re-entry while in service
+        csrw  mtstatus, t0
+        li    t1, 100
+again:  addi  t1, t1, -1
+        bnez  t1, again
+        mv    s4, s2              # still one entry
+        sw    s3, COMPLETE(s1)    # the input was not read: it interrupts again
+        j     idle
+done:   mv    a0, s4
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 1
+expect.registers = { s2 = 2, s3 = 1 }
+
+[[case]]
+name = "a source routed to another hart interrupts that hart only"
+harts = 3
+input = "Q"
+program = '''
+        li    s1, IRQ
+        li    t0, 1
+        sw    t0, ROUTE1(s1)
+        sw    t0, ENABLE1(s1)
+        li    s0, SLOTS + 27
+        la    t0, second
+        sw    t0, START_PC(s0)
+        li    t0, 1
+        sw    t0, CONTROL(s0)
+        la    t0, never
+        csrw  mtvec, t0
+        li    t0, 0t+00
+        csrw  mie, t0
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+        lw    s2, CLAIM(s1)       # not routed to hart 0
+        li    s0, DATA
+wait:   lw    a0, 0(s0)
+        beqz  a0, wait
+        li    t6, POWER
+        sw    a0, 0(t6)
+never:  li    a0, 99
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+second: la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+00
+        csrw  mie, t0
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+idle:   wfi
+        j     idle
+handler:
+        li    s1, IRQ
+        lw    t1, CLAIM(s1)
+        li    t0, CONSOLE_IN
+        lw    t0, 0(t0)
+        add   t0, t0, t1          # 'Q' + source 1
+        li    t1, DATA
+        sw    t0, 0(t1)
+spin:   j     spin
+'''
+expect.exit_code = 82
+expect.registers = { s2 = 0 }
