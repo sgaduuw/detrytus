@@ -1235,3 +1235,60 @@ stdout = ""
 stderr = '''
 detrytus: {tmp}/missing.s: No such file or directory
 '''
+
+[[case]]
+name = "static mix of bsearch.s"
+args = ["asm", "--mix", "{root}/examples/bsearch.s"]
+status = 0
+stdout = '''
+65 instructions written, 37 compressible (56.9%)
+mnemonic            count   share          fit   of it
+addi                   27   41.5%           17   63.0%
+jal                     8   12.3%            3   37.5%
+jalr                    4    6.2%            4  100.0%
+lw                      4    6.2%            4  100.0%
+sw                      4    6.2%            4  100.0%
+add                     2    3.1%            1   50.0%
+auipc                   2    3.1%            0    0.0%
+bne                     2    3.1%            1   50.0%
+div                     2    3.1%            0    0.0%
+beq                     1    1.5%            1  100.0%
+bge                     1    1.5%            0    0.0%
+bgt                     1    1.5%            0    0.0%
+br3                     1    1.5%            0    0.0%
+cmp                     1    1.5%            0    0.0%
+lt                      1    1.5%            1  100.0%
+rem                     1    1.5%            0    0.0%
+shi                     1    1.5%            0    0.0%
+st                      1    1.5%            1  100.0%
+sub                     1    1.5%            0    0.0%
+
+form                count   share
+c.li                    8   12.3%
+c.addi                  7   10.8%
+c.jr                    4    6.2%
+c.j                     3    4.6%
+c.lw                    2    3.1%
+c.lwsp                  2    3.1%
+c.mv                    2    3.1%
+c.sw                    2    3.1%
+c.swsp                  2    3.1%
+c.add                   1    1.5%
+c.beqz                  1    1.5%
+c.bnez                  1    1.5%
+c.lt                    1    1.5%
+c.st                    1    1.5%
+
+bundles: 10 pairs would save 10 of 65 words (15.4%)
+'''
+stderr = ""
+
+[[case]]
+name = "a static mix needs source"
+args = ["asm", "--mix", "{tmp}/hello.dti"]
+setup = [["asm", "{root}/examples/hello.s", "-o", "{tmp}/hello.dti"]]
+status = 65
+stdout = ""
+stderr = '''
+detrytus: {tmp}/hello.dti: --mix needs source
+'''

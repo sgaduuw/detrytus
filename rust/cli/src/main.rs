@@ -14,14 +14,15 @@ use detrytus_core::{Hotplug, Machine, Outcome};
 
 mod debug;
 mod disk;
+mod mix;
 mod program;
 
 use disk::DiskSpec;
 
 use program::{Loaded, load, load_one, strerror};
 
-const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -45,6 +46,7 @@ struct RunArgs {
     max_steps: u64,
     stats: bool,
     trace: bool,
+    mix: bool,
     harts: i64,
     hotplug: Vec<(i64, Hotplug)>,
     input: Option<String>,
@@ -81,6 +83,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         max_steps: 10_000_000,
         stats: false,
         trace: false,
+        mix: false,
         harts: 1,
         hotplug: Vec::new(),
         input: None,
@@ -94,6 +97,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--max-steps" => run.max_steps = number(&arg, args.next())?,
             "--stats" => run.stats = true,
             "--trace" => run.trace = true,
+            "--mix" => run.mix = true,
             "--input" => {
                 run.input = Some(args.next().ok_or_else(|| usage("--input needs a file"))?)
             }
@@ -203,7 +207,7 @@ fn format_trits(word: i64) -> String {
 }
 
 fn cmd_asm(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
-    let (mut file, mut output, mut listing) = (None, None, false);
+    let (mut file, mut output, mut listing, mut mix) = (None, None, false, false);
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -211,6 +215,7 @@ fn cmd_asm(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
                 output = Some(args.next().ok_or_else(|| usage("-o needs a file"))?)
             }
             "--listing" => listing = true,
+            "--mix" => mix = true,
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -227,12 +232,25 @@ fn cmd_asm(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
         };
         std::fs::write(out, bytes)
             .map_err(|e| Fail::new(format!("{out}: {}", strerror(&e)), NO_INPUT))?;
+        if !listing && !mix {
+            return Ok(0);
+        }
+    }
+    let Loaded::Source(image) = loaded else {
+        return if mix {
+            Err(Fail::new(format!("{file}: --mix needs source"), BAD_INPUT))
+        } else {
+            Ok(0)
+        };
+    };
+    let mut stdout = std::io::stdout().lock();
+    if mix {
+        let _ = stdout
+            .write_all(mix::of_listing(&image.listing, image.labels.values().copied()).as_bytes());
         if !listing {
             return Ok(0);
         }
     }
-    let Loaded::Source(image) = loaded else { return Ok(0) };
-    let mut stdout = std::io::stdout().lock();
     for e in &image.listing {
         // A section that runs somewhere other than where it loads shows both.
         let at =
@@ -266,18 +284,23 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     }
     // With more than one hart, trace lines say which ran each instruction.
     let several = args.harts > 1 || !args.hotplug.is_empty();
-    if args.trace {
+    if args.trace || args.mix {
         machine.record_events(true);
     }
+    let mut mix = mix::Mix::default();
     let mut stdout = std::io::stdout();
     let (mut done, mut printed) = (0u64, 0usize);
-    loop {
+    let result = loop {
         // Tracing runs one step at a time, printing what each executed.
         let chunk = if args.trace { 1 } else { CHUNK.min(args.max_steps - done) };
         let rings: Vec<(i64, i64)> = machine.harts().map(|(h, hart)| (h, hart.ring)).collect();
         let outcome = machine.run(chunk);
         for (h, event) in machine.take_events() {
             if let Event::Execute { pc, word } = event {
+                mix.add(word);
+                if !args.trace {
+                    continue;
+                }
                 // A hart started this step has no ring recorded: it began in +1.
                 let ring = rings.iter().find(|(r, _)| *r == h).map_or(1, |(_, ring)| *ring);
                 let who = if several { format!("{h:>4} ") } else { String::new() };
@@ -294,13 +317,13 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
                     eprintln!("\ndetrytus: {} steps, exit {code}", done + steps);
                 }
                 // The low byte, as Python's sys.exit gives the system.
-                return Ok((code & 0xFF) as u8);
+                break Ok((code & 0xFF) as u8);
             }
             Outcome::StepLimit => {
                 done += chunk;
                 if done >= args.max_steps {
                     let message = format!("no power-off after {done} steps");
-                    return Err(Fail::after_output(message, STEP_LIMIT));
+                    break Err(Fail::after_output(message, STEP_LIMIT));
                 }
             }
             Outcome::Unhandled { hart, cause, tval, pc, ring } => {
@@ -309,14 +332,19 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
                 if hart != 0 {
                     what += &format!(" on hart {hart}");
                 }
-                return Err(Fail::after_output(format!("unhandled trap: {what}"), UNHANDLED_TRAP));
+                break Err(Fail::after_output(format!("unhandled trap: {what}"), UNHANDLED_TRAP));
             }
             Outcome::Unsupported(what) => {
                 let message = format!("not implemented yet: {what}");
-                return Err(Fail::after_output(message, NOT_IMPLEMENTED));
+                break Err(Fail::after_output(message, NOT_IMPLEMENTED));
             }
         }
+    };
+    // However the run ended, what ran is worth seeing.
+    if args.mix {
+        eprint!("\n{}", mix.report("executed"));
     }
+    result
 }
 
 /// The entropy seed: random, as the Python command's hardware entropy.

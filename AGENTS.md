@@ -54,6 +54,7 @@ and hides a failure.
 | `docs/debugger.md` | the debugger's commands |
 | `rust/core/src/trits.rs` | balanced-ternary arithmetic on `i64` |
 | `rust/core/src/isa.rs` | the instruction set as data: opcodes, formats, fields, CSRs, decode and encode |
+| `rust/core/src/compressed.rs` | compressed bundles: which compressed form a full instruction fits |
 | `rust/core/src/alu.rs` | integer and tritwise operations as pure functions |
 | `rust/core/src/hart.rs` | one hart: the fetch loop and what each instruction does, and the events a debugger reads |
 | `rust/core/src/privileged.rs` | traps, interrupts, CSRs, `tret`, `wfi` |
@@ -65,7 +66,7 @@ and hides a failure.
 | `rust/core/src/machine.rs` | the platform wired together, and the harts run in rounds |
 | `rust/core/tests/` | the spec sync test |
 | `rust/asm/src/` | the assembler: `expr`, `source`, `operands`, `pseudo`, `assembler`, `disasm` |
-| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `debug/` (engine and shell) |
+| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
 | `rust/conformance/` | the conformance runner (tests only) |
 | `conformance/` | the conformance suite |

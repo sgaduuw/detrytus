@@ -10,6 +10,7 @@
 pub mod alu;
 pub mod block;
 pub mod bus;
+pub mod compressed;
 pub mod entropy;
 pub mod hart;
 pub mod harts;
