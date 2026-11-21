@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.8, **draft**. Everything here may change until the emulator
+Version 0.9, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -286,7 +286,8 @@ address in with `csrrw`), the `tp` register by convention, or the
 argument it was started with.
 
 **Signals and messages.** Each hart has a small mailbox in the hart
-controller. One store to another hart's mailbox queues a word for it and
+controller. One store to another hart's mailbox queues a word, 0 or
+more, for it and
 raises its software interrupt (cause −3), which stays pending while the
 mailbox holds messages. A sender can address one hart, or every running
 hart in a subtree of the numbering (all harts that agree with a number
