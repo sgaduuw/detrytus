@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.10, **draft**. Everything here may change until the emulator
+Version 0.11, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -117,7 +117,18 @@ second slot of a compressed bundle (6.1).
 | `r-13`         | `sp`         | stack pointer                | callee   |
 
 Positive registers are scratch; negative ones survive a call. The stack
-grows toward negative addresses. A boolean is a trit: `+` true, `-`
+grows toward negative addresses.
+
+**The global pointer.** `gp` points into a program's data, so that one
+`addi rd, gp, imm` forms the address of any global within ±21,523,360
+trytes of it, and one `lw` or `sw` reaches the global itself: what
+otherwise takes an `auipc` pair (7.7). A program sets `gp` once, before
+it first uses it, with a pc-relative `auipc` + `addi`, and never changes
+it after, so no function saves it. A trap handler that wants a `gp` of
+its own saves the interrupted one first and puts it back before `tret`.
+Where `gp` points is the program's choice: next to the globals it uses
+most, since `c.lagp`, `c.lwgp` and `c.swgp` (6.1) reach ±363 trytes
+of it, a word at a time. A boolean is a trit: `+` true, `-`
 false, and `0` where a three-valued result needs "unknown".
 
 ## 5. Memory
@@ -399,6 +410,9 @@ CJ     off[8]               | op       off: ±3,280 words
 | −3 | CR | `c.blt rd, rs, f` | `blt rd, rs, f` |
 | −4 | CR | `c.ble rd, rs, f` | `ble rd, rs, f` |
 | −5 | CI | `c.lip rd, imm` | `addi rd, r0, imm × 19,683`: a page address |
+| −6 | CI | `c.lagp rd, imm` | `addi rd, gp, 3·imm`: a global's address (4.2) |
+| −7 | CI | `c.lwgp rd, imm` | `lw rd, 3·imm(gp)`: a global's value |
+| −8 | CI | `c.swgp rd, imm` | `sw rd, 3·imm(gp)` |
 
 `c.jr ra` is `ret`. Unlisted opcodes and `f` values are reserved.
 
@@ -416,6 +430,13 @@ one. With them, 64% of trylobite's instructions have a compressed form
 words (13% before). Forms that trylobite never uses (`c.shi`,
 `c.cmpi`, `c.jalr`, `c.sub`, `c.cmp`, the min and max forms) stay
 while one hand-written kernel is the only measure.
+
+`c.lagp`, `c.lwgp` and `c.swgp` came with the `gp` convention (4.2),
+which makes `la` one `addi` from `gp` and a global one load or store.
+Putting trylobite's kernel globals and each program's data within their
+reach takes its code from 977 words to 880 (910 with `gp` but no
+compressed form, 886 with `c.lagp` alone). Globals are words, so their
+offsets count words; a string `c.lagp` should reach can be aligned.
 
 ## 7. Instructions
 
@@ -555,6 +576,8 @@ specified in bits. Ternary code has no need of them.
 load reaches any address relative to `pc`, with the low 8 trits in the
 second instruction and no carry correction (section 2). `auipc` is what
 makes position-independent code and relocatable kernels practical.
+With `gp` set (4.2), `addi rd, gp, imm` and a load or store from `gp`
+reach a global in one instruction.
 
 ### 7.8 Loads and stores (I, S)
 
@@ -800,7 +823,8 @@ for drivers that share buffers with devices.
 | `nop`             | `addi r0, r0, 0` |
 | `mv rd, rs`       | `addi rd, rs, 0` |
 | `li rd, imm`      | `addi`, or `lui` + `addi` |
-| `la rd, symbol`   | `auipc` + `addi` |
+| `la rd, symbol`   | `auipc` + `addi`, or `addi rd, gp, imm` where the program says where `gp` points |
+| `lw rd, symbol` etc. | `lw rd, imm(gp)`, the same way: also `lt`, `sw`, `st` |
 | `neg rd, rs` / `not rd, rs` | `sub rd, r0, rs` (the same operation) |
 | `sgn rd, rs`      | `cmp rd, rs, r0` |
 | `j label`         | `jal r0, label` |

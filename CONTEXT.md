@@ -951,3 +951,35 @@ words. A trial build of trylobite with `.compress` around its kernel
 and programs (and its syscall return moved to `tval`) went from 1,598
 to 1,314 words, 18% smaller, data included, and passed its tests but
 one that searched the debugger's output for the letter c.
+
+### 2026-11-21 · gp-relative addressing (proposal, ISA 0.11)
+
+After bundling, `la` (an `auipc` and `addi` pair) was the largest share
+of trylobite's code that no slot could take, about 12% of it. No new
+full instruction is needed: `addi`, `lw` and `sw` already carry a
+16-trit offset, ±21 million trytes, so with `gp` pointing into a
+program's data, `la` is one `addi` from `gp` and a global is one load
+away. The register was already named `gp` in 4.2; the spec now says
+what it means: set once, pc-relatively, never changed, so no function
+saves it, and a trap handler with a `gp` of its own swaps it the way it
+swaps `sp`. Where it points is left to the program, as `sp` is.
+
+The assembler learns where `gp` points from `.gp E`, which belongs to
+a section rather than running on from where it is written. A trial
+with a lexical directive broke at once: trylobite's tests append
+programs after the kernel's include, and those inherited the kernel's
+`gp`. `la gp, ...` stays pc-relative, since it is the instruction that
+sets `gp`. The assembler cannot check that the register holds E, so it
+takes it on trust, as it takes a section's run address.
+
+Three slot forms came with it, each counting words because globals are
+words: `c.lagp rd, imm` (op −6, `addi rd, gp, 3·imm`), `c.lwgp` (op −7,
+`lw rd, 3·imm(gp)`) and `c.swgp` (op −8, `sw rd, 3·imm(gp)`). A local
+prototype on trylobite (kernel globals reordered so the small ones sit
+next to `gp`, each process started with `gp` at its base): 977 code
+words before, 910 with `gp` and no new form, 886 with `c.lagp`, and 880
+with all three and `la` + `lw` pairs folded into `lw rd, symbol`. The
+load and store forms add only 6 words today, but folding without them
+loses the `c.lw`/`c.sw` the pair had, so Eelco took all three: folded
+code takes an instruction and a register fewer and stays compressible.
+5 slot opcodes stay free.
