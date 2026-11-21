@@ -887,3 +887,24 @@ than a hart number, a page or a pointer into a kernel needs, and a
 receiver takes a message with one load and a sign test. Keeping full
 words with a second register that says whether the last RECEIVE took
 one was the alternative; it costs a load on every receive. ISA 0.9.
+
+### 2026-11-21 · What a slot links and where `c.sys` resumes (proposal)
+
+Building the emulator's side of bundles showed three rules the 0.8
+table left open, all from the same arithmetic: `pc + 3` is the next
+instruction only for a full instruction. From slot B (`a + 1`) it is
+`a + 4`, slot B of the following word.
+
+- `jal` and `jalr` link "the next instruction": `a + 1` after slot A,
+  `a + 3` after slot B, `pc + 3` as before for a full instruction.
+- `sys` sets `tval` to the next instruction, and handlers resume there.
+  Adding 3 to `tpc` is wrong for `c.sys` in either slot, and working
+  it out from `tpc` would need the kernel to read the trapping word to
+  tell slot A from a full `sys`. `tval` was 0 for `sys`, so kernels
+  that add 3 keep working for full `sys`. Dropping `c.sys` was the
+  other way out; it was added in 0.8 because system calls were among
+  the most frequent uncompressible instructions.
+- A `pc` ending in `-` traps as misaligned; one ending in `+` whose word
+  is not a bundle traps as illegal with that word in `tval`; an illegal
+  slot reports the whole bundle in `tval`, and `tpc`'s low trit says
+  which slot. ISA 0.10.

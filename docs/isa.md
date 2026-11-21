@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.9, **draft**. Everything here may change until the emulator
+Version 0.10, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -161,7 +161,8 @@ trits 8..0, `a` holds 17..9, and `a+1` holds 26..18. Significance grows
 with address, the ternary form of little-endian.
 
 A misaligned word access traps (cause +2). Branch targets are always
-aligned words, and branch offsets count words.
+aligned words, and branch offsets count words. Fetching from a `pc`
+whose low trit is `-` traps as a misaligned access, with `tval` = `pc`.
 
 ### 5.3 Physical address map
 
@@ -358,6 +359,17 @@ jump targets are always word addresses; slot B is entered only by
 falling through, by `jalr` to a saved return address, or by `tret` after
 a trap in slot B. An unused slot holds `c.nop`. Compressed branch
 offsets are relative to the bundle's address, whichever slot holds them.
+
+**The next instruction.** After slot A it is `a + 1`; after slot B,
+`a + 3`. This is the address `c.jal` and `c.jalr` link and a `c.sys`
+handler resumes at (7.10, 8.4).
+
+**Traps in a bundle.** `tpc` is the slot's own address, so a `tret`
+resumes the slot that trapped. An illegal slot (op 0, or a reserved op
+or `f`) traps with cause +1 and `tval` = the whole bundle word; `tpc`'s
+low trit says which slot it was. A `pc` whose low trit is `+` must point
+into a bundle: if the word at `pc − 1` is not one, the fetch traps with
+cause +1 and `tval` = that word.
 
 ```
 trit:  10 9 | 8   6 | 5   3 | 2   0
@@ -642,10 +654,13 @@ scheduling; a deadline of the wait's own leaves it alone.
 
 | Op  | Mnemonic | Format | Semantics |
 |-----|----------|--------|-----------|
-| −10 | `jal rd, label`           | J | `rd = pc + 3`; `pc = pc + 3 × off` |
-| −11 | `jalr rd, imm(rs1)`       | I | `rd = pc + 3`; `pc = rs1 + imm`, which must be aligned or name a slot B |
+| −10 | `jal rd, label`           | J | `rd` = the next instruction; `pc = pc + 3 × off` |
+| −11 | `jalr rd, imm(rs1)`       | I | `rd` = the next instruction; `pc = rs1 + imm`, which must be aligned or name a slot B |
 | −12 | `b<cond> rs1, rs2, label` | B | if `cmp(rs1, rs2)` satisfies `cond`, `pc = pc + 3 × off` |
 | −13 | `br3 rs1, Lneg, Lpos`     | T | `rs1 < 0`: `pc += 3 × offN`; `rs1 > 0`: `pc += 3 × offP`; `rs1 = 0`: fall through |
+
+The next instruction is at `pc + 3` for a full instruction; in a
+bundle it is the following slot or word (6.1).
 
 The `cond` field of `b<cond>`:
 
@@ -748,7 +763,7 @@ the dynamic rounding mode.
 
 | Op  | Mnemonic | Semantics |
 |-----|----------|-----------|
-| −30 | `sys`                     | trap with cause +4 (system call) |
+| −30 | `sys`                     | trap with cause +4 (system call), `tval` = the next instruction |
 | −31 | `tret`                    | return from trap (8.4) |
 | −32 | `csrrw rd, csr, rs1`      | `rd = csr`; `csr = rs1` |
 | −33 | `csrrtmax rd, csr, rs1`   | `rd = csr`; `csr = tmax(csr, rs1)`, tritwise |
@@ -828,7 +843,7 @@ while the firmware's state stays untouched.
 | 1     | `tvec`    | trap handler address and mode |
 | 2     | `tpc`     | `pc` at the trap |
 | 3     | `tcause`  | trap cause |
-| 4     | `tval`    | faulting address or instruction |
+| 4     | `tval`    | faulting address or instruction; for `sys`, the next instruction |
 | 5     | `scratch` | free for the handler |
 | 6     | `ie`      | interrupt enables: trit `i` enables cause −`i` |
 | 7     | `ip`      | interrupts pending: trit `i` for cause −`i` |
@@ -888,7 +903,11 @@ On a trap into ring `r`, using ring `r`'s bank:
 2. `PR` = the current ring; `PIE` = `IE`; `IE` = `-`.
 3. The current ring becomes `r`, and `pc` comes from `tvec`.
 
-A `sys` handler resumes after the call by adding 3 to `tpc`.
+A `sys` handler resumes after the call at `tval`, the address of the
+next instruction: `tpc + 3` for a full `sys`, and the following slot or
+word for `c.sys` (6.1), where `tpc + 3` would be wrong. Until 0.10,
+`tval` was 0 and handlers added 3 to `tpc`, which still works for a
+full `sys`.
 
 `tret` returns using the bank of the current ring: `pc = tpc`,
 `IE = PIE`, current ring = `PR`. It is legal in rings 0 and +1.
