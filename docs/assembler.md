@@ -58,7 +58,9 @@ reset address.
 | `.section NAME[, LOAD[, RUN]]` | switch sections (below) |
 | `.include "PATH"` | assemble another file here (below) |
 
-String escapes: `\n`, `\t`, `\0`, `\\`, `\"`. Code points above 9,841
+Escapes, in strings and character literals: `\n`, `\t`, `\0`, `\\`,
+`\'` and `\"`. Any other escape is an error, so a typo such as `\b`
+does not quietly become `b`. Code points above 9,841
 do not fit a tryte and are rejected until the text encoding (`isa.md`
 12.2) is settled.
 

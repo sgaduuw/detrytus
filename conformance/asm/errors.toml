@@ -183,6 +183,18 @@ expect.asm_error = "expected a double-quoted string"
 expect.asm_error_line = 1
 
 [[case]]
+name = "a string refuses an unknown escape"
+program = '.string "a\bc"'
+expect.asm_error = "unknown escape \\b: the escapes are \\n \\t \\0 \\\\ \\' \\\""
+expect.asm_error_line = 1
+
+[[case]]
+name = "a character refuses an unknown escape"
+program = "li a0, '\\q'"
+expect.asm_error = "unknown escape \\q: the escapes are \\n \\t \\0 \\\\ \\' \\\""
+expect.asm_error_line = 1
+
+[[case]]
 name = "an include needs a quoted path"
 program = ".include nope.s"
 expect.asm_error = ".include takes one \"path\""

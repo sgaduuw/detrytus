@@ -43,13 +43,21 @@ fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '$'
 }
 
-fn escape(c: char) -> char {
-    match c {
+/// What a backslash escape in a character or string literal stands for.
+/// Any other escape is refused, so a typo like `\b` is an error rather
+/// than a silent `b`.
+pub(crate) fn escape(c: char) -> Option<char> {
+    Some(match c {
         'n' => '\n',
         't' => '\t',
         '0' => '\0',
-        other => other, // \\ \' \" and anything else: the character itself
-    }
+        '\\' | '\'' | '"' => c,
+        _ => return None,
+    })
+}
+
+pub(crate) fn unknown_escape(c: char) -> String {
+    format!("unknown escape \\{c}: the escapes are \\n \\t \\0 \\\\ \\' \\\"")
 }
 
 fn too_large(text: &str) -> ExprError {
@@ -98,7 +106,9 @@ fn token(s: &str) -> Result<Option<(Token, usize)>, ExprError> {
     if chars.first() == Some(&'\'') {
         // '(?P<char>[^'\\]|\\.)'
         let value = match (chars.get(1), chars.get(2), chars.get(3)) {
-            (Some('\\'), Some(&e), Some('\'')) if e != '\n' => Some((escape(e), 4)),
+            (Some('\\'), Some(&e), Some('\'')) if e != '\n' => {
+                Some((escape(e).ok_or_else(|| ExprError::Other(unknown_escape(e)))?, 4))
+            }
             (Some(&c), Some('\''), _) if c != '\'' && c != '\\' => Some((c, 3)),
             _ => None,
         };

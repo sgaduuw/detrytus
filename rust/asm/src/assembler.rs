@@ -465,12 +465,10 @@ fn string(s: &Statement) -> Result<String, AsmError> {
     let mut i = 0;
     while i < body.len() {
         if body[i] == '\\' && i + 1 < body.len() && body[i + 1] != '\n' {
-            out.push(match body[i + 1] {
-                'n' => '\n',
-                't' => '\t',
-                '0' => '\0',
-                other => other,
-            });
+            let c = body[i + 1];
+            out.push(
+                crate::expr::escape(c).ok_or_else(|| s.error(crate::expr::unknown_escape(c)))?,
+            );
             i += 2;
         } else {
             out.push(body[i]);

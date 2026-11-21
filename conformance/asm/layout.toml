@@ -75,6 +75,18 @@ expect.exit_code = 0
 expect.trytes = { "299" = 72, "300" = 233, "301" = 10, "302" = 0 }
 
 [[case]]
+name = "string and character escapes"
+program = '''
+        li    a0, '\''
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .org  300
+s:      .ascii "\\\"\'\n\t\0"
+'''
+expect.exit_code = 39
+expect.trytes = { "299" = 92, "300" = 34, "301" = 39, "302" = 10, "303" = 9, "304" = 0 }
+
+[[case]]
 name = "local labels: 1b is the nearest before, 1f the next after"
 program = '''
         li    a0, 0
