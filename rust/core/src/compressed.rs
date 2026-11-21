@@ -46,6 +46,9 @@ const OP_BNE: i64 = -2;
 const OP_BLT: i64 = -3;
 const OP_BLE: i64 = -4;
 const OP_LIP: i64 = -5;
+const OP_LAGP: i64 = -6;
+const OP_LWGP: i64 = -7;
+const OP_SWGP: i64 = -8;
 
 /// `f` of op 1 for the register forms other than `c.mv` (f 0), with the
 /// full instruction each is and, for `tlut`, its table.
@@ -153,7 +156,7 @@ fn full(name: &str, fields: &[(&str, i64)]) -> i64 {
 /// is not.
 pub fn expand(slot: i64) -> Option<i64> {
     let Fields { op, rd, rs, f, imm, off } = fields(slot);
-    let sp = reg("sp");
+    let (sp, gp) = (reg("sp"), reg("gp"));
     let branch = |cond, rs1, rs2, off| {
         full("b", &[("cond", cond), ("rs1", rs1), ("rs2", rs2), ("off", off)])
     };
@@ -198,6 +201,9 @@ pub fn expand(slot: i64) -> Option<i64> {
         OP_BLT => branch(LT, rd, rs, f),
         OP_BLE => branch(LE, rd, rs, f),
         OP_LIP => full("addi", &[("rd", rd), ("imm", imm * PAGE)]),
+        OP_LAGP => full("addi", &[("rd", rd), ("rs1", gp), ("imm", 3 * imm)]),
+        OP_LWGP => full("lw", &[("rd", rd), ("rs1", gp), ("imm", 3 * imm)]),
+        OP_SWGP => full("sw", &[("rs2", rd), ("rs1", gp), ("imm", 3 * imm)]),
         _ => return None,
     })
 }
@@ -234,7 +240,10 @@ pub fn mnemonic(slot: i64) -> Option<&'static str> {
         OP_BNE => "c.bne",
         OP_BLT => "c.blt",
         OP_BLE => "c.ble",
-        _ => "c.lip",
+        OP_LIP => "c.lip",
+        OP_LAGP => "c.lagp",
+        OP_LWGP => "c.lwgp",
+        _ => "c.swgp",
     })
 }
 
@@ -243,7 +252,9 @@ pub fn mnemonic(slot: i64) -> Option<&'static str> {
 /// The slot `d` can be written as, if any.
 pub fn compress(d: &Decoded) -> Option<i64> {
     let two = d.rd == d.rs1;
-    let (sp, ra) = (reg("sp"), reg("ra"));
+    let (sp, ra, gp) = (reg("sp"), reg("ra"), reg("gp"));
+    // A word offset from sp or gp that a CI immediate holds.
+    let words = |imm: i64| imm % 3 == 0 && ci(imm / 3);
     let reg_form = |name: &str| REG_FORMS.iter().find(|(_, _, n)| *n == name).map(|(f, _, _)| *f);
     let mem_form = |name: &str| MEM_FORMS.iter().find(|(_, _, n)| *n == name).map(|(f, _, _)| *f);
     Some(match d.op.kind {
@@ -253,18 +264,17 @@ pub fn compress(d: &Decoded) -> Option<i64> {
             ci_slot(OP_LIP, d.imm / PAGE, d.rd)
         }
         Kind::Addi if d.imm == 0 => cr(OP_REG, 0, d.rs1, d.rd),
+        Kind::Addi if d.rs1 == gp && words(d.imm) => ci_slot(OP_LAGP, d.imm / 3, d.rd),
         Kind::Addi if two && ci(d.imm) => ci_slot(OP_ADDI, d.imm, d.rd),
         Kind::Add | Kind::Sub | Kind::Cmp | Kind::Mul | Kind::Min | Kind::Max if two => {
             cr(OP_REG, reg_form(d.op.name)?, d.rs2, d.rd)
         }
         Kind::Tlut if two && d.fn_ == isa::TMIN => cr(OP_REG, reg_form("tmin")?, d.rs2, d.rd),
         Kind::Tlut if two && d.fn_ == isa::TMAX => cr(OP_REG, reg_form("tmax")?, d.rs2, d.rd),
-        Kind::Lw if d.rs1 == sp && d.imm % 3 == 0 && ci(d.imm / 3) => {
-            ci_slot(OP_LWSP, d.imm / 3, d.rd)
-        }
-        Kind::Sw if d.rs1 == sp && d.imm % 3 == 0 && ci(d.imm / 3) => {
-            ci_slot(OP_SWSP, d.imm / 3, d.rs2)
-        }
+        Kind::Lw if d.rs1 == sp && words(d.imm) => ci_slot(OP_LWSP, d.imm / 3, d.rd),
+        Kind::Sw if d.rs1 == sp && words(d.imm) => ci_slot(OP_SWSP, d.imm / 3, d.rs2),
+        Kind::Lw if d.rs1 == gp && words(d.imm) => ci_slot(OP_LWGP, d.imm / 3, d.rd),
+        Kind::Sw if d.rs1 == gp && words(d.imm) => ci_slot(OP_SWGP, d.imm / 3, d.rs2),
         Kind::Lw | Kind::Lt if d.imm == 0 => cr(OP_MEM, mem_form(d.op.name)?, d.rs1, d.rd),
         Kind::Sw | Kind::St if d.imm == 0 => cr(OP_MEM, mem_form(d.op.name)?, d.rs1, d.rs2),
         Kind::Jalr if d.rd == 0 && d.imm == 0 => cr(OP_JUMP, JR, d.rs1, 0),
@@ -338,7 +348,7 @@ mod tests {
     #[test]
     fn illegal_slots() {
         assert_eq!(expand(0), None, "op 0");
-        assert_eq!(expand(-6), None, "reserved op");
+        assert_eq!(expand(-9), None, "reserved op");
         assert_eq!(expand(cr(OP_MEM, -2, 1, 1)), None, "reserved f");
         assert_eq!(expand(cr(OP_JUMP, JR, 1, 1)), None, "c.jr with rd");
         assert_eq!(expand(cr(OP_JUMP, SYS, 1, 0)), None, "c.sys with rs");
@@ -396,6 +406,22 @@ mod tests {
         assert_eq!(word("sw", &[("rs2", 1), ("rs1", sp), ("imm", 4)]), None, "not a word");
         assert_eq!(word("st", &[("rs2", 1), ("rs1", 2)]), Some("c.st"));
         assert_eq!(word("lt", &[("rd", 1), ("rs1", sp), ("imm", 3)]), None, "no c.ltsp");
+    }
+
+    #[test]
+    fn gp_forms_take_words_within_reach() {
+        let gp = reg("gp");
+        assert_eq!(word("addi", &[("rd", 1), ("rs1", gp), ("imm", -363)]), Some("c.lagp"));
+        assert_eq!(word("addi", &[("rd", 1), ("rs1", gp), ("imm", 366)]), None, "too far");
+        assert_eq!(word("addi", &[("rd", 1), ("rs1", gp), ("imm", 4)]), None, "not a word");
+        assert_eq!(word("lw", &[("rd", 1), ("rs1", gp), ("imm", 363)]), Some("c.lwgp"));
+        assert_eq!(word("sw", &[("rs2", 1), ("rs1", gp), ("imm", -3)]), Some("c.swgp"));
+        assert_eq!(word("sw", &[("rs2", 1), ("rs1", gp), ("imm", 2)]), None, "not a word");
+        assert_eq!(word("lt", &[("rd", 1), ("rs1", gp), ("imm", 3)]), None, "no c.ltgp");
+        assert_eq!(
+            expand(ci_slot(OP_SWGP, 2, 4)),
+            Some(full("sw", &[("rs2", 4), ("rs1", gp), ("imm", 6)]))
+        );
     }
 
     #[test]

@@ -983,3 +983,17 @@ load and store forms add only 6 words today, but folding without them
 loses the `c.lw`/`c.sw` the pair had, so Eelco took all three: folded
 code takes an instruction and a register fewer and stays compressible.
 5 slot opcodes stay free.
+
+### 2026-11-21 · gp-relative addressing built (ISA 0.11)
+
+The assembler handles `.gp` in a pass of its own (`rust/asm/src/gp.rs`)
+between parsing and layout: it follows sections, and rewrites `la` and
+a load or store that names a symbol into the one machine instruction
+each stands for, an offset from `gp` written as `(symbol) - (E)`.
+Layout then sees an ordinary one-word `addi`, `lw` or `sw`, so automatic
+bundling needs no change to put it in a `c.lagp`, `c.lwgp` or `c.swgp`
+slot, and the listing still shows the line as written. The rewritten
+statement remembers its symbol and E, so a distance beyond 16 trits is
+reported in those terms rather than as an immediate that does not fit.
+The three slot forms are rows of the compressed table like the others;
+the emulator runs them through the same expansion.
