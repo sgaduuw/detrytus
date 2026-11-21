@@ -370,3 +370,20 @@ handler:
         sw    a0, 0(t6)
 '''
 expect.exit_code = 2
+
+[[case]]
+name = "csrrw from zero reads and does not write"
+# The read form csrr expands to, written out: the assembler accepts it
+# (only the csrw pseudo from zero is refused) and mscratch keeps 5.
+prelude = ""
+program = '''
+        li    t0, 5
+        csrw  mscratch, t0
+        csrrw a1, mscratch, zero
+        csrrw a0, mscratch, r0
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 5
+expect.registers = { a1 = 5 }
+expect.csrs = { mscratch = 5 }

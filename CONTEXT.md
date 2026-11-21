@@ -690,3 +690,18 @@ one in `wfi`, and also runs again once the bus no longer holds its
 reservation or its deadline has come; deadlines join the moments time
 skips to when every hart waits. With no reservation, `wrs` does not wait
 at all. The `TW`-like trap bit stays open, now covering `wfi` too.
+
+### 2026-11-21 · `csrw` from zero is refused (proposal)
+
+A CSR instruction whose `rs1` is `r0` reads and does not write (isa.md
+7.12), so the `csrw csr, rs` pseudo, which expands to `csrrw zero, csr,
+rs`, turned `csrw csr, zero` into a read that changed nothing. It
+assembled silently and cost trylobite two bugs: trap entry never
+cleared `sscratch`, and a lock routine never cleared `sie`. The
+assembler now refuses `csrw` whose source is `r0` under any name. The
+raw `csrrw rd, csr, zero` stays legal, because it is the documented read
+form (`csrr` expands to it) and its spelling shows `zero` in the source
+slot. Only the pseudo is refused, because its name promises a write.
+The other CSR instructions with `r0` as the source are left alone: no
+pseudo hides them. This is a change to assembler syntax, so it is the
+owner's call.

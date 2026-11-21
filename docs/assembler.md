@@ -184,6 +184,12 @@ the top of `rust/core/src/image.rs`.
 | `tabs rd, rs` | `tlut rd, rs, zero, tabs` |
 | `tmap rd, rs, f` | `tlut` with the unary function `f`: a 3-trit value whose trits, least significant first, are the outputs for `-`, `0`, `+` |
 
+`csrw csr, zero` (or `csrw csr, r0`) is an error. A CSR instruction
+whose source is `r0` only reads the CSR (`isa.md` 7.12), so the
+expansion would write nothing. To write zero, write from a register
+that holds 0. The raw form `csrrw rd, csr, zero` stays legal, since it
+is the read form that `csrr` expands to.
+
 ## CSR names
 
 Ring +1's trap bank uses an `m` prefix and ring 0's an `s` prefix:
