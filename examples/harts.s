@@ -11,6 +11,10 @@
         .equ  CONTROL, -3
         .equ  SEND, 0
         .equ  RECEIVE, 3
+        .equ  MAILBOX_EMPTY, -1   # RECEIVE with nothing waiting
+        .equ  MAX_HART, 364       # hart numbers run -364..+364; messages
+                                  # are never negative, so a hart sends
+                                  # its number + MAX_HART
 
 start:
         li    s0, SLOTS + 27
@@ -30,7 +34,8 @@ start:
         li    s2, LOCAL
 next:   wfi
         lw    s3, RECEIVE(s2)
-        beqz  s3, next
+        bltz  s3, next            # MAILBOX_EMPTY: woken for nothing
+        addi  s3, s3, -MAX_HART
         la    a0, hart
         call  puts
         li    t1, CONSOLE_OUT
@@ -55,6 +60,7 @@ alone:  la    a0, usage
 
 # Each worker sends its hart number to hart 0, then stops.
 worker: csrr  t0, hartid
+        addi  t0, t0, MAX_HART
         li    t1, SLOTS
         sw    t0, SEND(t1)
         li    t0, -1

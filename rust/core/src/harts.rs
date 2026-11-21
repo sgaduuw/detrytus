@@ -47,6 +47,10 @@ pub const ABSENT: i64 = -1;
 pub const STOPPED: i64 = 0;
 pub const RUNNING: i64 = 1;
 
+/// What RECEIVE reads when there is no message: negative, since
+/// messages never are.
+pub const MAILBOX_EMPTY: i64 = -1;
+
 /// Hot-plug event kinds, as EVENT reports them (`kind + 3·h`).
 pub const ADDED: i64 = 1;
 pub const REMOVAL_REQUESTED: i64 = -1;
@@ -196,7 +200,8 @@ impl HartController {
                 STATE => slot.state,
                 START_PC => slot.start_pc,
                 START_ARG => slot.start_arg,
-                RECEIVE if h == current => slot.mailbox.pop_front().unwrap_or(0),
+                RECEIVE if h == current => slot.mailbox.pop_front().unwrap_or(MAILBOX_EMPTY),
+                RECEIVE => MAILBOX_EMPTY,
                 COUNT => slot.mailbox.len() as i64,
                 _ => 0,
             };
@@ -257,10 +262,10 @@ impl HartController {
         }
     }
 
-    /// Queue a word for hart `h`: false if it is not running or its
-    /// mailbox is full.
+    /// Queue a word for hart `h`: false if it is not running, its
+    /// mailbox is full, or the word is negative.
     fn deliver(&mut self, h: i64, value: i64) -> bool {
-        if !valid(h) {
+        if !valid(h) || value < 0 {
             return false;
         }
         let slot = self.slot_mut(h);
@@ -277,10 +282,11 @@ impl HartController {
         let Slot { target, span, .. } = *self.slot(current);
         let span = span as u32;
         let group = split_high(target, span);
-        let mut ok = true;
+        // A negative word reaches nobody, even in an empty group.
+        let mut ok = value >= 0;
         for h in -MAX_HART..=MAX_HART {
             let member = h != current && split_high(h, span) == group;
-            if member && self.slot(h).state == RUNNING {
+            if ok && member && self.slot(h).state == RUNNING {
                 ok &= self.deliver(h, value);
             }
         }
@@ -315,9 +321,21 @@ mod tests {
         c.write(slot_addr(1, SEND), 0, 99);
         assert_eq!(c.read(LOCAL + LAST, 0), -1);
         assert_eq!(c.read(slot_addr(1, COUNT), 0), 9);
-        assert_eq!(c.read(slot_addr(1, RECEIVE), 0), 0, "only the owner receives");
+        let others = c.read(slot_addr(1, RECEIVE), 0);
+        assert_eq!(others, MAILBOX_EMPTY, "only the owner receives");
         assert_eq!(c.read(LOCAL + RECEIVE, 1), 10);
         assert!(c.doorbell(1));
+        for _ in 0..8 {
+            c.read(LOCAL + RECEIVE, 1);
+        }
+        assert_eq!(c.read(LOCAL + RECEIVE, 1), MAILBOX_EMPTY);
+        c.write(slot_addr(1, SEND), 0, 0);
+        assert_eq!(c.read(LOCAL + LAST, 0), 1, "0 is a message");
+        c.write(slot_addr(1, SEND), 0, -1);
+        assert_eq!(c.read(LOCAL + LAST, 0), -1, "a negative word is not");
+        assert_eq!(c.read(LOCAL + RECEIVE, 1), 0);
+        assert_eq!(c.read(LOCAL + RECEIVE, 1), MAILBOX_EMPTY);
+        assert!(!c.doorbell(1));
         c.write(slot_addr(-1, SEND), 0, 5); // absent
         assert_eq!(c.read(LOCAL + LAST, 0), -1);
     }
@@ -338,6 +356,9 @@ mod tests {
         c.write(LOCAL + GSEND, 0, 8);
         assert!(c.doorbell(2) && c.doorbell(4) && !c.doorbell(3));
         assert_eq!(c.read(LOCAL + LAST, 0), 1);
+        c.write(LOCAL + GSEND, 0, -8);
+        assert_eq!(c.read(LOCAL + LAST, 0), -1, "a negative word is refused");
+        assert_eq!(c.read(slot_addr(2, COUNT), 0), 1, "and reaches nobody");
     }
 
     #[test]

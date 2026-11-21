@@ -18,7 +18,7 @@ hart 1
 trace on
 s 2
 trace off
-s
+s 2
 hart
 unplug 0
 unplug 1 200
@@ -37,44 +37,44 @@ stdout = '''
      1  stopped
 error: hart -1 has not run yet
 error: hart 5 is not present
-breakpoint 1 at 126 <worker>
-stopped: breakpoint 1 at 126 <worker> on hart 1
-=> 126 <worker>  [hart 1, ring +1]  csrrw t0, hartid, zero
+breakpoint 1 at 129 <worker>
+stopped: breakpoint 1 at 129 <worker> on hart 1
+=> 129 <worker>  [hart 1, ring +1]  csrrw t0, hartid, zero
     -1  stopped
      0  running  pc 24 <start+24>  ring +1
-*    1  running  pc 126 <worker>  ring +1
-126  0t000000000000000000000+---00
-stopped: breakpoint 1 at 126 <worker> on hart -1
-=> 126 <worker>  [hart -1, ring +1]  csrrw t0, hartid, zero
+*    1  running  pc 129 <worker>  ring +1
+129  0t000000000000000000000+---+0
+stopped: breakpoint 1 at 129 <worker> on hart -1
+=> 129 <worker>  [hart -1, ring +1]  csrrw t0, hartid, zero
 => 33 <start+33>  [hart 0, ring +1]  addi t0, zero, 27
-=> 135 <worker+9>  [hart 1, ring +1]  addi t0, zero, -1
-   [  -1]             126 <worker>  csrrw t0, hartid, zero
+=> 138 <worker+9>  [hart 1, ring +1]  sw t0, 0(t1)
+   [  -1]             129 <worker>  csrrw t0, hartid, zero
    [   0]            33 <start+33>  addi t0, zero, 27
-   [   1]           135 <worker+9>  addi t0, zero, -1
-   [  -1]           129 <worker+3>  addi t1, zero, -59049
+   [   1]           138 <worker+9>  sw t0, 0(t1)
+   [  -1]           132 <worker+3>  addi t0, t0, 364
    [   0]            36 <start+36>  csrrw zero, mie, t0
-   [   1]          138 <worker+12>  addi t1, zero, -78732
-=> 141 <worker+15>  [hart 1, ring +1]  sw t0, -3(t1)
-=> 144 <hart+1>  [hart 1 stopped, ring +1]  .word 44167845101  # illegal: opcode 104
-    -1  running  pc 135 <worker+9>  ring +1
-     0  running  pc 42 <start+42>  ring +1
-*    1  stopped  pc 144 <hart+1>  ring +1
+   [   1]          141 <worker+12>  addi t0, zero, -1
+=> 144 <worker+15>  [hart 1, ring +1]  addi t1, zero, -78732
+=> 150 <hart+1>  [hart 1 stopped, ring +1]  .word 44167845101  # illegal: opcode 104
+    -1  running  pc 141 <worker+12>  ring +1
+     0  running  pc 45 <next>  ring +1
+*    1  stopped  pc 150 <hart+1>  ring +1
 error: hart 0 cannot be removed
 hart 1 will be asked to go at time 200
-hart 4 will be plugged in at time 15
+hart 4 will be plugged in at time 16
 error: give a hart, and optionally a time
 error: give a hart, and optionally a time
-  1: break at 126 <worker>
+  1: break at 129 <worker>
   catch: off
   unplug hart 1 at time 200
-  plug hart 4 at time 15
+  plug hart 4 at time 16
 => 0 <start>  [hart 0, ring +1]  addi s0, zero, -59022
-  1: break at 126 <worker>
+  1: break at 129 <worker>
   catch: off
   unplug hart 1 at time 200
-  plug hart 4 at time 15
-stopped: breakpoint 1 at 126 <worker> on hart 1
-=> 126 <worker>  [hart 1, ring +1]  csrrw t0, hartid, zero
+  plug hart 4 at time 16
+stopped: breakpoint 1 at 129 <worker> on hart 1
+=> 129 <worker>  [hart 1, ring +1]  csrrw t0, hartid, zero
 '''
 stderr = ""
 
