@@ -69,6 +69,8 @@ pub struct Debugger {
     harts: i64,
     /// Hot-plug changes, kept so a restart makes them again.
     pub hotplug: Vec<(i64, Hotplug)>,
+    /// The --input text, queued again on every restart.
+    input: String,
     /// The hart the inspection commands look at.
     pub focus: i64,
     pub machine: Machine,
@@ -84,7 +86,13 @@ pub struct Debugger {
 }
 
 impl Debugger {
-    pub fn new(program: Program, ram_pages: i64, harts: i64, hotplug: Vec<(i64, Hotplug)>) -> Self {
+    pub fn new(
+        program: Program,
+        ram_pages: i64,
+        harts: i64,
+        hotplug: Vec<(i64, Hotplug)>,
+        input: String,
+    ) -> Self {
         let symbols: Symbols = program.symbols.iter().cloned().collect::<HashMap<_, _>>();
         let mut dbg = Debugger {
             program,
@@ -92,6 +100,7 @@ impl Debugger {
             ram_pages,
             harts,
             hotplug,
+            input,
             focus: 0,
             machine: Machine::new(ram_pages, 1),
             breakpoints: BTreeMap::new(),
@@ -108,8 +117,9 @@ impl Debugger {
 
     // --- the machine -------------------------------------------------------
 
-    /// A fresh machine with the program loaded. Stopping points and
-    /// hot-plug changes stay.
+    /// A fresh machine with the program loaded and the --input text
+    /// queued. Stopping points and hot-plug changes stay; text given
+    /// with `input` does not.
     pub fn restart(&mut self) {
         self.machine = Machine::with_harts(self.ram_pages, 1, self.harts);
         for &(time, change) in &self.hotplug {
@@ -120,6 +130,7 @@ impl Debugger {
         for (&addr, &tryte) in &self.program.trytes {
             self.machine.bus.poke(addr, tryte);
         }
+        self.machine.bus.console.feed(&self.input);
         self.halted = None;
         self.printed = 0;
         let spans: Vec<(u64, i64, i64)> =

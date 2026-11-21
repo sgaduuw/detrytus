@@ -705,3 +705,30 @@ slot. Only the pseudo is refused, because its name promises a write.
 The other CSR instructions with `r0` as the source are left alone: no
 pseudo hides them. This is a change to assembler syntax, so it is the
 owner's call.
+
+### 2026-11-21 · Console input from a file, fed up front
+
+The core always had a console input queue, but only the conformance
+runner filled it, so `run` and `debug` gave programs nothing to read.
+trylobite's next milestone is a shell, which needs input it can be
+tested with. `--input FILE` (on both, `-` for stdin with `run`) queues
+the whole text before the first step, and the debugger's `input TEXT`
+adds more by hand.
+
+- **Up front, not live.** Reading a terminal key by key would need raw
+  mode and would make a run depend on how fast someone types, which
+  breaks the deterministic runs every transcript and test relies on.
+  A program that finds no input sees −1, exactly as before.
+- **`restart` queues the `--input` text again**, as it replays hot-plug
+  changes, so a restarted session is the same run. Text from `input` is
+  not kept: it was typed at a moment of the old run, and replaying it
+  at the start would be a different run.
+- **`debug --input -` is refused**: the debugger reads its own commands
+  from stdin.
+- **No escape for a trailing space in `input`.** The debugger trims its
+  arguments, as Python's `cmd` did; `\s` writes a space instead.
+- **Test the sign.** A code point is never negative, so `examples/echo.s`
+  ends on any negative read with one `br3` (negative: done, zero: NUL,
+  skipped, positive: a character) instead of comparing with −1. On a
+  balanced machine −1 is an ordinary value, and a convention keyed to
+  the sign leaves room for more than one "no character" later.

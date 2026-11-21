@@ -785,9 +785,9 @@ status = 2
 stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
-       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch]
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
 detrytus: --harts takes 1 to 729
 '''
@@ -799,9 +799,9 @@ status = 2
 stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
-       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch]
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
 detrytus: hart 0 cannot be removed
 '''
@@ -813,9 +813,9 @@ status = 2
 stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
-       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch]
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
 detrytus: --plug needs TIME:HART
 '''
@@ -828,4 +828,75 @@ stdout = "AB"
 stderr = '''
 
 detrytus: 17 steps, exit 0
+'''
+
+[[case]]
+name = "input from a file"
+args = ["run", "--stats", "--input", "{here}/programs/input.txt", "{root}/examples/echo.s"]
+status = 0
+stdout = '''
+FROM A FILE
+'''
+stderr = '''
+
+detrytus: 105 steps, exit 0
+'''
+
+[[case]]
+name = "input from stdin"
+args = ["run", "--input", "-", "{root}/examples/echo.s"]
+stdin = '''
+typed
+at it'''
+status = 0
+stdout = '''
+TYPED
+AT IT'''
+stderr = ""
+
+[[case]]
+name = "without input, console in is empty"
+args = ["run", "--stats", "{root}/examples/echo.s"]
+status = 0
+stdout = ""
+stderr = '''
+
+detrytus: 6 steps, exit 0
+'''
+
+[[case]]
+name = "stdin cannot be both a file and the input"
+args = ["run", "--input", "-", "-"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+detrytus: stdin can be a FILE or the --input, not both
+'''
+
+[[case]]
+name = "input needs a file"
+args = ["run", "{root}/examples/echo.s", "--input"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+detrytus: --input needs a file
+'''
+
+[[case]]
+name = "a missing input file"
+args = ["run", "--input", "{here}/programs/missing.txt", "{root}/examples/echo.s"]
+status = 66
+stdout = ""
+stderr = '''
+detrytus: {here}/programs/missing.txt: No such file or directory
 '''

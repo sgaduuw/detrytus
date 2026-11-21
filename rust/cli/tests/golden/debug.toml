@@ -279,16 +279,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -454,9 +454,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 '''
 stderr = ""
@@ -723,16 +723,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -888,9 +888,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 '''
 stderr = ""
@@ -1177,16 +1177,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -1364,9 +1364,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 '''
 stderr = ""
@@ -1642,16 +1642,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -1817,9 +1817,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 '''
 stderr = ""
@@ -2107,16 +2107,16 @@ unknown command '!x'; 'help' lists them
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 step [N]: run N instructions (default 1). Alias: s
 *** No help on s
@@ -2287,9 +2287,9 @@ page as they are, whatever ring and page table are current.
 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 '''
 stderr = ""
@@ -2421,16 +2421,16 @@ detrytus debugger. 'help' lists commands; 'help CMD' explains one.
 (dt) 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 (dt) 
 Documented commands (type help <topic>):
 ========================================
-EOF    continue  disas    help  plug   regs     trace   xp
-break  csr       examine  info  print  restart  unplug
-catch  delete    hart     next  quit   step     watch 
+EOF    continue  disas    help   next   quit     step    watch
+break  csr       examine  info   plug   regs     trace   xp   
+catch  delete    hart     input  print  restart  unplug
 
 (dt) step [N]: run N instructions (default 1). Alias: s
 (dt) *** No help on s
@@ -2441,3 +2441,64 @@ catch  delete    hart     next  quit   step     watch
 (dt) error: trailing input in '1 2'
 (dt) '''
 stderr = ""
+
+[[case]]
+name = "input from a file, queued again on restart"
+args = ["debug", "--input", "{here}/programs/input.txt", "{root}/examples/echo.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+continue
+restart
+continue
+'''
+status = 0
+stdout = '''
+FROM A FILE
+stopped: powered off with exit code 0
+=> 0 <start>  [ring +1]  addi t0, zero, -19680
+FROM A FILE
+stopped: powered off with exit code 0
+'''
+stderr = ""
+
+[[case]]
+name = "the input command and its escapes"
+args = ["debug", "{root}/examples/echo.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+input two\swords\n
+input tab\there, back\\slash\n
+input \q
+input trailing\
+help input
+continue
+restart
+continue
+'''
+status = 0
+stdout = '''
+error: unknown escape \q
+error: a lone \ at the end
+input TEXT: queue TEXT on the console's input, after what is left.
+
+\n is a newline, \t a tab, \s a space and \\ a backslash; nothing
+else is added, so end a line with \n. restart drops this text.
+TWO WORDS
+TAB	HERE, BACK\SLASH
+stopped: powered off with exit code 0
+=> 0 <start>  [ring +1]  addi t0, zero, -19680
+stopped: powered off with exit code 0
+'''
+stderr = ""
+
+[[case]]
+name = "debug takes its commands from stdin, not its input"
+args = ["debug", "--input", "-", "{root}/examples/echo.s"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+detrytus: debug reads its commands from stdin; give --input a file
+'''

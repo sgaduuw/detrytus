@@ -18,9 +18,9 @@ mod program;
 use program::{Loaded, load, load_one, strerror};
 
 const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
-       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch]
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
@@ -42,6 +42,7 @@ struct RunArgs {
     trace: bool,
     harts: i64,
     hotplug: Vec<(i64, Hotplug)>,
+    input: Option<String>,
 }
 
 /// A failure that ends the command: its message and exit status.
@@ -76,6 +77,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         trace: false,
         harts: 1,
         hotplug: Vec::new(),
+        input: None,
     };
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
@@ -84,6 +86,9 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--max-steps" => run.max_steps = number(&arg, args.next())?,
             "--stats" => run.stats = true,
             "--trace" => run.trace = true,
+            "--input" => {
+                run.input = Some(args.next().ok_or_else(|| usage("--input needs a file"))?)
+            }
             "--harts" | "--plug" | "--unplug" => {
                 hart_option(&arg, args.next(), &mut run.harts, &mut run.hotplug)?
             }
@@ -95,6 +100,9 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     }
     if run.files.is_empty() {
         return Err(usage("run needs at least one file"));
+    }
+    if run.input.as_deref() == Some("-") && run.files.iter().any(|f| f == "-") {
+        return Err(usage("stdin can be a FILE or the --input, not both"));
     }
     Ok(run)
 }
@@ -123,6 +131,20 @@ fn hart_option(
     Machine::new(1, 1).schedule(time, change).map_err(|e| usage(&e))?;
     hotplug.push((time, change));
     Ok(())
+}
+
+/// The text --input names, to queue on the console before the first
+/// step; `-` is stdin.
+fn read_input(path: &str) -> Result<String, Fail> {
+    let data = if path == "-" {
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::stdin(), &mut data)
+            .map_err(|e| Fail::new(format!("<stdin>: {e}"), NO_INPUT))?;
+        data
+    } else {
+        std::fs::read(path).map_err(|e| Fail::new(format!("{path}: {}", strerror(&e)), NO_INPUT))?
+    };
+    String::from_utf8(data).map_err(|_| Fail::new(format!("{path}: not UTF-8 text"), BAD_INPUT))
 }
 
 fn format_trits(word: i64) -> String {
@@ -194,6 +216,9 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     for (addr, tryte) in load(&args.files)?.trytes {
         machine.bus.poke(addr, tryte);
     }
+    if let Some(path) = &args.input {
+        machine.bus.console.feed(&read_input(path)?);
+    }
     // With more than one hart, trace lines say which ran each instruction.
     let several = args.harts > 1 || !args.hotplug.is_empty();
     if args.trace {
@@ -260,7 +285,7 @@ fn seed() -> u32 {
 fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     let (mut files, mut ram_pages, mut breaks, mut commands, mut batch) =
         (Vec::new(), 729, Vec::new(), None, false);
-    let (mut harts, mut hotplug) = (1, Vec::new());
+    let (mut harts, mut hotplug, mut input) = (1, Vec::new(), None);
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -272,6 +297,7 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
                 commands = Some(args.next().ok_or_else(|| usage("-x needs a file"))?)
             }
             "--batch" => batch = true,
+            "--input" => input = Some(args.next().ok_or_else(|| usage("--input needs a file"))?),
             "--harts" | "--plug" | "--unplug" => {
                 hart_option(&arg, args.next(), &mut harts, &mut hotplug)?
             }
@@ -284,9 +310,13 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     if files.is_empty() {
         return Err(usage("debug needs at least one file"));
     }
+    if input.as_deref() == Some("-") {
+        return Err(usage("debug reads its commands from stdin; give --input a file"));
+    }
     let program = load(&files)?;
+    let input = input.as_deref().map(read_input).transpose()?.unwrap_or_default();
     let mut shell = debug::shell::Shell {
-        dbg: debug::engine::Debugger::new(program, ram_pages, harts, hotplug),
+        dbg: debug::engine::Debugger::new(program, ram_pages, harts, hotplug, input),
     };
     for expr in &breaks {
         shell.onecmd(&format!("break {expr}"));
