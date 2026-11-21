@@ -786,9 +786,11 @@ stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
 detrytus: --harts takes 1 to 729
 '''
 
@@ -800,9 +802,11 @@ stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
 detrytus: hart 0 cannot be removed
 '''
 
@@ -814,9 +818,11 @@ stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
 detrytus: --plug needs TIME:HART
 '''
 
@@ -890,9 +896,11 @@ stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
 detrytus: stdin can be a FILE or the --input, not both
 '''
 
@@ -904,9 +912,11 @@ stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
 detrytus: --input needs a file
 '''
 
@@ -917,4 +927,73 @@ status = 66
 stdout = ""
 stderr = '''
 detrytus: {here}/programs/missing.txt: No such file or directory
+'''
+
+[[case]]
+name = "a disk created with --disk-blocks is written"
+args = ["run", "--stats", "--disk", "{tmp}/disk.img", "--disk-blocks", "1", "{here}/programs/disk.s"]
+status = 0
+stdout = ""
+stderr = '''
+
+detrytus: 2224 steps, exit 0
+'''
+
+[[case]]
+name = "a missing disk needs --disk-blocks"
+args = ["run", "--disk", "{tmp}/disk.img", "{here}/programs/disk.s"]
+status = 66
+stdout = ""
+stderr = '''
+detrytus: {tmp}/disk.img: No such file or directory
+'''
+
+[[case]]
+name = "--disk-blocks needs --disk"
+args = ["run", "--disk-blocks", "2", "{here}/programs/disk.s"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
+detrytus: --disk-blocks needs --disk
+'''
+
+[[case]]
+name = "--disk-blocks takes 1 or more"
+args = ["run", "--disk", "{tmp}/disk.img", "--disk-blocks", "0", "{here}/programs/disk.s"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
+detrytus: --disk-blocks takes 1 or more
+'''
+
+[[case]]
+name = "a disk file of an odd length is refused"
+args = ["run", "--disk", "{here}/programs/odd.img", "{here}/programs/disk.s"]
+status = 65
+stdout = ""
+stderr = '''
+detrytus: {here}/programs/odd.img: an odd number of bytes, so not whole trytes
+'''
+
+[[case]]
+name = "a disk file holding a value that is not a tryte is refused"
+args = ["run", "--disk", "{here}/programs/bad.img", "{here}/programs/disk.s"]
+status = 65
+stdout = ""
+stderr = '''
+detrytus: {here}/programs/bad.img: byte 0 holds a value that is not a tryte
 '''

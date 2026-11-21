@@ -1,0 +1,231 @@
+# The block device (docs/platform.md, The block device). It is page -14,
+# centred on BLK. A block is one page; one command moves COUNT blocks from
+# BLOCK through a list of page numbers at LIST. A command takes
+# 1000 + 100*COUNT rounds. `disk_blocks` attaches a disk of zeros.
+# RAM page p is centred on p*19683.
+
+[defaults]
+disk_blocks = 9
+ram_pages = 20
+prelude = '''
+        .equ  BLK, -275562
+        .equ  BLOCKS, -9
+        .equ  BLOCK, -6
+        .equ  COUNT, -3
+        .equ  LIST, 0
+        .equ  COMMAND, 3
+        .equ  STATUS, 6
+        .equ  ACK, 9
+        .equ  BLOCK_READ, 1
+        .equ  BLOCK_WRITE, -1
+        .equ  BLOCK_BUSY, 1
+        .equ  BLOCK_DONE, 0
+        .equ  BLOCK_FAILED, -1
+        .equ  IRQ, -255879
+        .equ  CLAIM, -3
+        .equ  COMPLETE, 0
+        .equ  PENDING2, 15
+        .equ  ENABLE2, 18
+        .equ  POWER, -39366
+        .equ  PAGE, 19683
+'''
+postlude = '''
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+
+[[case]]
+name = "with no disk there are no blocks, and a command fails at once"
+disk_blocks = 0
+program = '''
+        li    s1, BLK
+        lw    s2, BLOCKS(s1)
+        lw    s3, COUNT(s1)       # 1 at reset
+        li    t0, 1
+        sw    t0, BLOCK(s1)
+        li    t0, BLOCK_READ
+        sw    t0, COMMAND(s1)
+        lw    s4, STATUS(s1)
+        li    s0, IRQ
+        lw    s5, PENDING2(s0)    # finished: source 2 wants attention
+        sw    zero, ACK(s1)
+        lw    s6, PENDING2(s0)
+        lw    s7, STATUS(s1)      # the outcome stays
+        li    a0, 0
+'''
+expect.exit_code = 0
+expect.registers = { s2 = 0, s3 = 1, s4 = -1, s5 = 1, s6 = 0, s7 = -1 }
+
+[[case]]
+name = "a page written to a block reads back into another page, after its rounds"
+program = '''
+        li    s1, BLK
+        lw    s2, BLOCKS(s1)
+        li    s0, PAGE            # page 1
+        li    t0, 12345
+        sw    t0, -9840(s0)       # low end of the page
+        li    t0, -777
+        sw    t0, 9840(s0)        # high end
+        la    t0, list
+        sw    t0, LIST(s1)
+        li    t0, 4
+        sw    t0, BLOCK(s1)
+        csrr  s3, time
+        li    t0, BLOCK_WRITE
+        sw    t0, COMMAND(s1)
+        lw    s4, STATUS(s1)      # busy
+wait:   lw    t0, STATUS(s1)
+        bnez  t0, wait
+        csrr  t1, time
+        sub   s3, t1, s3          # rounds it took
+        sw    zero, ACK(s1)
+        la    t0, back
+        sw    t0, LIST(s1)
+        li    t0, BLOCK_READ
+        sw    t0, COMMAND(s1)
+wait2:  lw    t0, STATUS(s1)
+        bgtz  t0, wait2
+        li    s0, PAGE * 3
+        lw    s5, -9840(s0)
+        lw    s6, 9840(s0)
+        lw    s7, 0(s0)
+        li    a0, 0
+list:   .word 1
+back:   .word 3
+'''
+expect.exit_code = 0
+# s3: 1,100 rounds for one block, plus the instructions around it
+expect.registers = { s2 = 9, s3 = 1104, s4 = 1, s5 = 12345, s6 = -777, s7 = 0 }
+
+[[case]]
+name = "one command moves a run of blocks through scattered pages"
+program = '''
+        li    s1, BLK
+        li    t0, 5
+        li    t1, PAGE * 5
+        sw    t0, 0(t1)
+        li    t0, 2
+        li    t1, PAGE * 2
+        sw    t0, 0(t1)
+        li    t0, 9
+        li    t1, PAGE * 9
+        sw    t0, 0(t1)
+        li    t0, 3
+        sw    t0, COUNT(s1)
+        li    t0, 6               # blocks 6, 7, 8: the last three
+        sw    t0, BLOCK(s1)
+        la    t0, out
+        sw    t0, LIST(s1)
+        csrr  s3, time
+        li    t0, BLOCK_WRITE
+        sw    t0, COMMAND(s1)
+wait:   lw    t0, STATUS(s1)
+        bnez  t0, wait
+        csrr  t1, time
+        sub   s3, t1, s3
+        la    t0, in
+        sw    t0, LIST(s1)
+        li    t0, BLOCK_READ
+        sw    t0, COMMAND(s1)
+wait2:  lw    t0, STATUS(s1)
+        bnez  t0, wait2
+        li    t1, PAGE * 10
+        lw    s4, 0(t1)           # block 6: from page 5
+        li    t1, PAGE * 11
+        lw    s5, 0(t1)           # block 7: from page 2
+        li    t1, PAGE * 12
+        lw    s6, 0(t1)           # block 8: from page 9
+        li    a0, 0
+out:    .word 5, 2, 9
+in:     .word 10, 11, 12
+'''
+expect.exit_code = 0
+# s3: 1,300 rounds for three blocks, plus the instructions around them
+expect.registers = { s3 = 1305, s4 = 5, s5 = 2, s6 = 9 }
+
+[[case]]
+name = "a command fails at once for a bad count, block, list or page"
+program = '''
+        li    s1, BLK
+        la    t0, good
+        sw    t0, LIST(s1)
+        li    t2, BLOCK_READ
+        sw    zero, COUNT(s1)     # no blocks
+        sw    t2, COMMAND(s1)
+        lw    s2, STATUS(s1)
+        li    t0, 2
+        sw    t0, COUNT(s1)
+        li    t0, 8               # blocks 8 and 9: 9 is past the end
+        sw    t0, BLOCK(s1)
+        sw    t2, COMMAND(s1)
+        lw    s3, STATUS(s1)
+        li    t0, -1
+        sw    t0, BLOCK(s1)
+        li    t0, 1
+        sw    t0, COUNT(s1)
+        sw    t2, COMMAND(s1)
+        lw    s4, STATUS(s1)
+        sw    zero, BLOCK(s1)
+        la    t0, boot
+        sw    t0, LIST(s1)        # the boot page is no RAM page
+        sw    t2, COMMAND(s1)
+        lw    s5, STATUS(s1)
+        la    t0, beyond
+        sw    t0, LIST(s1)        # past the end of RAM
+        sw    t2, COMMAND(s1)
+        lw    s6, STATUS(s1)
+        la    t0, good
+        addi  t0, t0, 1
+        sw    t0, LIST(s1)        # not an aligned word
+        sw    t2, COMMAND(s1)
+        lw    s7, STATUS(s1)
+        li    t0, -19683
+        sw    t0, LIST(s1)        # a list in device memory
+        sw    t2, COMMAND(s1)
+        lw    s8, STATUS(s1)
+        la    t0, good
+        sw    t0, LIST(s1)
+        sw    t2, COMMAND(s1)
+        lw    a0, STATUS(s1)      # and a good one is busy
+        j     end
+good:   .word 1
+boot:   .word 0
+beyond: .word 21
+end:
+'''
+expect.exit_code = 1
+expect.registers = { s2 = -1, s3 = -1, s4 = -1, s5 = -1, s6 = -1, s7 = -1, s8 = -1 }
+
+[[case]]
+name = "a finished command interrupts until acknowledged, and wfi skips to it"
+max_steps = 200
+program = '''
+        la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+00           # ie trit 2: external
+        csrw  mie, t0
+        li    s0, IRQ
+        li    t0, 1
+        sw    t0, ENABLE2(s0)
+        li    s1, BLK
+        la    t0, list
+        sw    t0, LIST(s1)
+        li    t0, BLOCK_READ
+        sw    t0, COMMAND(s1)
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+idle:   wfi
+        j     idle
+handler:
+        lw    s2, CLAIM(s0)
+        lw    s3, STATUS(s1)
+        sw    zero, ACK(s1)
+        lw    s4, PENDING2(s0)
+        sw    s2, COMPLETE(s0)
+        li    a0, 0
+        j     end
+list:   .word 1
+end:
+'''
+expect.exit_code = 0
+expect.registers = { s2 = 2, s3 = 0, s4 = 0 }

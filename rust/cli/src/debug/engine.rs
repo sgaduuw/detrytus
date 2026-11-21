@@ -19,6 +19,7 @@ use detrytus_core::hart::{AccessKind, Event, Hart};
 use detrytus_core::isa;
 use detrytus_core::{Hotplug, Machine, Outcome};
 
+use crate::disk::DiskSpec;
 use crate::program::Program;
 
 pub const DEFAULT_LIMIT: u64 = 10_000_000;
@@ -71,6 +72,8 @@ pub struct Debugger {
     pub hotplug: Vec<(i64, Hotplug)>,
     /// The --input text, queued again on every restart.
     input: String,
+    /// The --disk, opened again on every restart; what was written stays.
+    disk: Option<DiskSpec>,
     /// The hart the inspection commands look at.
     pub focus: i64,
     pub machine: Machine,
@@ -92,6 +95,7 @@ impl Debugger {
         harts: i64,
         hotplug: Vec<(i64, Hotplug)>,
         input: String,
+        disk: Option<DiskSpec>,
     ) -> Self {
         let symbols: Symbols = program.symbols.iter().cloned().collect::<HashMap<_, _>>();
         let mut dbg = Debugger {
@@ -101,6 +105,7 @@ impl Debugger {
             harts,
             hotplug,
             input,
+            disk,
             focus: 0,
             machine: Machine::new(ram_pages, 1),
             breakpoints: BTreeMap::new(),
@@ -131,6 +136,12 @@ impl Debugger {
             self.machine.bus.poke(addr, tryte);
         }
         self.machine.bus.console.feed(&self.input);
+        if let Some(spec) = &self.disk {
+            match spec.open() {
+                Ok(disk) => self.machine.bus.block.disk = Some(Box::new(disk)),
+                Err(crate::Fail(message, _)) => eprintln!("{message}"),
+            }
+        }
         self.halted = None;
         self.printed = 0;
         let spans: Vec<(u64, i64, i64)> =

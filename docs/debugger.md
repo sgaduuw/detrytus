@@ -17,7 +17,9 @@ debugger commands from a file first, and `--batch` exits once they are
 done, which makes sessions scriptable. `--input FILE` queues the file's
 text on the console's input, as for `run`, and again on every `restart`.
 Unlike `run`, the debugger keeps the console open once that text is
-read, so `input` can add more; `eof` closes it.
+read, so `input` can add more; `eof` closes it. `--disk FILE` and
+`--disk-blocks N` attach a disk as for `run`; `restart` opens the file
+again, so what the program wrote before the restart stays written.
 `--harts N`, `--plug TIME:HART`
 and `--unplug TIME:HART` set up harts as for `run` (see Several harts,
 below).

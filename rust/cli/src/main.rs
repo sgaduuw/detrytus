@@ -13,15 +13,20 @@ use detrytus_core::trits::low;
 use detrytus_core::{Hotplug, Machine, Outcome};
 
 mod debug;
+mod disk;
 mod program;
+
+use disk::DiskSpec;
 
 use program::{Loaded, load, load_one, strerror};
 
 const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...";
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
 const USAGE_ERROR: u8 = 2;
@@ -43,6 +48,7 @@ struct RunArgs {
     harts: i64,
     hotplug: Vec<(i64, Hotplug)>,
     input: Option<String>,
+    disk: Option<DiskSpec>,
 }
 
 /// A failure that ends the command: its message and exit status.
@@ -78,7 +84,9 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         harts: 1,
         hotplug: Vec::new(),
         input: None,
+        disk: None,
     };
+    let mut disk = DiskArgs::default();
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -92,12 +100,14 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--harts" | "--plug" | "--unplug" => {
                 hart_option(&arg, args.next(), &mut run.harts, &mut run.hotplug)?
             }
+            "--disk" | "--disk-blocks" => disk.option(&arg, args.next())?,
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
             _ => run.files.push(arg),
         }
     }
+    run.disk = disk.spec()?;
     if run.files.is_empty() {
         return Err(usage("run needs at least one file"));
     }
@@ -131,6 +141,36 @@ fn hart_option(
     Machine::new(1, 1).schedule(time, change).map_err(|e| usage(&e))?;
     hotplug.push((time, change));
     Ok(())
+}
+
+/// --disk FILE and --disk-blocks N, gathered while parsing.
+#[derive(Default)]
+struct DiskArgs {
+    path: Option<String>,
+    blocks: Option<i64>,
+}
+
+impl DiskArgs {
+    fn option(&mut self, flag: &str, value: Option<String>) -> Result<(), Fail> {
+        if flag == "--disk" {
+            self.path = Some(value.ok_or_else(|| usage("--disk needs a file"))?);
+            return Ok(());
+        }
+        let blocks: i64 = number(flag, value)?;
+        if blocks < 1 {
+            return Err(usage("--disk-blocks takes 1 or more"));
+        }
+        self.blocks = Some(blocks);
+        Ok(())
+    }
+
+    /// The disk, checked when it opens; --disk-blocks alone is a mistake.
+    fn spec(self) -> Result<Option<DiskSpec>, Fail> {
+        match (self.path, self.blocks) {
+            (None, Some(_)) => Err(usage("--disk-blocks needs --disk")),
+            (path, blocks) => Ok(path.map(|path| DiskSpec { path, blocks })),
+        }
+    }
 }
 
 /// The text --input names, to queue on the console before the first
@@ -221,6 +261,9 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     }
     // Nothing can type into a run: once its input is read, no more comes.
     machine.bus.console.closed = true;
+    if let Some(spec) = &args.disk {
+        machine.bus.block.disk = Some(Box::new(spec.open()?));
+    }
     // With more than one hart, trace lines say which ran each instruction.
     let several = args.harts > 1 || !args.hotplug.is_empty();
     if args.trace {
@@ -288,6 +331,7 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     let (mut files, mut ram_pages, mut breaks, mut commands, mut batch) =
         (Vec::new(), 729, Vec::new(), None, false);
     let (mut harts, mut hotplug, mut input) = (1, Vec::new(), None);
+    let mut disk = DiskArgs::default();
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -303,12 +347,14 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
             "--harts" | "--plug" | "--unplug" => {
                 hart_option(&arg, args.next(), &mut harts, &mut hotplug)?
             }
+            "--disk" | "--disk-blocks" => disk.option(&arg, args.next())?,
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
             _ => files.push(arg),
         }
     }
+    let disk = disk.spec()?;
     if files.is_empty() {
         return Err(usage("debug needs at least one file"));
     }
@@ -317,8 +363,11 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     }
     let program = load(&files)?;
     let input = input.as_deref().map(read_input).transpose()?.unwrap_or_default();
+    if let Some(spec) = &disk {
+        spec.open()?; // a bad disk is a startup error, not a debugger message
+    }
     let mut shell = debug::shell::Shell {
-        dbg: debug::engine::Debugger::new(program, ram_pages, harts, hotplug, input),
+        dbg: debug::engine::Debugger::new(program, ram_pages, harts, hotplug, input, disk),
     };
     for expr in &breaks {
         shell.onecmd(&format!("break {expr}"));

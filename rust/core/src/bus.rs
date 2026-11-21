@@ -4,16 +4,18 @@
 //! boot page (read-only to the CPU), positive pages up to `ram_pages`
 //! are RAM, negative pages are devices. The platform's devices are built
 //! in: the console at page −1, power control at page −2, the hart
-//! controller at pages −3 and −4 and the interrupt controller at page
-//! −13.
+//! controller at pages −3 and −4, the interrupt controller at page −13
+//! and the block device at page −14.
 //!
 //! The bus also keeps each hart's `lr` reservation, so that a store by
 //! one hart breaks another's.
 
 use std::collections::{HashMap, VecDeque};
 
+use crate::block::{BLOCK_PAGE, BLOCK_READ, BLOCK_TRYTES, BlockDevice, Request, Transfer};
+use crate::block::{ROUNDS_PER_BLOCK, SETUP_ROUNDS};
 use crate::harts::{HartController, LOCAL_PAGE, SLOTS_PAGE};
-use crate::irq::{CONSOLE_SOURCE, IRQ_PAGE, InterruptController, Lines};
+use crate::irq::{BLOCK_SOURCE, CONSOLE_SOURCE, IRQ_PAGE, InterruptController, Lines};
 use crate::trits::{TRYTE_MOD, TRYTE_TRITS, low, split_high};
 
 pub const PAGE_TRITS: u32 = 9;
@@ -93,6 +95,7 @@ enum Region {
     Power,
     Harts,
     Irq,
+    Block,
 }
 
 pub fn page_of(addr: i64) -> i64 {
@@ -107,6 +110,9 @@ pub struct Bus {
     pub console: Console,
     pub harts: HartController,
     pub irq: InterruptController,
+    pub block: BlockDevice,
+    /// The machine's clock, set each round, for devices that take time.
+    pub now: i64,
     /// The hart whose access this is: the machine sets it before each
     /// hart's step.
     pub current: i64,
@@ -128,6 +134,8 @@ impl Bus {
             console: Console::default(),
             harts: HartController::new(present),
             irq: InterruptController::default(),
+            block: BlockDevice::default(),
+            now: 0,
             current: 0,
             reservations: HashMap::new(),
         }
@@ -137,6 +145,7 @@ impl Bus {
     fn lines(&self) -> Lines {
         let mut lines = Lines::default();
         lines[CONSOLE_SOURCE as usize] = self.console.wants_attention();
+        lines[BLOCK_SOURCE as usize] = self.block.finished;
         lines
     }
 
@@ -144,6 +153,73 @@ impl Bus {
     /// it can claim, or hot-plug events for it.
     pub fn external_pending(&self, h: i64) -> bool {
         self.harts.event_pending(h) || self.irq.pending_for(h, &self.lines())
+    }
+
+    /// Take a block command: read its list of pages, check it, and start
+    /// it, or fail it at once.
+    fn start_transfer(&mut self, command: i64, first: i64, count: i64, list: i64) {
+        let pages =
+            if self.block.in_range(first, count) { self.page_list(list, count) } else { None };
+        match pages {
+            Some(pages) => self.block.begin(Transfer {
+                command,
+                first,
+                pages,
+                done_at: self.now + SETUP_ROUNDS + ROUNDS_PER_BLOCK * count,
+            }),
+            None => self.block.fail(),
+        }
+    }
+
+    /// The `count` words at physical address `list`, if it is aligned and
+    /// each word names a RAM page. Memory with nothing behind it, devices
+    /// included, reads as 0, which names no RAM page.
+    fn page_list(&self, list: i64, count: i64) -> Option<Vec<i64>> {
+        if list.rem_euclid(3) != 0 {
+            return None;
+        }
+        (0..count)
+            .map(|i| Some(self.word(list + 3 * i)).filter(|p| (1..=self.ram_pages).contains(p)))
+            .collect()
+    }
+
+    fn word(&self, addr: i64) -> i64 {
+        self.get(addr - 1) + self.get(addr) * TRYTE_MOD + self.get(addr + 1) * TRYTE_MOD * TRYTE_MOD
+    }
+
+    /// Finish the block command in flight if its time has come: copy its
+    /// blocks into its pages, or its pages to its blocks.
+    pub fn advance(&mut self) {
+        if !self.block.done_at().is_some_and(|t| t <= self.now) {
+            return;
+        }
+        let t = self.block.transfer.take().unwrap();
+        let disk = self.block.disk.as_mut().expect("a transfer needs a disk");
+        let count = t.pages.len() as i64;
+        if t.command == BLOCK_READ {
+            let data = disk.read(t.first, count);
+            for (&page, block) in t.pages.iter().zip(data.chunks(BLOCK_TRYTES)) {
+                let mem = self
+                    .pages
+                    .entry(page)
+                    .or_insert_with(|| vec![0; PAGE as usize].into_boxed_slice());
+                mem.copy_from_slice(block);
+            }
+            let lo = t.pages.iter().map(|p| p * PAGE - HALF_PAGE);
+            for start in lo.collect::<Vec<_>>() {
+                self.reservations.retain(|_, r| *r + 1 < start || *r - 1 > start + PAGE - 1);
+            }
+        } else {
+            let mut data = Vec::with_capacity(t.pages.len() * BLOCK_TRYTES);
+            for page in &t.pages {
+                match self.pages.get(page) {
+                    Some(mem) => data.extend_from_slice(mem),
+                    None => data.extend(std::iter::repeat_n(0, BLOCK_TRYTES)),
+                }
+            }
+            disk.write(t.first, &data);
+        }
+        self.block.end();
     }
 
     /// Reserve the word at a physical address for the current hart.
@@ -180,6 +256,7 @@ impl Bus {
             POWER_PAGE if !device => Ok(Region::Power),
             SLOTS_PAGE | LOCAL_PAGE if !device => Ok(Region::Harts),
             IRQ_PAGE if !device => Ok(Region::Irq),
+            BLOCK_PAGE if !device => Ok(Region::Block),
             _ => Err(BusError::Fault(addr)),
         }
     }
@@ -229,11 +306,10 @@ impl Bus {
                 let lines = self.lines();
                 Ok(self.irq.read(addr, self.current, &lines))
             }
+            Region::Block => Ok(self.block.read(addr)),
             Region::Console | Region::Power => Ok(0),
             Region::Boot | Region::Ram if width == 1 => Ok(self.get(addr)),
-            Region::Boot | Region::Ram => Ok(self.get(addr - 1)
-                + self.get(addr) * TRYTE_MOD
-                + self.get(addr + 1) * TRYTE_MOD * TRYTE_MOD),
+            Region::Boot | Region::Ram => Ok(self.word(addr)),
         }
     }
 
@@ -247,6 +323,13 @@ impl Bus {
             Region::Power if addr == POWER_OFF => return Err(BusError::Halt(value)),
             Region::Harts => self.harts.write(addr, self.current, value),
             Region::Irq => self.irq.write(addr, value),
+            Region::Block => {
+                if let Request::Start { command, first, count, list } =
+                    self.block.write(addr, value)
+                {
+                    self.start_transfer(command, first, count, list);
+                }
+            }
             Region::Power | Region::Boot => {}
             Region::Ram if width == 1 => {
                 self.break_reservations(addr, 1);
@@ -306,6 +389,46 @@ mod tests {
         bus.write(CONSOLE_OUT, 3, 'é' as i64).unwrap();
         bus.write(CONSOLE_OUT, 3, -5).unwrap(); // not a code point: ignored
         assert_eq!(bus.console.text(), "é");
+    }
+
+    #[test]
+    fn a_block_list_must_be_aligned_words_naming_ram_pages() {
+        let mut bus = Bus::new(5);
+        bus.write(PAGE, 3, 2).unwrap();
+        bus.write(PAGE + 3, 3, 5).unwrap();
+        assert_eq!(bus.page_list(PAGE, 2), Some(vec![2, 5]));
+        assert_eq!(bus.page_list(PAGE + 3, 2), None, "the word after it is 0");
+        // A misaligned list fails even where its trytes spell a RAM page.
+        bus.poke(PAGE + 5, 3);
+        bus.poke(PAGE + 6, 0);
+        bus.poke(PAGE + 7, 0);
+        assert_eq!(bus.word(PAGE + 6), 3);
+        assert_eq!(bus.page_list(PAGE + 6, 1), Some(vec![3]));
+        bus.poke(PAGE + 1, 4);
+        bus.poke(PAGE + 2, 0);
+        bus.poke(PAGE + 3, 0);
+        assert_eq!(bus.word(PAGE + 2), 4);
+        assert_eq!(bus.page_list(PAGE + 2, 1), None);
+    }
+
+    #[test]
+    fn a_block_read_breaks_reservations_on_its_pages() {
+        use crate::block::{MemoryDisk, block_addr};
+        let mut bus = Bus::new(5);
+        bus.block.disk = Some(Box::new(MemoryDisk::new(2)));
+        bus.write(PAGE, 3, 3).unwrap(); // the list: page 3
+        bus.current = 1;
+        bus.reserve(3 * PAGE + 9000);
+        bus.current = 2;
+        bus.reserve(4 * PAGE);
+        bus.current = 0;
+        bus.write(block_addr(0), 3, PAGE).unwrap(); // LIST
+        bus.write(block_addr(3), 3, BLOCK_READ).unwrap(); // COMMAND
+        bus.now = 1100;
+        bus.advance();
+        assert!(bus.block.finished);
+        assert!(!bus.holds_reservation(1), "its page was overwritten");
+        assert!(bus.holds_reservation(2), "another page");
     }
 
     #[test]

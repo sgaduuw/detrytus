@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use detrytus_asm::{AsmError, assemble};
+use detrytus_core::block::MemoryDisk;
 use detrytus_core::bus::Access;
 use detrytus_core::image;
 use detrytus_core::{Hotplug, Machine, Outcome};
@@ -50,6 +51,7 @@ struct Case {
     max_steps: i64,
     input: String,
     console_open: bool,
+    disk_blocks: Option<i64>,
     harts: i64,
     hotplug: Vec<(i64, Hotplug)>,
     expect: Table,
@@ -64,7 +66,7 @@ fn text_of(raw: &Table, defaults: &Table, key: &str) -> String {
     setting(raw, defaults, key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-const CASE_KEYS: [&str; 12] = [
+const CASE_KEYS: [&str; 13] = [
     "name",
     "program",
     "prelude",
@@ -75,6 +77,7 @@ const CASE_KEYS: [&str; 12] = [
     "max_steps",
     "input",
     "console_open",
+    "disk_blocks",
     "harts",
     "hotplug",
 ];
@@ -210,6 +213,7 @@ fn load(file: &Path) -> Vec<Case> {
                     .map_or(DEFAULT_MAX_STEPS, |v| v.as_integer().unwrap()),
                 input: text_of(raw, defaults, "input"),
                 console_open: setting("console_open").is_some_and(|v| v.as_bool().unwrap()),
+                disk_blocks: setting("disk_blocks").map(|v| v.as_integer().unwrap()),
                 harts: setting("harts").map_or(1, |v| v.as_integer().unwrap()),
                 hotplug: setting("hotplug").map_or_else(Vec::new, |v| hotplug(v).unwrap()),
                 expect: raw.get("expect").and_then(Value::as_table).cloned().unwrap_or_default(),
@@ -335,6 +339,9 @@ fn run(case: &Case) -> Vec<String> {
     }
     machine.bus.console.feed(&case.input);
     machine.bus.console.closed = !case.console_open;
+    if let Some(blocks) = case.disk_blocks.filter(|&b| b > 0) {
+        machine.bus.block.disk = Some(Box::new(MemoryDisk::new(blocks)));
+    }
     let outcome = machine.run(case.max_steps as u64);
     let mut failures: Vec<String> = outcome_failure(e, &outcome).into_iter().collect();
     if let Some(want) = e.get("console").and_then(Value::as_str) {

@@ -213,6 +213,8 @@ impl Machine {
             self.skip_idle_time(&order);
         }
         self.time += 1;
+        self.bus.now = self.time;
+        self.bus.advance();
         if self.schedule.first().is_some_and(|(t, _)| *t <= self.time) {
             self.apply_hotplug();
         }
@@ -250,7 +252,8 @@ impl Machine {
     }
 
     /// When every running hart waits, move the clock to just before the
-    /// first thing that could wake one: a timer or a hot-plug change. If
+    /// first thing that could wake one: a timer, a hot-plug change or a
+    /// block command finishing. If
     /// nothing could, wake them all, as `wfi` is allowed to return early.
     /// (Stopped harts never wait: a hart is replaced when it starts.)
     fn skip_idle_time(&mut self, running: &[i64]) {
@@ -270,7 +273,8 @@ impl Machine {
         let timers = waiting.iter().filter_map(|(_, hart)| hart.timer_deadline());
         let deadlines = waiting.iter().filter_map(|(_, hart)| hart.deadline).filter(|&d| d > now);
         let plugs = self.schedule.iter().map(|(t, _)| t - 1).filter(|&t| t > now);
-        match timers.chain(deadlines).chain(plugs).min() {
+        let disk = self.bus.block.done_at().map(|t| t - 1).filter(|&t| t > now);
+        match timers.chain(deadlines).chain(plugs).chain(disk).min() {
             Some(t) => self.time = t,
             None => {
                 for (_, hart) in waiting {
