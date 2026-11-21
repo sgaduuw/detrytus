@@ -127,8 +127,8 @@ it first uses it, with a pc-relative `auipc` + `addi`, and never changes
 it after, so no function saves it. A trap handler that wants a `gp` of
 its own saves the interrupted one first and puts it back before `tret`.
 Where `gp` points is the program's choice: next to the globals it uses
-most, since `c.lagp` (6.1) reaches ±363 trytes of it, a word at a
-time. A boolean is a trit: `+` true, `-`
+most, since `c.lagp`, `c.lwgp` and `c.swgp` (6.1) reach ±363 trytes
+of it, a word at a time. A boolean is a trit: `+` true, `-`
 false, and `0` where a three-valued result needs "unknown".
 
 ## 5. Memory
@@ -411,6 +411,8 @@ CJ     off[8]               | op       off: ±3,280 words
 | −4 | CR | `c.ble rd, rs, f` | `ble rd, rs, f` |
 | −5 | CI | `c.lip rd, imm` | `addi rd, r0, imm × 19,683`: a page address |
 | −6 | CI | `c.lagp rd, imm` | `addi rd, gp, 3·imm`: a global's address (4.2) |
+| −7 | CI | `c.lwgp rd, imm` | `lw rd, 3·imm(gp)`: a global's value |
+| −8 | CI | `c.swgp rd, imm` | `sw rd, 3·imm(gp)` |
 
 `c.jr ra` is `ret`. Unlisted opcodes and `f` values are reserved.
 
@@ -429,11 +431,12 @@ words (13% before). Forms that trylobite never uses (`c.shi`,
 `c.cmpi`, `c.jalr`, `c.sub`, `c.cmp`, the min and max forms) stay
 while one hand-written kernel is the only measure.
 
-`c.lagp` came with the `gp` convention (4.2), which makes `la` one
-`addi` from `gp`. Putting trylobite's kernel globals and each program's
-data within its reach takes its code from 977 words to 886 (to 910
-with `gp` but no compressed form). Globals are words, so its offset
-counts words; a string it should reach can be aligned.
+`c.lagp`, `c.lwgp` and `c.swgp` came with the `gp` convention (4.2),
+which makes `la` one `addi` from `gp` and a global one load or store.
+Putting trylobite's kernel globals and each program's data within their
+reach takes its code from 977 words to 880 (910 with `gp` but no
+compressed form, 886 with `c.lagp` alone). Globals are words, so their
+offsets count words; a string `c.lagp` should reach can be aligned.
 
 ## 7. Instructions
 

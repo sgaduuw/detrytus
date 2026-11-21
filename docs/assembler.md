@@ -223,7 +223,8 @@ with none, and `.nogp` ends it. E may name labels defined later. Under
   `gp` gets its value.
 - `lw rd, symbol` (and `lt`, `sw rs2, symbol`, `st`) loads or stores
   the global itself: `lw rd, symbol − E(gp)`, with no register spent on
-  its address. Outside `.gp` these forms are an error.
+  its address, and `lw` and `sw` fit a slot (`c.lwgp`, `c.swgp`) on the
+  same terms as `c.lagp`. Outside `.gp` these forms are an error.
 - A symbol more than 16 trits (±21,523,360) from E stops assembly.
 
 The assembler takes E on trust: setting the register is the program's
@@ -274,6 +275,7 @@ written as for the full instruction:
 | `c.li rd, imm`, `c.lip rd, value` | `addi rd, zero, imm` |
 | `c.lwsp rd, off`, `c.swsp rs2, off` | `lw rd, off(sp)`, `sw rs2, off(sp)`: `off` in trytes |
 | `c.lagp rd, off` | `addi rd, gp, off`: `off` in trytes |
+| `c.lwgp rd, off`, `c.swgp rs2, off` | `lw rd, off(gp)`, `sw rs2, off(gp)`: `off` in trytes |
 | `c.beqz rs, label`, `c.bnez rs, label` | `beq rs, zero, label` |
 | `c.beq rs1, rs2, label` (and `bne`, `blt`, `ble`) | `beq rs1, rs2, label` |
 | `c.j label`, `c.jal label` | `jal zero, label`, `jal ra, label` |

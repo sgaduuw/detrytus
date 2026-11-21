@@ -972,13 +972,14 @@ programs after the kernel's include, and those inherited the kernel's
 sets `gp`. The assembler cannot check that the register holds E, so it
 takes it on trust, as it takes a section's run address.
 
-One slot form came with it, `c.lagp rd, imm` (op −6, `addi rd, gp,
-3·imm`), counting words because globals are words. A local prototype on
-trylobite (kernel globals reordered so the small ones sit next to `gp`,
-each process started with `gp` at its base): 977 code words before, 910
-with `gp` and no new form, 886 with `c.lagp`. Two more forms, `c.lwgp`
-and `c.swgp` (`lw` and `sw` from `gp`), with `la` + `lw` pairs folded
-into `lw rd, symbol`, reached 880: 6 words for two of the 8 free slot
-opcodes, so they stayed out, and 7 stay free. The `lw rd, symbol`
-forms stay in the assembler without them: they take one instruction
-fewer and spend no register on the address.
+Three slot forms came with it, each counting words because globals are
+words: `c.lagp rd, imm` (op −6, `addi rd, gp, 3·imm`), `c.lwgp` (op −7,
+`lw rd, 3·imm(gp)`) and `c.swgp` (op −8, `sw rd, 3·imm(gp)`). A local
+prototype on trylobite (kernel globals reordered so the small ones sit
+next to `gp`, each process started with `gp` at its base): 977 code
+words before, 910 with `gp` and no new form, 886 with `c.lagp`, and 880
+with all three and `la` + `lw` pairs folded into `lw rd, symbol`. The
+load and store forms add only 6 words today, but folding without them
+loses the `c.lw`/`c.sw` the pair had, so Eelco took all three: folded
+code takes an instruction and a register fewer and stays compressible.
+5 slot opcodes stay free.
