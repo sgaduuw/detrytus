@@ -206,6 +206,45 @@ expansion would write nothing. To write zero, write from a register
 that holds 0. The raw form `csrrw rd, csr, zero` stays legal, since it
 is the read form that `csrr` expands to.
 
+## Compressed instructions
+
+The `c.` mnemonics of `isa.md` 6.1 write bundles by hand. Two in a row
+share a word, the first in slot A; a lone one gets `c.nop` in slot B. A
+label on the second, or any other statement between them (a directive
+too), starts a new word, since a branch cannot enter slot B.
+
+```asm
+        c.li  a0, 5               # slot A of the word at 0
+        c.addi a0, 1              # slot B
+loop:   c.addi a1, -1             # a label: slot A of the next word
+        c.bne a1, zero, loop      # slot B, branching back to loop
+```
+
+A `c.` instruction takes the operands of the full instruction it stands
+for, less the ones its form fixes, so offsets, values and targets are
+written as for the full instruction:
+
+| Written | Is |
+|---------|----|
+| `c.mv rd, rs` | `addi rd, rs, 0` |
+| `c.add rd, rs` (and `sub`, `cmp`, `mul`, `min`, `max`, `tmin`, `tmax`) | `add rd, rd, rs` |
+| `c.lw rd, (rs)`, `c.lt rd, (rs)` | `lw rd, 0(rs)` |
+| `c.sw rs2, (rs)`, `c.st rs2, (rs)` | `sw rs2, 0(rs)` |
+| `c.jr rs`, `c.jalr rs` | `jalr zero, 0(rs)`, `jalr ra, 0(rs)` |
+| `c.sys`, `c.tret`, `c.nop` | `sys`, `tret`, `addi zero, zero, 0` |
+| `c.addi rd, imm` (and `shi`, `cmpi`) | `addi rd, rd, imm` |
+| `c.li rd, imm`, `c.lip rd, value` | `addi rd, zero, imm` |
+| `c.lwsp rd, off`, `c.swsp rs2, off` | `lw rd, off(sp)`, `sw rs2, off(sp)`: `off` in trytes |
+| `c.beqz rs, label`, `c.bnez rs, label` | `beq rs, zero, label` |
+| `c.beq rs1, rs2, label` (and `bne`, `blt`, `ble`) | `beq rs1, rs2, label` |
+| `c.j label`, `c.jal label` | `jal zero, label`, `jal ra, label` |
+
+The full instruction must fit the form, or assembly stops:
+`addi a0, a0, 200 does not fit c.addi`. A branch in either slot counts
+from the bundle's address. Listings and the debugger show a bundle as
+`c.li a0, 5 | c.addi a0, 1`; a trace shows each slot as the full
+instruction it ran.
+
 ## CSR names
 
 Ring +1's trap bank uses an `m` prefix and ring 0's an `s` prefix:

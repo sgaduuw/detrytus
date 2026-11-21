@@ -2549,3 +2549,29 @@ stopped: powered off with exit code 0
 stopped: powered off with exit code 42
 '''
 stderr = ""
+
+[[case]]
+name = "stepping through bundles"
+args = ["debug", "{here}/programs/bundles.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+step
+step
+step
+disas 0 3
+step
+step
+c
+'''
+status = 0
+stdout = '''
+=> 1 <start+1>  [ring +1]  c.addi a0, 1
+=> 3 <start+3>  [ring +1]  c.jal 12
+=> 12 <sub>  [ring +1]  c.shi a0, 1
+                  0 <start>  c.li a0, 5 | c.addi a0, 1
+                3 <start+3>  c.jal 12 | c.nop
+                6 <start+6>  addi t6, zero, -39366
+=> 13 <sub+1>  [ring +1]  c.jr ra
+=> 4 <start+4>  [ring +1]  c.nop
+stopped: powered off with exit code 18
+'''
+stderr = ""

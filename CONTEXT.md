@@ -920,3 +920,17 @@ instruction (`a + 1` or `a + 3`), the base for branch offsets (the
 bundle), and `tval` for `sys`. A debugger's trace shows a slot as the
 full instruction it ran. The assembler does not write bundles yet, so
 the conformance cases build them with `.word`.
+
+### 2026-11-21 · `c.` mnemonics: bundles written by hand
+
+The assembler takes the `c.` mnemonics as a first step towards writing
+bundles, before any automatic pairing. Each takes the operands of its
+full instruction less the ones its form fixes, so `c.lwsp a0, 6` means
+`lw a0, 6(sp)` (the field holds 2) and `c.lip a0, 2 * PAGE` the value
+loaded, not the field: offsets and values read the same as in the full
+instruction, and a branch names its label. The assembler encodes the
+full instruction and asks the compressed table which slot it is, so
+the form's limits live in one place, and a unit test reassembles the
+disassembly of every slot value. Two in a row share a word; a label or
+any other statement between them starts a new one, a rule simple
+enough to see in the source.

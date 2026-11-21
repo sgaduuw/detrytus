@@ -42,7 +42,7 @@ below).
 | `print EXPR` | `p` | evaluate an expression, in decimal and balanced ternary |
 | `examine ADDR [N]` | `x` | N words from ADDR (default 4) |
 | `xp ADDR [N]` | | N words of physical memory from ADDR, untranslated |
-| `disas [ADDR] [N]` | | disassemble N words (default: 8 from the pc) |
+| `disas [ADDR] [N]` | | disassemble N words (default: 8 from the pc); a bundle shows both slots, `A \| B` |
 | `trace on\|off` | | print every instruction as it runs |
 | `hart [N]` | | list the harts, or look at hart N |
 | `plug HART [TIME]` | | plug a hart in at TIME (default: the next step) |

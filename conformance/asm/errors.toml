@@ -265,3 +265,34 @@ program = '''
 '''
 expect.asm_error = "undefined symbol 'SIZE'"
 expect.asm_error_line = 2
+
+[[case]]
+name = "a c. instruction must fit its form"
+program = "c.addi a0, 200"
+expect.asm_error = "addi a0, a0, 200 does not fit c.addi"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a two-register compressed branch reaches four words"
+program = '''
+        c.beq a0, a1, far
+        nop
+        nop
+        nop
+        nop
+far:    nop
+'''
+expect.asm_error = "beq a0, a1, 15 does not fit c.beq"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a c. instruction in slot B reports its own line"
+program = "c.nop\nc.lw a0, 3(a1)"
+expect.asm_error = "lw a0, 3(a1) does not fit c.lw"
+expect.asm_error_line = 2
+
+[[case]]
+name = "a c. instruction needs its operands"
+program = "c.li a0"
+expect.asm_error = "c.li takes 2 operand(s), got 1"
+expect.asm_error_line = 1

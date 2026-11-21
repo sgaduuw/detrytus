@@ -1,6 +1,7 @@
 //! Disassembler: one instruction word back to assembly text, ported
 //! from the original Python tools.
 
+use detrytus_core::compressed;
 use detrytus_core::isa::{self, Decoded, Format};
 use detrytus_core::trits::{field, low};
 
@@ -100,8 +101,41 @@ fn mnemonic(d: &Decoded) -> String {
     }
 }
 
+/// Render one slot of a bundle in the syntax the assembler reads
+/// (slots.rs): the operands of the full instruction it expands to, less
+/// the ones its form fixes. pc, when given, is the bundle's address.
+pub fn disassemble_slot(slot: i64, pc: Option<i64>) -> String {
+    let (Some(name), Some(word)) = (compressed::mnemonic(slot), compressed::expand(slot)) else {
+        return format!("c.? {slot}  # illegal slot");
+    };
+    let d = isa::decode(word).expect("a legal slot expands to a legal word");
+    let off = if d.op.format == Format::B { d.off } else { d.imm };
+    let parts = match name {
+        "c.nop" | "c.sys" | "c.tret" => vec![],
+        "c.mv" => vec![reg(d.rd), reg(d.rs1)],
+        "c.lw" | "c.lt" => vec![reg(d.rd), format!("({})", reg(d.rs1))],
+        "c.sw" | "c.st" => vec![reg(d.rs2), format!("({})", reg(d.rs1))],
+        "c.jr" | "c.jalr" => vec![reg(d.rs1)],
+        "c.addi" | "c.li" | "c.lip" | "c.shi" | "c.cmpi" | "c.lwsp" => {
+            vec![reg(d.rd), d.imm.to_string()]
+        }
+        "c.swsp" => vec![reg(d.rs2), d.imm.to_string()],
+        "c.beqz" | "c.bnez" => vec![reg(d.rs1), target(pc, off)],
+        "c.j" | "c.jal" => vec![target(pc, off)],
+        "c.beq" | "c.bne" | "c.blt" | "c.ble" => vec![reg(d.rs1), reg(d.rs2), target(pc, off)],
+        // The register forms: rd = rd op rs.
+        _ => vec![reg(d.rd), reg(d.rs2)],
+    };
+    if parts.is_empty() { name.to_string() } else { format!("{name} {}", parts.join(", ")) }
+}
+
 /// Render a word; pc, when given, turns branch offsets into addresses.
+/// A bundle shows both slots, `slot A | slot B`.
 pub fn disassemble(word: i64, pc: Option<i64>) -> String {
+    if compressed::is_bundle(word) {
+        let [a, b] = compressed::slots(word);
+        return format!("{} | {}", disassemble_slot(a, pc), disassemble_slot(b, pc));
+    }
     let d = match isa::decode(word) {
         Ok(d) => d,
         Err(e) => return format!(".word {word}  # illegal: {}", e.0),

@@ -266,3 +266,44 @@ out:    li    t6, -39366
 '''
 expect.exit_code = 6
 expect.registers = { a2 = 4 }
+
+[[case]]
+name = "two c. instructions share a word, and a label starts a new one"
+# The first two share the word at 0. a, on the fourth, starts the word
+# at 6 though the third left slot B of the word at 3 free; b follows.
+program = '''
+        c.li  a0, 1
+        c.li  a1, 2
+        c.li  a2, 3
+a:      c.li  a3, 4
+b:      li    a0, a * 100 + b
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 609
+expect.registers = { a1 = 2, a2 = 3, a3 = 4 }
+
+[[case]]
+name = "a lone c. instruction gets c.nop in slot B"
+# c.li a0, 1 is op 5, rd 1, imm 1: 5 + 27 + 729. c.nop is 4.
+program = '''
+        c.li  a0, 1
+b:      li    a0, b
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 3
+expect.words = { "0" = 172371928 }   # 121 + 243 * 761 + 43046721 * 4
+
+[[case]]
+name = "a statement between two c. instructions keeps them apart"
+program = '''
+        c.li  a1, 1
+        .equ  X, 2
+        c.li  a2, X
+b:      li    a0, b
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 6
+expect.registers = { a1 = 1, a2 = 2 }

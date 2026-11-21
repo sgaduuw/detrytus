@@ -10,6 +10,7 @@ pub mod expr;
 pub mod operands;
 pub mod pseudo;
 pub mod pyrepr;
+pub mod slots;
 pub mod source;
 pub mod text;
 

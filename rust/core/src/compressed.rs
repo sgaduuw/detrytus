@@ -17,6 +17,9 @@ pub const SLOT_TRITS: u32 = 11;
 const SLOT_A: u32 = 5;
 const SLOT_B: u32 = 16;
 
+/// `c.nop`, the filler of an unused slot: `c.addi zero, 0`.
+pub const NOP: i64 = OP_ADDI;
+
 /// A CI immediate: 5 trits.
 const CI_TRITS: u32 = 5;
 /// A CJ offset: 8 trits.
