@@ -63,7 +63,9 @@ reset address.
 | `.assert E, "MESSAGE"` | stop with MESSAGE as the error if E is 0 |
 
 `.assert` is checked once every symbol is known, so it may use labels
-defined after it. A file meant only to be included can say what to
+defined after it. If assembly stops earlier, on a line that needs a
+symbol nobody defined, an `.assert` before that line that already fails
+is reported instead: it names the cause. A file meant only to be included can say what to
 build instead:
 
 ```
