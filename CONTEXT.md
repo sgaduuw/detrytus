@@ -827,3 +827,30 @@ The last device of the accepted proposal.
   values outside a tryte, so a bad image is a startup error rather than
   garbage in RAM later. A write error later is reported once on stderr
   and the run goes on, as a real disk's error would not stop the CPU.
+
+### 2026-11-21 · The compressed table, set against measured code
+
+`--mix` (`asm` for what is written, `run` for what executes) measured
+trylobite's kernel and programs and its test suite against the first
+table. ISA 0.8 adds four kinds of form, chosen by Eelco from the
+instructions most often left without one:
+
+- **`c.jal`** (op 13, CJ): calls were 7% of the static code, none
+  compressible, and every call in a kernel fits ±3,280 words.
+- **`c.beq`/`c.bne`/`c.blt`/`c.ble rd, rs, f`** (ops −1 to −4, CR):
+  loop-closing branches compare two registers and jump back a few
+  words. `f` is the offset, ±4 words. `bgt` and `bge` swap registers
+  instead of taking opcodes. In the test suite these branches were a
+  quarter of everything executed (page clearing and copying).
+- **`c.sys` and `c.tret`**: new `f` values of op 3, no new opcode.
+- **`c.lip rd, imm`** (op −5, CI): `li` of a page multiple, which is
+  how device addresses and `PAGE` are loaded.
+
+Together: 51% to 64% of trylobite's instructions compressible, and an
+estimated 13% to 21% of its words saved by bundles. 8 of the 27 slot
+opcodes stay free. Forms trylobite never uses were kept, since one
+hand-written kernel is a narrow measure; a compiler's output may argue
+differently. Left out: `lw`/`sw` with small offsets (about 1%, since
+structure offsets are larger than 2 trits reach) and `la` (an `auipc`
+and `addi` pair, 12% of the static code), which wants gp-relative
+addressing rather than a slot.
