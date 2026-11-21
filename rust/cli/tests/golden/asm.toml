@@ -1310,3 +1310,22 @@ stdout = '''
                     13                               c.jr ra                       c.jr  ra
 '''
 stderr = ""
+
+[[case]]
+name = "listing of a program under .compress"
+args = ["asm", "{here}/programs/compress.s"]
+status = 0
+stdout = '''
+                     0  00000000000000+-0000+-0++-+  addi a1, zero, 2              li    a1, 2
+                     3  00000+0-+--0000000++--+++++  c.li a0, 0                    li    a0, 0
+                     4                               c.li t1, 0                    li    t1, 0
+                     6  0000+00+0++0000+00+0+++++++  c.addi a0, 1                  loop:   addi  a0, a0, 1
+                     7                               c.addi a0, 1                  addi  a0, a0, 1
+                     9  0-+0-0+-0-+0000-0+-0+++++++  c.addi a1, -1                 addi  a1, a1, -1
+                    10                               c.bne a1, t1, 6               bne   a1, t1, loop
+                    12  000000000000000000++000++00  lui t2, 1                     lui   t2, 1
+                    15  000000000000000000+0+00++-+  addi a2, a0, 0                mv    a2, a0
+                    18  00000-+000000000000+++0++-+  addi t6, zero, -39366         li    t6, -39366
+                    21  0000000000000000+++00+000--  sw a0, 0(t6)                  sw    a0, 0(t6)
+'''
+stderr = ""

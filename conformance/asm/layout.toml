@@ -307,3 +307,112 @@ b:      li    a0, b
 '''
 expect.exit_code = 6
 expect.registers = { a1 = 1, a2 = 2 }
+
+[[case]]
+name = ".compress pairs neighbouring instructions that fit a slot"
+# li 1, li 2 share the word at 0; add a0, a0, a1 fits c.add and pairs
+# with the li 3 after it at 3; b is at 6. After .nocompress the two li
+# stay full words, so c is at 12.
+program = '''
+        .compress
+        li    a0, 1
+        li    a1, 2
+        add   a0, a0, a1
+        li    a2, 3
+        .nocompress
+b:      li    t0, 1
+        li    t1, 2
+c:      li    a0, b * 10 + c
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 72
+expect.registers = { a1 = 2, a2 = 3 }
+
+[[case]]
+name = ".compress leaves alone what does not fit and what stands alone"
+# lui has no form, so li 1 before it stays a full word; so does li 2,
+# which has no neighbour that fits. The words are the full encodings.
+program = '''
+        .compress
+        li    a0, 1
+        lui   a1, 1
+        li    a2, 2
+        .nocompress
+b:      li    a0, b
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 9
+expect.words = { "0" = 177424, "6" = 355057 }   # li a0, 1 and li a2, 2, as full words
+
+[[case]]
+name = "a label keeps .compress from pairing across it"
+program = '''
+        .compress
+        li    a0, 1
+x:      li    a1, 2
+        li    a2, 3
+        .nocompress
+b:      li    a0, x * 10 + b
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 36
+
+[[case]]
+name = ".compress uses a short branch where the shrunk code lets it reach"
+# Eight adds take four words once paired, so the loop's bne is four
+# words back and becomes c.bne, paired with the mv after it.
+program = '''
+        li    a1, 2
+        li    a0, 0
+        li    t1, 0
+        .compress
+loop:   addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a1, a1, -1
+        bne   a1, t1, loop
+        mv    a2, a0
+        .nocompress
+b:      li    a3, b
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 14
+expect.registers = { a2 = 14, a3 = 24 }
+
+[[case]]
+name = ".compress keeps a branch full when the paired code is still too far"
+# Ten adds take five words, too far for c.bne: the branch stays a full
+# word, and so does the mv it would have paired with. (Against zero it
+# would be c.bnez, which reaches 121 words, so it compares with t1.)
+program = '''
+        li    a1, 2
+        li    a0, 0
+        li    t1, 0
+        .compress
+loop:   addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a0, a0, 1
+        addi  a1, a1, -1
+        bne   a1, t1, loop
+        mv    a2, a0
+        .nocompress
+b:      li    a3, b
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 18
+expect.registers = { a2 = 18, a3 = 30 }

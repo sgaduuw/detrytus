@@ -61,6 +61,7 @@ reset address.
 | `.section NAME[, LOAD[, RUN]]` | switch sections (below) |
 | `.include "PATH"` | assemble another file here (below) |
 | `.assert E, "MESSAGE"` | stop with MESSAGE as the error if E is 0 |
+| `.compress` / `.nocompress` | turn automatic bundling on and off from here (below); off at the start |
 
 `.assert` is checked once every symbol is known, so it may use labels
 defined after it. If assembly stops earlier, on a line that needs a
@@ -244,6 +245,25 @@ The full instruction must fit the form, or assembly stops:
 from the bundle's address. Listings and the debugger show a bundle as
 `c.li a0, 5 | c.addi a0, 1`; a trace shows each slot as the full
 instruction it ran.
+
+### Automatic bundling
+
+Between `.compress` and `.nocompress` (or the end of the program), the
+assembler puts ordinary instructions into bundles itself, by the same
+rules as `c.` instructions: two neighbours that both fit a form share a
+word, and a label or any other statement between them keeps them apart.
+An instruction that fits but has no partner stays a full word, since a
+bundle with `c.nop` saves nothing. Instructions of more than one word
+(`la`, `li` of a large or forward value) are never paired.
+
+Whether a branch fits can depend on how much the code before it shrank,
+so layout repeats until every pair fits, each time leaving out the
+instructions that did not. A branch that fits nowhere stays full.
+
+Bundling moves labels, so leave out code whose layout matters with
+`.nocompress`: a vectored trap table, one entry per word, or code whose
+size an `.assert` checks. A `sys` handler must resume at `tval`, not
+`tpc + 3` (`isa.md` 8.4), before code that calls it is bundled.
 
 ## CSR names
 

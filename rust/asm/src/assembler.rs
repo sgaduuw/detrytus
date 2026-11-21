@@ -5,7 +5,7 @@
 //! whose size depends on a value (li) decides its size in pass one,
 //! taking the long form when the value is not yet known.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use detrytus_core::trits::{TRYTE_MAX, TRYTE_TRITS, low, split_high};
 use detrytus_core::{compressed, isa};
@@ -119,6 +119,9 @@ struct Assembler {
     sections: HashMap<String, (Value, Value)>,
     /// A `c.` instruction in slot A whose slot B is still free.
     open_slot: Option<usize>,
+    /// Instructions under `.compress` that may go in a slot: those whose
+    /// full instruction did not fail to fit one in an earlier layout.
+    slotted: BTreeSet<usize>,
 }
 
 impl Assembler {
@@ -135,7 +138,10 @@ impl Assembler {
             }
             // Two c. instructions share a bundle only when nothing else
             // comes between them.
-            if !stmts[i].mnemonic.is_empty() && !slots::is_slot(&stmts[i].mnemonic) {
+            if !stmts[i].mnemonic.is_empty()
+                && !slots::is_slot(&stmts[i].mnemonic)
+                && !self.slotted.contains(&i)
+            {
                 self.open_slot = None;
             }
             if let Err(e) = self.lay(stmts, i) {
@@ -195,6 +201,11 @@ impl Assembler {
             }
             // Checked in pass two, once every symbol is known.
             ".assert" => stmts[i].kind = Kind::None,
+            // Read by compressible() before layout.
+            ".compress" | ".nocompress" => {
+                stmts[i].kind = Kind::None;
+                expect::<0>(&stmts[i])?;
+            }
             m if TRYTE_DIRECTIVES.contains(&m) => self.lay_trytes(stmts, i)?,
             _ => self.lay_words(stmts, i)?,
         }
@@ -292,7 +303,9 @@ impl Assembler {
     }
 
     fn lay_words(&mut self, stmts: &mut [Statement], i: usize) -> PassResult<()> {
-        if slots::is_slot(&stmts[i].mnemonic) {
+        let size = self.word_count(&stmts[i])?;
+        let manual = slots::is_slot(&stmts[i].mnemonic);
+        if manual || (self.slotted.contains(&i) && size == 1) {
             // A label starts a new word: a branch cannot enter slot B.
             if let Some(a) = self.open_slot.take()
                 && self.pending.is_empty()
@@ -303,10 +316,22 @@ impl Assembler {
                 (s.kind, s.shift, s.size, s.addr) = (Kind::SlotB, shift, 0, addr);
                 return Ok(());
             }
+            // Slot A, or a full word if nothing pairs with it: the same
+            // size either way.
             self.open_slot = Some(i);
+        } else {
+            self.open_slot = None;
         }
-        let s = &stmts[i];
-        let size = match s.mnemonic.as_str() {
+        let addr = next_centre(self.loc, 3);
+        let s = &mut stmts[i];
+        (s.kind, s.shift, s.size, s.addr) = (Kind::Word, self.shift, size, addr);
+        self.bind(stmts, addr)?;
+        self.loc = addr + 3 * size - 1;
+        Ok(())
+    }
+
+    fn word_count(&self, s: &Statement) -> PassResult<i128> {
+        Ok(match s.mnemonic.as_str() {
             ".word" => s.operands.len() as i128,
             ".words" => {
                 let [count] = expect::<1>(s)?;
@@ -318,13 +343,18 @@ impl Assembler {
             }
             m if slots::is_slot(m) => 1,
             m => pseudo::size(split_suffix(m).0, &s.operands, &self.symbols)?,
-        };
-        let addr = next_centre(self.loc, 3);
-        let s = &mut stmts[i];
-        (s.kind, s.shift, s.size, s.addr) = (Kind::Word, self.shift, size, addr);
-        self.bind(stmts, addr)?;
-        self.loc = addr + 3 * size - 1;
-        Ok(())
+        })
+    }
+
+    /// The paired instructions written under `.compress` whose full
+    /// instruction does not fit a slot where layout put them.
+    fn unfit(&self, stmts: &[Statement]) -> Vec<usize> {
+        let paired = |i: usize| stmts[i].kind == Kind::SlotB || stmts[i].partner.is_some();
+        self.slotted
+            .iter()
+            .copied()
+            .filter(|&i| paired(i) && self.slot(&stmts[i]).is_err())
+            .collect()
     }
 
     fn tryte_count(&self, s: &Statement) -> PassResult<i128> {
@@ -344,7 +374,9 @@ impl Assembler {
         for (i, s) in stmts.iter().enumerate() {
             let result = match s.kind {
                 Kind::Tryte => self.emit_trytes(s),
-                Kind::Word if slots::is_slot(&s.mnemonic) => self.emit_bundle(stmts, i),
+                Kind::Word if slots::is_slot(&s.mnemonic) || s.partner.is_some() => {
+                    self.emit_bundle(stmts, i)
+                }
                 Kind::Word => self.emit_words(s),
                 Kind::SlotB => Ok(()),
                 Kind::None if s.mnemonic == ".assert" => self.check(s),
@@ -458,10 +490,18 @@ impl Assembler {
         Ok(())
     }
 
-    /// The slot a `c.` instruction encodes to: its full instruction,
-    /// encoded with the bundle's address as pc, must fit the form.
+    /// The slot an instruction encodes to: its full instruction, encoded
+    /// with the bundle's address as pc, must fit a form, and for a `c.`
+    /// instruction the one it names.
     fn slot(&self, s: &Statement) -> PassResult<i64> {
         let base = s.addr - low3(s.addr);
+        if !slots::is_slot(&s.mnemonic) {
+            let word = self.words_at(s, base)?[0];
+            let d = isa::decode(word).expect("an encoded instruction decodes");
+            return compressed::compress(&d).ok_or_else(|| {
+                OperandError::Message(format!("{} does not fit a slot", s.mnemonic)).into()
+            });
+        }
         let ops = Operands { symbols: &self.symbols };
         let (name, texts) = slots::full(&s.mnemonic, &s.operands)?;
         let mut expansions = if pseudo::is_pseudo(name) {
@@ -514,7 +554,12 @@ impl Assembler {
     }
 
     fn words(&self, s: &Statement) -> PassResult<Vec<i64>> {
-        let pc = s.addr;
+        self.words_at(s, s.addr)
+    }
+
+    /// The words of a statement assembled at pc, which differs from its
+    /// address only in slot B, where offsets count from the bundle.
+    fn words_at(&self, s: &Statement, pc: Value) -> PassResult<Vec<i64>> {
         let ops = Operands { symbols: &self.symbols };
         if s.mnemonic == ".word" {
             return s
@@ -532,7 +577,7 @@ impl Assembler {
         }
         let (name, suffix) = split_suffix(&s.mnemonic);
         let expansions = if pseudo::is_pseudo(name) {
-            pseudo::expand(&ops, name, &s.operands, pc, s.size)?
+            pseudo::expand(&ops, name, &s.operands, pc, s.size.max(1))?
         } else if let Some(op) = isa::by_name(name) {
             vec![(op.name, s.operands.clone(), Fields::default())]
         } else {
@@ -592,12 +637,47 @@ fn quoted(s: &Statement, lit: &str) -> Result<String, AsmError> {
     Ok(out)
 }
 
+/// The instructions between `.compress` and `.nocompress` (or the end):
+/// the ones automatic pairing may put in a slot.
+fn compressible(stmts: &[Statement]) -> BTreeSet<usize> {
+    let mut on = false;
+    let mut found = BTreeSet::new();
+    for (i, s) in stmts.iter().enumerate() {
+        match s.mnemonic.as_str() {
+            ".compress" => on = true,
+            ".nocompress" => on = false,
+            m if on && !m.is_empty() && !m.starts_with('.') && !slots::is_slot(m) => {
+                found.insert(i);
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
 /// Assemble source text. file, if given, names it in error messages and
 /// is where .include paths start from.
+///
+/// Instructions under `.compress` start out allowed into slots. Whether
+/// one fits depends on where layout puts it (a short branch's reach), so
+/// layout repeats, each time without the ones that did not fit, until
+/// every pair fits. The set only shrinks, so this ends.
 pub fn assemble(source: &str, file: Option<&str>) -> Result<Image, AsmError> {
-    let mut asm = Assembler::new();
-    let mut stmts = parse(source, file)?;
-    asm.layout(&mut stmts)?;
+    let parsed = parse(source, file)?;
+    let mut slotted = compressible(&parsed);
+    let (asm, stmts) = loop {
+        let mut asm = Assembler { slotted: slotted.clone(), ..Assembler::new() };
+        let mut stmts = parsed.clone();
+        asm.layout(&mut stmts)?;
+        let unfit = asm.unfit(&stmts);
+        if unfit.is_empty() {
+            break (asm, stmts);
+        }
+        for i in unfit {
+            slotted.remove(&i);
+        }
+    };
+    let mut asm = asm;
     asm.emit(&stmts)?;
     let mut image = asm.image;
     image.symbols = asm.symbols.into_iter().collect();
