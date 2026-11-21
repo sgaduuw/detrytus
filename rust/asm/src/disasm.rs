@@ -116,10 +116,10 @@ pub fn disassemble_slot(slot: i64, pc: Option<i64>) -> String {
         "c.lw" | "c.lt" => vec![reg(d.rd), format!("({})", reg(d.rs1))],
         "c.sw" | "c.st" => vec![reg(d.rs2), format!("({})", reg(d.rs1))],
         "c.jr" | "c.jalr" => vec![reg(d.rs1)],
-        "c.addi" | "c.li" | "c.lip" | "c.shi" | "c.cmpi" | "c.lwsp" => {
+        "c.addi" | "c.li" | "c.lip" | "c.shi" | "c.cmpi" | "c.lwsp" | "c.lagp" | "c.lwgp" => {
             vec![reg(d.rd), d.imm.to_string()]
         }
-        "c.swsp" => vec![reg(d.rs2), d.imm.to_string()],
+        "c.swsp" | "c.swgp" => vec![reg(d.rs2), d.imm.to_string()],
         "c.beqz" | "c.bnez" => vec![reg(d.rs1), target(pc, off)],
         "c.j" | "c.jal" => vec![target(pc, off)],
         "c.beq" | "c.bne" | "c.blt" | "c.ble" => vec![reg(d.rs1), reg(d.rs2), target(pc, off)],

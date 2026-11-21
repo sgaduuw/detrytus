@@ -2,14 +2,15 @@
 //! instruction each `c.` mnemonic stands for. A `c.` instruction takes
 //! the operands of its full instruction, less the ones its form fixes:
 //! `c.addi rd, imm` is `addi rd, rd, imm`, `c.lwsp rd, off` is
-//! `lw rd, off(sp)`, `c.lip rd, value` is `addi rd, zero, value`.
+//! `lw rd, off(sp)`, `c.lip rd, value` is `addi rd, zero, value`,
+//! `c.lagp rd, off` is `addi rd, gp, off`.
 //! Whether the result fits the form is decided from the encoded word.
 
 use crate::operands::{OperandError, fail};
 use crate::text::strip;
 
 /// The `c.` mnemonics and the operands each takes.
-const ARITY: [(&str, usize); 33] = [
+const ARITY: [(&str, usize); 36] = [
     ("c.nop", 0),
     ("c.mv", 2),
     ("c.add", 2),
@@ -43,6 +44,9 @@ const ARITY: [(&str, usize); 33] = [
     ("c.blt", 3),
     ("c.ble", 3),
     ("c.lip", 2),
+    ("c.lagp", 2),
+    ("c.lwgp", 2),
+    ("c.swgp", 2),
 ];
 
 fn arity(name: &str) -> Option<usize> {
@@ -87,6 +91,9 @@ pub fn full(name: &str, texts: &[String]) -> Result<(&'static str, Vec<String>),
         "c.cmpi" => ("cmpi", vec![t(0), t(0), t(1)]),
         "c.lwsp" => ("lw", vec![t(0), format!("({})(sp)", t(1))]),
         "c.swsp" => ("sw", vec![t(0), format!("({})(sp)", t(1))]),
+        "c.lagp" => ("addi", vec![t(0), s("gp"), t(1)]),
+        "c.lwgp" => ("lw", vec![t(0), format!("({})(gp)", t(1))]),
+        "c.swgp" => ("sw", vec![t(0), format!("({})(gp)", t(1))]),
         "c.beqz" => ("beq", vec![t(0), s("zero"), t(1)]),
         "c.bnez" => ("bne", vec![t(0), s("zero"), t(1)]),
         "c.j" => ("jal", vec![s("zero"), t(0)]),

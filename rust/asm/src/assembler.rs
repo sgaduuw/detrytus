@@ -202,6 +202,8 @@ impl Assembler {
             // Checked in pass two, once every symbol is known.
             ".assert" => stmts[i].kind = Kind::None,
             // Read by compressible() before layout.
+            // Read by gp::rewrite() before layout.
+            ".gp" | ".nogp" => stmts[i].kind = Kind::None,
             ".compress" | ".nocompress" => {
                 stmts[i].kind = Kind::None;
                 expect::<0>(&stmts[i])?;
@@ -575,6 +577,9 @@ impl Assembler {
         if s.mnemonic == ".words" {
             return Ok(vec![0; s.size as usize]);
         }
+        if let Some(reach) = &s.gp {
+            reach.check(&ops, pc)?;
+        }
         let (name, suffix) = split_suffix(&s.mnemonic);
         let expansions = if pseudo::is_pseudo(name) {
             pseudo::expand(&ops, name, &s.operands, pc, s.size.max(1))?
@@ -663,7 +668,8 @@ fn compressible(stmts: &[Statement]) -> BTreeSet<usize> {
 /// layout repeats, each time without the ones that did not fit, until
 /// every pair fits. The set only shrinks, so this ends.
 pub fn assemble(source: &str, file: Option<&str>) -> Result<Image, AsmError> {
-    let parsed = parse(source, file)?;
+    let mut parsed = parse(source, file)?;
+    crate::gp::rewrite(&mut parsed)?;
     let mut slotted = compressible(&parsed);
     let (asm, stmts) = loop {
         let mut asm = Assembler { slotted: slotted.clone(), ..Assembler::new() };

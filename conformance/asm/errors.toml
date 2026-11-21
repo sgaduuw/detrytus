@@ -302,3 +302,19 @@ name = ".compress takes no operands"
 program = ".compress 1"
 expect.asm_error = ".compress takes 0 operand(s)"
 expect.asm_error_line = 1
+
+[[case]]
+name = "a symbol out of gp's reach"
+program = '''
+        .gp   0
+        la    a0, far
+        .equ  far, 21523361
+'''
+expect.asm_error = "far is 21523361 trytes from gp (0), beyond the 16 trits an offset holds"
+expect.asm_error_line = 2
+
+[[case]]
+name = ".gp names one value"
+program = ".gp"
+expect.asm_error = ".gp takes 1 operand(s)"
+expect.asm_error_line = 1

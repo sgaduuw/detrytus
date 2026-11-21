@@ -65,7 +65,7 @@ and hides a failure.
 | `rust/core/src/entropy.rs` | the seeded entropy source |
 | `rust/core/src/machine.rs` | the platform wired together, and the harts run in rounds |
 | `rust/core/tests/` | the spec sync test |
-| `rust/asm/src/` | the assembler: `expr`, `source`, `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm` |
+| `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm` |
 | `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
 | `rust/conformance/` | the conformance runner (tests only) |

@@ -41,6 +41,8 @@ pub struct Statement {
     pub shift: i128,
     /// For a `c.` instruction in slot A, the statement in slot B.
     pub partner: Option<usize>,
+    /// Set when `.gp` made this an offset from gp (gp.rs).
+    pub gp: Option<crate::gp::Reach>,
 }
 
 impl Statement {
@@ -64,6 +66,7 @@ impl Statement {
             kind: Kind::Word,
             shift: 0,
             partner: None,
+            gp: None,
         }
     }
 

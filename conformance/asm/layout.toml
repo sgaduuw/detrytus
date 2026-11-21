@@ -416,3 +416,74 @@ b:      li    a3, b
 '''
 expect.exit_code = 18
 expect.registers = { a2 = 18, a3 = 30 }
+
+[[case]]
+name = "under .gp, la is one addi from gp and lw and sw name a symbol"
+# la gp stays an auipc pair (0 and 3); la a1 is the one word at 6, and
+# sw and lw at 12 and 15 reach y through gp. b is at 18.
+program = '''
+        .gp   x
+        la    gp, x
+        la    a1, y
+        li    t0, 7
+        sw    t0, y
+        lw    a2, y
+b:      li    a0, b
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .section data, 19683
+x:      .word 0
+y:      .word 42
+'''
+expect.exit_code = 18
+expect.registers = { a1 = 19686, a2 = 7 }
+
+[[case]]
+name = "each section keeps its own .gp"
+# other has no .gp, so its la is an auipc pair and c is 3006; back in
+# text, .gp still holds and la a2 is the one word at 6. After .nogp,
+# la a3 is a pair again, at d = 9 and 12, so e is 15.
+program = '''
+        .gp   x
+        la    gp, x
+        .section other, 3000
+        la    a1, x
+c:      nop
+        .section text
+        la    a2, y
+d:      .nogp
+        la    a3, y
+e:      li    a0, c + d * 10 + e * 100
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .org  300
+x:      .word 0
+y:      .word 42
+'''
+expect.exit_code = 4596
+expect.registers = { a2 = 303, a3 = 303 }
+
+[[case]]
+name = ".compress puts gp-relative la, lw and sw in slots"
+# la gp takes 0 and 3. la a1 and lw a2 share the word at 6, sw a2 and
+# li a0 the word at 9 (c.swgp, c.li); b is at 12.
+program = '''
+        .gp   x
+        la    gp, x
+        .compress
+        la    a1, y
+        lw    a2, y
+        sw    a2, z
+        li    a0, 0
+        .nocompress
+b:      li    a0, b
+        lw    a3, z
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .section data, 19683
+x:      .word 0
+y:      .word 42
+z:      .word 0
+'''
+expect.exit_code = 12
+expect.registers = { a1 = 19686, a2 = 42, a3 = 42 }

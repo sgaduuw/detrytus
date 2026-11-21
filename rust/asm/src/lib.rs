@@ -7,6 +7,7 @@ pub mod assembler;
 pub mod disasm;
 pub mod error;
 pub mod expr;
+pub mod gp;
 pub mod operands;
 pub mod pseudo;
 pub mod pyrepr;
