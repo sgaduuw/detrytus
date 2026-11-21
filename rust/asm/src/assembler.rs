@@ -132,6 +132,12 @@ impl Assembler {
                 self.pending.push(i);
             }
             if let Err(e) = self.lay(stmts, i) {
+                // A check before the failing line that already fails is
+                // the likelier cause, such as a file assembled without the
+                // symbols it asserts it needs.
+                if let Some(e) = self.failed_check(&stmts[..i]) {
+                    return Err(e);
+                }
                 return Err(match e {
                     PassError::Located(e) => e,
                     PassError::Operand(e) => stmts[i].error(e.message()),
@@ -341,6 +347,16 @@ impl Assembler {
         }
         self.image.trytes.insert(key, tryte);
         Ok(())
+    }
+
+    /// The first `.assert` among stmts that fails with the symbols known
+    /// so far. One that cannot be evaluated yet, for a symbol not defined
+    /// yet, is passed over.
+    fn failed_check(&self, stmts: &[Statement]) -> Option<AsmError> {
+        stmts.iter().filter(|s| s.mnemonic == ".assert").find_map(|s| match self.check(s) {
+            Err(PassError::Located(e)) => Some(e),
+            _ => None,
+        })
     }
 
     /// `.assert EXPR, "MESSAGE"`: the message is the error when EXPR is 0.

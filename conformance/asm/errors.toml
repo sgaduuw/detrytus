@@ -246,3 +246,22 @@ name = "comparisons do not chain"
 program = "li a0, 1 < 2 < 3"
 expect.asm_error = "comparisons do not chain in '1 < 2 < 3'"
 expect.asm_error_line = 1
+
+[[case]]
+name = "a failing .assert is reported before a later first-pass error"
+program = '''
+        .assert defined(SIZE), "define SIZE before including this"
+        .equ  WORDS, SIZE / 3
+'''
+expect.asm_error = "define SIZE before including this"
+expect.asm_error_line = 1
+
+[[case]]
+name = "an .assert that cannot be evaluated yet does not hide the error"
+program = '''
+        .assert LATER == 1, "never reached"
+        .equ  WORDS, SIZE / 3
+        .equ  LATER, 1
+'''
+expect.asm_error = "undefined symbol 'SIZE'"
+expect.asm_error_line = 2
