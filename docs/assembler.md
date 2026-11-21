@@ -31,7 +31,10 @@ not.
 | current address | `.` | address of this statement |
 
 Operators: `+ - * / %` and parentheses, with `/` and `%` truncating
-toward zero.
+toward zero. One comparison, `== != < <= > >=`, may join two sums: it
+binds loosest and gives 1 when it holds, 0 when not. In `.assert`,
+`defined(NAME)` is 1 when NAME is a label or constant anywhere in the
+program, 0 when not.
 
 ## Layout: words are centred
 
@@ -57,8 +60,19 @@ reset address.
 | `.equ NAME, E` / `.set` | define a constant |
 | `.section NAME[, LOAD[, RUN]]` | switch sections (below) |
 | `.include "PATH"` | assemble another file here (below) |
+| `.assert E, "MESSAGE"` | stop with MESSAGE as the error if E is 0 |
 
-String escapes: `\n`, `\t`, `\0`, `\\`, `\"`. Code points above 9,841
+`.assert` is checked once every symbol is known, so it may use labels
+defined after it. A file meant only to be included can say what to
+build instead:
+
+```
+        .assert defined(RAM_PAGES), "include/kernel.s is part of a build: run shell.s or demo.s"
+```
+
+Escapes, in strings and character literals: `\n`, `\t`, `\0`, `\\`,
+`\'` and `\"`. Any other escape is an error, so a typo such as `\b`
+does not quietly become `b`. Code points above 9,841
 do not fit a tryte and are rejected until the text encoding (`isa.md`
 12.2) is settled.
 

@@ -180,6 +180,8 @@ impl Assembler {
                 stmts[i].kind = Kind::None;
                 self.lay_section(stmts, i)?;
             }
+            // Checked in pass two, once every symbol is known.
+            ".assert" => stmts[i].kind = Kind::None,
             m if TRYTE_DIRECTIVES.contains(&m) => self.lay_trytes(stmts, i)?,
             _ => self.lay_words(stmts, i)?,
         }
@@ -316,6 +318,7 @@ impl Assembler {
             let result = match s.kind {
                 Kind::Tryte => self.emit_trytes(s),
                 Kind::Word => self.emit_words(s),
+                Kind::None if s.mnemonic == ".assert" => self.check(s),
                 Kind::None => Ok(()),
             };
             if let Err(e) = result {
@@ -337,6 +340,17 @@ impl Assembler {
             return Err(s.error(format!("address {addr} assembled twice")).into());
         }
         self.image.trytes.insert(key, tryte);
+        Ok(())
+    }
+
+    /// `.assert EXPR, "MESSAGE"`: the message is the error when EXPR is 0.
+    fn check(&self, s: &Statement) -> PassResult<()> {
+        let [condition, message] =
+            expect::<2>(s).map_err(|_| s.error(".assert takes a condition and a \"message\""))?;
+        let message = quoted(s, &message)?;
+        if crate::expr::evaluate_check(&condition, &self.symbols)? == 0 {
+            return Err(s.error(message).into());
+        }
         Ok(())
     }
 
@@ -456,6 +470,11 @@ fn expect<const N: usize>(s: &Statement) -> Result<[String; N], AsmError> {
 /// A .string or .ascii operand, with its escapes applied.
 fn string(s: &Statement) -> Result<String, AsmError> {
     let [lit] = expect::<1>(s)?;
+    quoted(s, &lit)
+}
+
+/// A double-quoted literal's text, with its escapes applied.
+fn quoted(s: &Statement, lit: &str) -> Result<String, AsmError> {
     let chars: Vec<char> = lit.chars().collect();
     if chars.len() < 2 || chars[0] != '"' || chars[chars.len() - 1] != '"' {
         return Err(s.error("expected a double-quoted string"));
@@ -465,12 +484,10 @@ fn string(s: &Statement) -> Result<String, AsmError> {
     let mut i = 0;
     while i < body.len() {
         if body[i] == '\\' && i + 1 < body.len() && body[i + 1] != '\n' {
-            out.push(match body[i + 1] {
-                'n' => '\n',
-                't' => '\t',
-                '0' => '\0',
-                other => other,
-            });
+            let c = body[i + 1];
+            out.push(
+                crate::expr::escape(c).ok_or_else(|| s.error(crate::expr::unknown_escape(c)))?,
+            );
             i += 2;
         } else {
             out.push(body[i]);
