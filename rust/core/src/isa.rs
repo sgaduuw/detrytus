@@ -195,7 +195,7 @@ pub const OPS: &[Op] = &[
     op(Kind::Cinval, "cinval", -42, R, "s"),
 ];
 
-/// The opcode of a compressed bundle (6.1): recognised, not yet run.
+/// The opcode of a compressed bundle (6.1).
 pub const BUNDLE_OPCODE: i64 = 121;
 
 pub fn by_opcode(opcode: i64) -> Option<&'static Op> {

@@ -1,0 +1,284 @@
+# Compressed bundles (docs/isa.md 6.1). The assembler does not write
+# bundles yet, so each is a .word built from its slots: S(A, B) is
+# BUNDLE + SA*A + SB*B, and a slot is its op plus fields scaled by the
+# constants below (CR: f, rs, rd; CI: imm, rd; CJ: off).
+
+[defaults]
+prelude = '''
+        .equ  BUNDLE, 121
+        .equ  SA, 243               # slot A: trits 15..5
+        .equ  SB, 43046721          # slot B: trits 26..16
+        .equ  RD, 27                # rd: trits 5..3
+        .equ  RS, 729               # rs: trits 8..6
+        .equ  F, 19683              # f: trits 10..9
+        .equ  IMM, 729              # CI immediate: trits 10..6
+        .equ  OFF, 27               # CJ offset: trits 10..3
+        .equ  NOP, 4                # c.nop: c.addi zero, 0
+        .equ  A0, 1
+        .equ  A1, 2
+        .equ  T1, 8
+        .equ  SP, -13
+        la    t0, handler
+        csrw  mtvec, t0
+'''
+postlude = '''
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+
+[[case]]
+name = "slot A runs before slot B, then the next word"
+program = '''
+        .word BUNDLE + SA*(5 + RD*A0 + IMM*5) + SB*(6 + RD*A0 + IMM*1)   # c.li a0, 5 | c.shi a0, 1
+        addi  a0, a0, 1
+handler:
+'''
+expect.exit_code = 16
+
+[[case]]
+name = "c.jal in slot A links slot B"
+program = '''
+        li    a0, 0
+b0:     .word BUNDLE + SA*(13 + OFF*((sub - b0)/3)) + SB*(4 + RD*A0 + IMM*1)   # c.jal sub | c.addi a0, 1
+        la    s1, b0
+        sub   a1, ra, s1
+        j     done
+sub:    addi  a0, a0, 10
+        ret
+done:
+handler:
+'''
+expect.exit_code = 11
+expect.registers = { a1 = 1 }
+
+[[case]]
+name = "c.jal in slot B links the next word"
+program = '''
+        li    a0, 0
+b0:     .word BUNDLE + SA*NOP + SB*(13 + OFF*((sub - b0)/3))   # c.nop | c.jal sub
+        addi  a0, a0, 1
+        la    s1, b0
+        sub   a1, ra, s1
+        j     done
+sub:    addi  a0, a0, 10
+        ret
+done:
+handler:
+'''
+expect.exit_code = 11
+expect.registers = { a1 = 3 }
+
+[[case]]
+name = "a taken branch in slot A skips slot B"
+program = '''
+        li    a0, 0
+        .word BUNDLE + SA*(10 + IMM*2) + SB*(5 + RD*A0 + IMM*7)   # c.beqz zero, +2 | c.li a0, 7
+        li    a0, 9
+handler:
+'''
+expect.exit_code = 0
+
+[[case]]
+name = "a branch in slot B counts from the bundle"
+program = '''
+        li    a0, 0
+        .word BUNDLE + SA*NOP + SB*(-1 + F*2)   # c.nop | c.beq zero, zero, +2
+        li    a0, 9
+        j     done
+handler:
+        li    a0, -1                # counting from slot B lands in a word's slot B
+done:
+'''
+expect.exit_code = 0
+
+[[case]]
+name = "a two-register branch reaches four words back"
+program = '''
+        li    a0, 0
+        li    a1, 3
+loop:   addi  a0, a0, 2
+        nop
+        nop
+        nop
+        .word BUNDLE + SA*(4 + RD*A1 + IMM*-1) + SB*(-2 + RD*A1 + F*-4)   # c.addi a1, -1 | c.bne a1, zero, -4
+handler:
+'''
+expect.exit_code = 6
+
+[[case]]
+name = "jalr enters slot B"
+program = '''
+        li    a0, 0
+        la    t0, b0
+        jalr  zero, 1(t0)
+b0:     .word BUNDLE + SA*(5 + RD*A0 + IMM*5) + SB*(4 + RD*A0 + IMM*1)   # c.li a0, 5 | c.addi a0, 1
+handler:
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "the page, stack and memory forms"
+program = '''
+        li    sp, 5 * 19683
+        li    t1, 6 * 19683
+        .word BUNDLE + SA*(-5 + RD*A0 + IMM*2) + SB*(9 + RD*A0 + IMM*-1)   # c.lip a0, 2 | c.swsp a0, -1
+        .word BUNDLE + SA*(8 + RD*A1 + IMM*-1) + SB*(2 + F*1 + RS*T1 + RD*A1)   # c.lwsp a1, -1 | c.sw a1, (t1)
+        lw    a2, 0(t1)
+handler:
+'''
+expect.exit_code = 39366
+expect.registers = { a1 = 39366, a2 = 39366 }
+
+[[case]]
+name = "instret counts each slot"
+program = '''
+        csrr  a1, instret
+        .word BUNDLE + SA*NOP + SB*NOP
+        csrr  a2, instret
+        sub   a0, a2, a1
+handler:
+'''
+expect.exit_code = 3
+
+[[case]]
+name = "sys sets tval to the next instruction"
+program = '''
+        li    a0, 0
+b0:     sys
+        la    s1, b0
+        sub   a1, a1, s1
+        sub   a2, a2, s1
+        j     done
+handler:
+        csrr  a1, mtpc
+        csrr  a2, mtval
+        csrw  mtpc, a2
+        tret
+done:
+'''
+expect.exit_code = 0
+expect.registers = { a1 = 0, a2 = 3 }
+
+[[case]]
+name = "c.sys in slot A resumes at slot B"
+program = '''
+        li    a0, 0
+b0:     .word BUNDLE + SA*(3 + F*-1) + SB*(4 + RD*A0 + IMM*1)   # c.sys | c.addi a0, 1
+        la    s1, b0
+        sub   a1, a1, s1
+        sub   a2, a2, s1
+        j     done
+handler:
+        csrr  a1, mtpc
+        csrr  a2, mtval
+        csrw  mtpc, a2
+        tret
+done:
+'''
+expect.exit_code = 1
+expect.registers = { a1 = 0, a2 = 1 }
+
+[[case]]
+name = "c.sys in slot B resumes at the next word"
+program = '''
+        li    a0, 0
+b0:     .word BUNDLE + SA*(4 + RD*A0 + IMM*1) + SB*(3 + F*-1)   # c.addi a0, 1 | c.sys
+        la    s1, b0
+        sub   a1, a1, s1
+        sub   a2, a2, s1
+        j     done
+handler:
+        csrr  a1, mtpc
+        csrr  a2, mtval
+        csrw  mtpc, a2
+        tret
+done:
+'''
+expect.exit_code = 1
+expect.registers = { a1 = 1, a2 = 3 }
+
+[[case]]
+name = "tret resumes a trap in slot B"
+# The load in slot B faults beyond RAM; the handler points t1 at RAM and
+# returns to the slot, which runs again. Slot A runs once.
+program = '''
+        li    sp, 5 * 19683
+        li    a1, 77
+        sw    a1, 0(sp)
+        li    a0, 0
+        li    t1, 800 * 19683
+b0:     .word BUNDLE + SA*(4 + RD*A0 + IMM*1) + SB*(2 + RS*T1 + RD*A1)   # c.addi a0, 1 | c.lw a1, (t1)
+        la    s1, b0
+        sub   a2, a2, s1
+        add   a0, a0, a1
+        j     done
+handler:
+        csrr  a2, mtpc
+        mv    t1, sp
+        tret
+done:
+'''
+expect.exit_code = 78
+expect.registers = { a2 = 1 }
+
+[[case]]
+name = "an illegal slot traps with the bundle"
+program = '''
+b0:     .word BUNDLE + SA*NOP + SB*0   # c.nop | an all-zero slot
+handler:
+        csrr  a0, mtcause
+        csrr  a1, mtpc
+        csrr  a2, mtval
+        la    s1, b0
+        sub   a1, a1, s1
+'''
+expect.exit_code = 1
+expect.registers = { a1 = 1, a2 = 1093 }
+
+[[case]]
+name = "slot B of a word that is not a bundle is illegal"
+program = '''
+        la    t0, w
+        jalr  zero, 1(t0)
+w:      .word 1234
+handler:
+        csrr  a0, mtcause
+        csrr  a2, mtval
+'''
+expect.exit_code = 1
+expect.registers = { a2 = 1234 }
+
+[[case]]
+name = "a pc ending in - is misaligned"
+# tret is the one way to reach it: jalr refuses such a target itself.
+program = '''
+        la    t0, w
+        addi  t0, t0, -1
+        csrw  mtpc, t0
+        tret
+w:      nop
+handler:
+        csrr  a0, mtcause
+        csrr  a2, mtval
+        la    s1, w
+        sub   a2, a2, s1
+'''
+expect.exit_code = 2
+expect.registers = { a2 = -1 }
+
+[[case]]
+name = "an illegal expansion traps with the bundle"
+# c.tret in ring 0 with sstatus.PR = +1 may not return there.
+program = '''
+        la    t0, ring0
+        csrw  mtpc, t0
+        tret                        # mtstatus.PR is 0 at reset: to ring 0
+ring0:  li    t0, 1
+        csrw  ststatus, t0          # PR = +1
+        .word BUNDLE + SA*(3 + F*2) + SB*NOP   # c.tret | c.nop
+handler:
+        csrr  a0, mtcause
+        csrr  a2, mtval
+'''
+expect.exit_code = 1
+expect.registers = { a2 = 181753672 }   # the bundle

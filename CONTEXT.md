@@ -908,3 +908,15 @@ instruction only for a full instruction. From slot B (`a + 1`) it is
   is not a bundle traps as illegal with that word in `tval`; an illegal
   slot reports the whole bundle in `tval`, and `tpc`'s low trit says
   which slot. ISA 0.10.
+
+### 2026-11-21 · Bundles run (ISA 0.10 built)
+
+The hart runs a slot by expanding it to its full instruction and
+decoding that, so a slot has no behaviour of its own to get wrong: the
+one table in `compressed.rs` both expands slots and says which slot a
+full instruction fits, and a unit test walks all 177,147 slot values to
+check the two agree. What a slot changes is addressing alone: the next
+instruction (`a + 1` or `a + 3`), the base for branch offsets (the
+bundle), and `tval` for `sys`. A debugger's trace shows a slot as the
+full instruction it ran. The assembler does not write bundles yet, so
+the conformance cases build them with `.word`.

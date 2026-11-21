@@ -286,7 +286,7 @@ The debugger's `restart` does not undo writes already made to the file.
 - `run` gives up after `--max-steps` steps (default 10 million, exit
   status 124).
 - Features not implemented yet stop the emulator with a message (exit
-  status 69): floating point, compressed bundles and debug triggers.
+  status 69): floating point and debug triggers.
 - An unhandled trap on a hart other than 0 names the hart: "... tval 21
   on hart 1".
 - With more than one hart, `run --trace` puts the hart's number first
