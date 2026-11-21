@@ -855,7 +855,7 @@ AT IT'''
 stderr = ""
 
 [[case]]
-name = "without input, console in is empty"
+name = "without input, console in is closed"
 args = ["run", "--stats", "{root}/examples/echo.s"]
 status = 0
 stdout = ""
@@ -863,6 +863,24 @@ stderr = '''
 
 detrytus: 6 steps, exit 0
 '''
+
+[[case]]
+name = "without input, console in reads CONSOLE_CLOSED"
+args = ["run", "--stats", "{here}/programs/states.s"]
+status = 254
+stdout = ""
+stderr = '''
+
+detrytus: 5 steps, exit -2
+'''
+
+[[case]]
+name = "once its input is read, console in reads CONSOLE_CLOSED"
+args = ["run", "--input", "-", "{here}/programs/states.s"]
+stdin = "x"
+status = 254
+stdout = ""
+stderr = ""
 
 [[case]]
 name = "stdin cannot be both a file and the input"

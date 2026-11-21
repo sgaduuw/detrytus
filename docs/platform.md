@@ -14,7 +14,7 @@ the platform (`isa.md` 8.5 and 12.3).
 | -3 | hart controller: one slot per hart (Harts, below) |
 | -4 | hart controller: this hart's slot, group send, events |
 | -5 .. -12 | reserved for more harts |
-| -13 | interrupt controller (proposed: Device interrupts, below) |
+| -13 | interrupt controller (Device interrupts, below) |
 | -14 | block device (proposed: The block device, below) |
 
 A page is 19,683 trytes centred on a multiple of 19,683, so page `p`
@@ -26,13 +26,13 @@ RAM pages too; only the program writes are checked.
 | Address | Register | Behaviour |
 |---------|----------|-----------|
 | −19683 | console out | writing a Unicode code point prints it |
-| −19680 | console in | reading returns the next input code point, or −1 if none (test the sign: a code point is never negative) |
+| −19680 | console in | reading returns the next input code point, or a negative state when there is none (Console input states, below; test the sign: a code point is never negative) |
 | −39366 | power off | writing any value stops the machine; the value becomes the exit code |
 
 Console input is the text `--input FILE` names, queued before the
 first step, plus whatever the debugger's `input` command adds. Once it
-is used up, reads return −1 until more is added. (Proposed: reads tell
-"nothing yet" from "nothing ever", under Console input states below.) A run's input is fixed
+is used up, reads say whether more may come (Console input states,
+below). A run's input is fixed
 in advance, so runs stay deterministic and nothing waits for a person
 to type.
 
@@ -144,16 +144,17 @@ reach its own mailbox without computing its address from `hartid`.
   `--unplug TIME:HART` asks for one to go, when `time` reaches TIME, so
   runs stay deterministic. Each may be given more than once.
 
-## Proposed: device interrupts and a block device
+## Device interrupts and a block device
 
-**Status: proposed, not implemented.** This section is for review; it
-changes nothing the emulator does until it is accepted and built.
-CONTEXT.md gives the reasoning and what was rejected.
+Two devices that isa.md 12.3 lists. With them a kernel can sleep until
+console input arrives instead of polling, and has storage for a file
+system. Neither changes the ISA: devices raise the existing external
+interrupt, cause −2. CONTEXT.md gives the reasoning and what was
+rejected.
 
-Two devices that isa.md 12.3 lists as still to come. With them a kernel
-can sleep until console input arrives instead of polling, and has
-storage for a file system. Neither changes the ISA: devices raise the
-existing external interrupt, cause −2.
+The interrupt controller and the console input states are built. **The
+block device is still proposed, not implemented:** it reads as absent
+(page −14 is unmapped) until it is built.
 
 ### Device interrupts (page −13)
 
@@ -226,7 +227,7 @@ are named; code compares with the names, never with the numbers.
   closed. Closed is a lasting condition, so a kernel masks source 1 once
   it has seen `CONSOLE_CLOSED`, and whenever nobody is reading.
 
-### The block device (page −14)
+### The block device (page −14, proposed)
 
 A disk that moves whole blocks between itself and RAM on its own, then
 raises source 2. **A block is one page**, 19,683 trytes, so each block

@@ -785,3 +785,20 @@ If accepted, in order: the controller and console states in the core,
 with conformance cases for claim, complete, routing and masking; the
 block device and `--disk`; then trylobite sleeps in `getc` and gains a
 disk driver.
+
+### 2026-11-21 · Device interrupts and console states built
+
+The owner accepted the proposal above. The interrupt controller and the
+console's two states are in the core; the block device follows.
+
+- **The controller keeps no pending bits.** It holds ENABLE, ROUTE and
+  which sources are in service; the bus asks the devices for their
+  lines whenever a hart's external interrupt or a controller register
+  is read. That is what level-triggered means, and it leaves nothing
+  to fall out of step with a device.
+- **`run` closes the console from the start**, behind whatever `--input`
+  queued, since reads take the queue first. The conformance runner does
+  the same unless a case sets `console_open`, which gives the
+  debugger's behaviour; the debugger closes it on `eof`.
+- **`eof`, not `close`**, as the spec named it. `EOF` (end of the command
+  file, or Ctrl-D) still quits; commands are case-sensitive, as before.

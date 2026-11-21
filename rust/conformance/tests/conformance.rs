@@ -49,6 +49,7 @@ struct Case {
     ram_pages: i64,
     max_steps: i64,
     input: String,
+    console_open: bool,
     harts: i64,
     hotplug: Vec<(i64, Hotplug)>,
     expect: Table,
@@ -63,7 +64,7 @@ fn text_of(raw: &Table, defaults: &Table, key: &str) -> String {
     setting(raw, defaults, key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-const CASE_KEYS: [&str; 11] = [
+const CASE_KEYS: [&str; 12] = [
     "name",
     "program",
     "prelude",
@@ -73,6 +74,7 @@ const CASE_KEYS: [&str; 11] = [
     "ram_pages",
     "max_steps",
     "input",
+    "console_open",
     "harts",
     "hotplug",
 ];
@@ -207,6 +209,7 @@ fn load(file: &Path) -> Vec<Case> {
                 max_steps: setting("max_steps")
                     .map_or(DEFAULT_MAX_STEPS, |v| v.as_integer().unwrap()),
                 input: text_of(raw, defaults, "input"),
+                console_open: setting("console_open").is_some_and(|v| v.as_bool().unwrap()),
                 harts: setting("harts").map_or(1, |v| v.as_integer().unwrap()),
                 hotplug: setting("hotplug").map_or_else(Vec::new, |v| hotplug(v).unwrap()),
                 expect: raw.get("expect").and_then(Value::as_table).cloned().unwrap_or_default(),
@@ -331,6 +334,7 @@ fn run(case: &Case) -> Vec<String> {
         machine.bus.poke(addr, tryte);
     }
     machine.bus.console.feed(&case.input);
+    machine.bus.console.closed = !case.console_open;
     let outcome = machine.run(case.max_steps as u64);
     let mut failures: Vec<String> = outcome_failure(e, &outcome).into_iter().collect();
     if let Some(want) = e.get("console").and_then(Value::as_str) {

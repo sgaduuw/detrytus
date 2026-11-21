@@ -3,8 +3,9 @@
 //! The sign of a physical page number picks the region: page 0 is the
 //! boot page (read-only to the CPU), positive pages up to `ram_pages`
 //! are RAM, negative pages are devices. The platform's devices are built
-//! in: the console at page −1, power control at page −2 and the hart
-//! controller at pages −3 and −4.
+//! in: the console at page −1, power control at page −2, the hart
+//! controller at pages −3 and −4 and the interrupt controller at page
+//! −13.
 //!
 //! The bus also keeps each hart's `lr` reservation, so that a store by
 //! one hart breaks another's.
@@ -12,6 +13,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::harts::{HartController, LOCAL_PAGE, SLOTS_PAGE};
+use crate::irq::{CONSOLE_SOURCE, IRQ_PAGE, InterruptController, Lines};
 use crate::trits::{TRYTE_MOD, TRYTE_TRITS, low, split_high};
 
 pub const PAGE_TRITS: u32 = 9;
@@ -23,6 +25,11 @@ pub const POWER_PAGE: i64 = -2;
 pub const CONSOLE_OUT: i64 = CONSOLE_PAGE * PAGE;
 pub const CONSOLE_IN: i64 = CONSOLE_OUT + 3;
 pub const POWER_OFF: i64 = POWER_PAGE * PAGE;
+
+/// What console in reads when there is no character: nothing yet, or
+/// nothing ever again. Any negative read is "no character".
+pub const CONSOLE_EMPTY: i64 = -1;
+pub const CONSOLE_CLOSED: i64 = -2;
 
 /// What a physical access is for: devices hold neither code nor page
 /// tables, and only stores are refused by the boot page.
@@ -43,16 +50,32 @@ pub enum BusError {
     Halt(i64),
 }
 
-/// Characters out, characters in: one code point per access.
+/// Characters out, characters in: one code point per access. Once
+/// closed, a read past the end of the input says no more will come.
 #[derive(Default)]
 pub struct Console {
     pub output: Vec<u32>,
     pub input: VecDeque<i64>,
+    pub closed: bool,
 }
 
 impl Console {
     pub fn feed(&mut self, text: &str) {
         self.input.extend(text.chars().map(|c| c as i64));
+    }
+
+    /// Take the next code point, or say why there is none.
+    pub fn read(&mut self) -> i64 {
+        match self.input.pop_front() {
+            Some(c) => c,
+            None if self.closed => CONSOLE_CLOSED,
+            None => CONSOLE_EMPTY,
+        }
+    }
+
+    /// Interrupt source 1: a read would not return CONSOLE_EMPTY.
+    pub fn wants_attention(&self) -> bool {
+        self.closed || !self.input.is_empty()
     }
 
     /// The output as text; code points that are not characters (lone
@@ -69,6 +92,7 @@ enum Region {
     Console,
     Power,
     Harts,
+    Irq,
 }
 
 pub fn page_of(addr: i64) -> i64 {
@@ -82,6 +106,7 @@ pub struct Bus {
     pages: HashMap<i64, Box<[i16]>>,
     pub console: Console,
     pub harts: HartController,
+    pub irq: InterruptController,
     /// The hart whose access this is: the machine sets it before each
     /// hart's step.
     pub current: i64,
@@ -102,9 +127,23 @@ impl Bus {
             pages: HashMap::new(),
             console: Console::default(),
             harts: HartController::new(present),
+            irq: InterruptController::default(),
             current: 0,
             reservations: HashMap::new(),
         }
+    }
+
+    /// The devices' interrupt lines, by source.
+    fn lines(&self) -> Lines {
+        let mut lines = Lines::default();
+        lines[CONSOLE_SOURCE as usize] = self.console.wants_attention();
+        lines
+    }
+
+    /// Whether hart `h`'s external interrupt is pending: a device source
+    /// it can claim, or hot-plug events for it.
+    pub fn external_pending(&self, h: i64) -> bool {
+        self.harts.event_pending(h) || self.irq.pending_for(h, &self.lines())
     }
 
     /// Reserve the word at a physical address for the current hart.
@@ -140,6 +179,7 @@ impl Bus {
             CONSOLE_PAGE if !device => Ok(Region::Console),
             POWER_PAGE if !device => Ok(Region::Power),
             SLOTS_PAGE | LOCAL_PAGE if !device => Ok(Region::Harts),
+            IRQ_PAGE if !device => Ok(Region::Irq),
             _ => Err(BusError::Fault(addr)),
         }
     }
@@ -183,10 +223,12 @@ impl Bus {
     /// word's alignment is the caller's to check.
     pub fn read(&mut self, addr: i64, width: u32, access: Access) -> Result<i64, BusError> {
         match self.region(addr, access)? {
-            Region::Console if addr == CONSOLE_IN => {
-                Ok(self.console.input.pop_front().unwrap_or(-1))
-            }
+            Region::Console if addr == CONSOLE_IN => Ok(self.console.read()),
             Region::Harts => Ok(self.harts.read(addr, self.current)),
+            Region::Irq => {
+                let lines = self.lines();
+                Ok(self.irq.read(addr, self.current, &lines))
+            }
             Region::Console | Region::Power => Ok(0),
             Region::Boot | Region::Ram if width == 1 => Ok(self.get(addr)),
             Region::Boot | Region::Ram => Ok(self.get(addr - 1)
@@ -204,6 +246,7 @@ impl Bus {
             }
             Region::Power if addr == POWER_OFF => return Err(BusError::Halt(value)),
             Region::Harts => self.harts.write(addr, self.current, value),
+            Region::Irq => self.irq.write(addr, value),
             Region::Power | Region::Boot => {}
             Region::Ram if width == 1 => {
                 self.break_reservations(addr, 1);
@@ -255,7 +298,11 @@ mod tests {
         let mut bus = Bus::new(1);
         bus.console.feed("Z");
         assert_eq!(bus.read(CONSOLE_IN, 3, Access::Load), Ok(90));
-        assert_eq!(bus.read(CONSOLE_IN, 3, Access::Load), Ok(-1));
+        assert_eq!(bus.read(CONSOLE_IN, 3, Access::Load), Ok(CONSOLE_EMPTY));
+        bus.console.feed("a");
+        bus.console.closed = true;
+        assert_eq!(bus.read(CONSOLE_IN, 3, Access::Load), Ok(97), "input before the end");
+        assert_eq!(bus.read(CONSOLE_IN, 3, Access::Load), Ok(CONSOLE_CLOSED));
         bus.write(CONSOLE_OUT, 3, 'é' as i64).unwrap();
         bus.write(CONSOLE_OUT, 3, -5).unwrap(); // not a code point: ignored
         assert_eq!(bus.console.text(), "é");

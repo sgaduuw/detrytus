@@ -230,7 +230,7 @@ impl Machine {
             let hart = self.harts.get_mut(&h).unwrap();
             hart.time = self.time;
             hart.doorbell = self.bus.harts.doorbell(h);
-            hart.external = self.bus.harts.event_pending(h);
+            hart.external = self.bus.external_pending(h);
             if hart.waiting && !can_wake(hart, &self.bus, h) {
                 continue;
             }
@@ -244,7 +244,7 @@ impl Machine {
         self.bus.current = 0;
         for (&h, hart) in &mut self.harts {
             hart.doorbell = self.bus.harts.doorbell(h);
-            hart.external = self.bus.harts.event_pending(h);
+            hart.external = self.bus.external_pending(h);
         }
         None
     }
