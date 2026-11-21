@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn rows_count_by_mnemonic_most_frequent_first() {
         let mut mix = Mix::default();
-        let image = assemble("beq a0, zero, 0\nbne a0, a1, 0\nbne a0, a1, 0\n", None).unwrap();
+        let image = assemble("beq a0, zero, 0\nbne a0, a1, 99\nbne a0, a1, 99\n", None).unwrap();
         for e in &image.listing {
             mix.add(e.word.unwrap());
         }

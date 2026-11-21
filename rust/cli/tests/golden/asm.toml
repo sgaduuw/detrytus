@@ -1241,16 +1241,16 @@ name = "static mix of bsearch.s"
 args = ["asm", "--mix", "{root}/examples/bsearch.s"]
 status = 0
 stdout = '''
-65 instructions written, 37 compressible (56.9%)
+65 instructions written, 46 compressible (70.8%)
 mnemonic            count   share          fit   of it
-addi                   27   41.5%           17   63.0%
-jal                     8   12.3%            3   37.5%
+addi                   27   41.5%           20   74.1%
+jal                     8   12.3%            8  100.0%
 jalr                    4    6.2%            4  100.0%
 lw                      4    6.2%            4  100.0%
 sw                      4    6.2%            4  100.0%
 add                     2    3.1%            1   50.0%
 auipc                   2    3.1%            0    0.0%
-bne                     2    3.1%            1   50.0%
+bne                     2    3.1%            2  100.0%
 div                     2    3.1%            0    0.0%
 beq                     1    1.5%            1  100.0%
 bge                     1    1.5%            0    0.0%
@@ -1266,8 +1266,10 @@ sub                     1    1.5%            0    0.0%
 form                count   share
 c.li                    8   12.3%
 c.addi                  7   10.8%
+c.jal                   5    7.7%
 c.jr                    4    6.2%
 c.j                     3    4.6%
+c.lip                   3    4.6%
 c.lw                    2    3.1%
 c.lwsp                  2    3.1%
 c.mv                    2    3.1%
@@ -1275,11 +1277,12 @@ c.sw                    2    3.1%
 c.swsp                  2    3.1%
 c.add                   1    1.5%
 c.beqz                  1    1.5%
+c.bne                   1    1.5%
 c.bnez                  1    1.5%
 c.lt                    1    1.5%
 c.st                    1    1.5%
 
-bundles: 10 pairs would save 10 of 65 words (15.4%)
+bundles: 16 pairs would save 16 of 65 words (24.6%)
 '''
 stderr = ""
 

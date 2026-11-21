@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.7, **draft**. Everything here may change until the emulator
+Version 0.8, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -370,7 +370,7 @@ CJ     off[8]               | op       off: ±3,280 words
 | 0  |    | (illegal; an all-zero slot traps) | |
 | 1  | CR | `c.mv` (f 0), `c.add` (+1), `c.sub` (−1), `c.cmp` (+2), `c.mul` (−2), `c.min` (+3), `c.max` (−3), `c.tmin` (+4), `c.tmax` (−4) `rd, rs` | `addi rd, rs, 0`; otherwise the op as `rd = rd op rs` |
 | 2  | CR | `c.lw` (f 0), `c.sw` (+1), `c.lt` (−1), `c.st` (+2) `rd, (rs)` | `lw rd, 0(rs)` etc.; for stores `rd` is the source |
-| 3  | CR | `c.jr rs` (f 0), `c.jalr rs` (+1) | `jalr r0, 0(rs)`; `jalr ra, 0(rs)` |
+| 3  | CR | `c.jr rs` (f 0), `c.jalr rs` (+1), `c.sys` (−1), `c.tret` (+2) | `jalr r0, 0(rs)`; `jalr ra, 0(rs)`; `sys`; `tret`, with `rs` and `rd` r0 |
 | 4  | CI | `c.addi rd, imm` | `addi rd, rd, imm`; with `rd = r0` and `imm = 0` this is `c.nop` |
 | 5  | CI | `c.li rd, imm` | `addi rd, r0, imm` |
 | 6  | CI | `c.shi rd, imm` | `shi rd, rd, imm` |
@@ -380,10 +380,29 @@ CJ     off[8]               | op       off: ±3,280 words
 | 10 | CI | `c.beqz rd, imm` | `beq rd, r0, imm` |
 | 11 | CI | `c.bnez rd, imm` | `bne rd, r0, imm` |
 | 12 | CJ | `c.j off` | `jal r0, off` |
+| 13 | CJ | `c.jal off` | `jal ra, off` |
+| −1 | CR | `c.beq rd, rs, f` | `beq rd, rs, f` |
+| −2 | CR | `c.bne rd, rs, f` | `bne rd, rs, f` |
+| −3 | CR | `c.blt rd, rs, f` | `blt rd, rs, f` |
+| −4 | CR | `c.ble rd, rs, f` | `ble rd, rs, f` |
+| −5 | CI | `c.lip rd, imm` | `addi rd, r0, imm × 19,683`: a page address |
 
 `c.jr ra` is `ret`. Unlisted opcodes and `f` values are reserved.
-Which instructions deserve a slot should be revisited once the
-emulator can count instruction frequencies in real code.
+
+The two-register branches (−1 to −4) use `f` as their offset, ±4
+words, which is the reach of a loop's closing branch. `bgt` and `bge`
+are `blt` and `ble` with the registers swapped, so they need no forms
+of their own. Compressed branches carry no hint.
+
+The table was set against measured code (`detrytus asm --mix` and
+`run --mix`): trylobite's kernel and programs, and its test suite.
+Calls, loop branches, system calls and page addresses had no form in
+the first table and were among the most frequent instructions without
+one. With them, 64% of trylobite's instructions have a compressed form
+(51% before), and pairing neighbours into bundles would save 21% of its
+words (13% before). Forms that trylobite never uses (`c.shi`,
+`c.cmpi`, `c.jalr`, `c.sub`, `c.cmp`, the min and max forms) stay
+while one hand-written kernel is the only measure.
 
 ## 7. Instructions
 
@@ -1134,8 +1153,8 @@ numbers like the rest.
 
 1. **`br3` reach.** Eight-trit offsets (±3,280 words) suit local
    dispatch; one longer offset may be worth more.
-2. **Compressed coverage.** The slot assignments in 6.1 are a first
-   guess, to be revisited against measured instruction frequencies.
+2. **Compressed coverage.** The slot assignments in 6.1 were set
+   against one hand-written kernel; a compiler's output may want others.
 3. **Hypervisor support.** Whether ring +1 should grow two-stage
    translation so detrytus can host detrytus guests.
 4. **Trapping waits in user mode.** Whether ring 0 should be able to

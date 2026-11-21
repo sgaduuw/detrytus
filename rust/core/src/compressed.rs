@@ -6,6 +6,7 @@
 //! is what `--mix` counts to judge the table against real code; the
 //! machine does not run bundles yet.
 
+use crate::bus::PAGE;
 use crate::isa::{Decoded, Kind, reg_number, tables};
 use crate::trits::half;
 
@@ -13,10 +14,16 @@ use crate::trits::half;
 const CI_TRITS: u32 = 5;
 /// A CJ offset: 8 trits.
 const CJ_TRITS: u32 = 8;
+/// A two-register branch's offset, in `f`: 2 trits.
+const F_TRITS: u32 = 2;
 
-/// The `cond` values of `beq` and `bne`.
+/// Branch `cond` values (isa.md 7.10).
 const EQ: i64 = 0;
 const NE: i64 = 3;
+const GT: i64 = 1;
+const LT: i64 = -1;
+const GE: i64 = 2;
+const LE: i64 = -2;
 
 fn ci(value: i64) -> bool {
     value.abs() <= half(CI_TRITS)
@@ -37,6 +44,7 @@ pub fn form(d: &Decoded) -> Option<&'static str> {
     Some(match d.op.kind {
         Kind::Addi if d.rd == 0 && d.rs1 == 0 && d.imm == 0 => "c.nop",
         Kind::Addi if d.rs1 == 0 && ci(d.imm) => "c.li",
+        Kind::Addi if d.rs1 == 0 && d.imm % PAGE == 0 && ci(d.imm / PAGE) => "c.lip",
         Kind::Addi if d.imm == 0 => "c.mv",
         Kind::Addi if two && ci(d.imm) => "c.addi",
         Kind::Add if two => "c.add",
@@ -55,15 +63,27 @@ pub fn form(d: &Decoded) -> Option<&'static str> {
         Kind::St if d.imm == 0 => "c.st",
         Kind::Jalr if d.rd == 0 && d.imm == 0 => "c.jr",
         Kind::Jalr if d.rd == ra && d.imm == 0 => "c.jalr",
+        Kind::Sys => "c.sys",
+        Kind::Tret => "c.tret",
         Kind::Shi if two && ci(d.imm) => "c.shi",
         Kind::Cmpi if two && ci(d.imm) => "c.cmpi",
         // Comparing with zero is symmetric, so either side may be r0.
-        Kind::B if d.hint == 0 && (d.rs1 == 0 || d.rs2 == 0) && ci(d.off) => match d.cond {
-            EQ => "c.beqz",
-            NE => "c.bnez",
+        Kind::B if d.hint == 0 && (d.rs1 == 0 || d.rs2 == 0) && ci(d.off) && d.cond == EQ => {
+            "c.beqz"
+        }
+        Kind::B if d.hint == 0 && (d.rs1 == 0 || d.rs2 == 0) && ci(d.off) && d.cond == NE => {
+            "c.bnez"
+        }
+        // bgt and bge are blt and ble with the registers swapped.
+        Kind::B if d.hint == 0 && d.off.abs() <= half(F_TRITS) => match d.cond {
+            EQ => "c.beq",
+            NE => "c.bne",
+            LT | GT => "c.blt",
+            LE | GE => "c.ble",
             _ => return None,
         },
         Kind::Jal if d.rd == 0 && d.imm.abs() <= half(CJ_TRITS) => "c.j",
+        Kind::Jal if d.rd == ra && d.imm.abs() <= half(CJ_TRITS) => "c.jal",
         _ => return None,
     })
 }
@@ -85,6 +105,10 @@ mod tests {
         assert_eq!(word("addi", &[("rd", 1), ("imm", -121)]), Some("c.li"));
         assert_eq!(word("addi", &[("rd", 1), ("rs1", 2)]), Some("c.mv"));
         assert_eq!(word("addi", &[]), Some("c.nop"));
+        assert_eq!(word("addi", &[("rd", 1), ("imm", -121 * PAGE)]), Some("c.lip"));
+        assert_eq!(word("addi", &[("rd", 1), ("imm", 122 * PAGE)]), None);
+        assert_eq!(word("addi", &[("rd", 1), ("imm", PAGE + 3)]), None, "not a page");
+        assert_eq!(word("addi", &[("rd", 1), ("rs1", 1), ("imm", PAGE)]), None);
         assert_eq!(word("shi", &[("rd", 3), ("rs1", 3), ("imm", -5)]), Some("c.shi"));
         assert_eq!(word("cmpi", &[("rd", 3), ("rs1", 4), ("imm", 0)]), None);
     }
@@ -120,12 +144,25 @@ mod tests {
         assert_eq!(word("jalr", &[("rd", 1), ("rs1", 5)]), None);
         assert_eq!(word("jal", &[("imm", -3280)]), Some("c.j"));
         assert_eq!(word("jal", &[("imm", 3281)]), None);
-        assert_eq!(word("jal", &[("rd", ra), ("imm", 5)]), None, "no c.jal");
+        assert_eq!(word("jal", &[("rd", ra), ("imm", 3280)]), Some("c.jal"));
+        assert_eq!(word("jal", &[("rd", ra), ("imm", -3281)]), None);
+        assert_eq!(word("jal", &[("rd", 1), ("imm", 5)]), None, "only ra links");
+        assert_eq!(word("sys", &[]), Some("c.sys"));
+        assert_eq!(word("tret", &[]), Some("c.tret"));
         assert_eq!(word("b", &[("cond", NE), ("rs1", 4), ("off", 121)]), Some("c.bnez"));
         assert_eq!(word("b", &[("cond", EQ), ("rs2", 4), ("off", -1)]), Some("c.beqz"));
         assert_eq!(word("b", &[("cond", EQ), ("rs1", 4), ("off", 122)]), None);
-        assert_eq!(word("b", &[("cond", 1), ("rs1", 4)]), None, "no c.bgtz");
         assert_eq!(word("b", &[("cond", EQ), ("hint", 1), ("rs1", 4)]), None, "hinted");
-        assert_eq!(word("b", &[("cond", EQ), ("rs1", 4), ("rs2", 5)]), None);
+        let two = |cond, off| word("b", &[("cond", cond), ("rs1", 4), ("rs2", 5), ("off", off)]);
+        assert_eq!(two(EQ, -4), Some("c.beq"));
+        assert_eq!(two(NE, 4), Some("c.bne"));
+        assert_eq!(two(LT, 1), Some("c.blt"));
+        assert_eq!(two(GT, -2), Some("c.blt"), "swapped");
+        assert_eq!(two(LE, 0), Some("c.ble"));
+        assert_eq!(two(GE, 3), Some("c.ble"), "swapped");
+        assert_eq!(two(EQ, 5), None, "beyond f");
+        assert_eq!(word("b", &[("cond", 1), ("rs1", 4), ("off", 5)]), None, "no c.bgtz");
+        let hinted = word("b", &[("cond", LT), ("hint", -1), ("rs1", 4), ("rs2", 5)]);
+        assert_eq!(hinted, None);
     }
 }
