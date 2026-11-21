@@ -3,8 +3,8 @@
 //!
 //! Status: the integer core, traps, delegation, interrupts, the timer,
 //! single step, paged virtual memory, up to 729 harts with the hart
-//! controller, the interrupt controller for devices and the block
-//! device. Floating point, compressed bundles and debug triggers are
+//! controller, the interrupt controller for devices, the block device
+//! and compressed bundles. Floating point and debug triggers are
 //! specified but not implemented yet.
 
 pub mod alu;

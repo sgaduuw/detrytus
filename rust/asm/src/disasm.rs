@@ -11,9 +11,11 @@ pub fn reg(r: i64) -> String {
     isa::abi_name(r).unwrap_or_else(|| format!("r{r}"))
 }
 
+/// A branch target. Offsets count from the bundle's address when pc is
+/// slot B of one (isa.md 6.1), as a trace of an expanded slot gives it.
 fn target(pc: Option<i64>, off: i64) -> String {
     match pc {
-        Some(pc) => (pc + 3 * off).to_string(),
+        Some(pc) => (pc - low(pc, 1) + 3 * off).to_string(),
         None => format!(".{:+}", 3 * off),
     }
 }
@@ -109,4 +111,16 @@ pub fn disassemble(word: i64, pc: Option<i64>) -> String {
     let parts: Vec<String> = letters.iter().flat_map(|l| render(l, &d, pc)).collect();
     let name = mnemonic(&d);
     if parts.is_empty() { name } else { format!("{name} {}", parts.join(", ")) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_targets_count_from_the_bundle_in_slot_b() {
+        let jal = isa::encode(isa::by_name("jal").unwrap(), &[("imm", 2)]).unwrap();
+        assert_eq!(disassemble(jal, Some(9)), "jal zero, 15");
+        assert_eq!(disassemble(jal, Some(10)), "jal zero, 15");
+    }
 }

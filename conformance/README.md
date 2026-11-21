@@ -21,6 +21,7 @@ checks each file's format, assembles each case and runs it on the core.
 | `cpu/` | integer and tritwise instructions, branches, memory, atomics |
 | `traps/` | traps, delegation, interrupts, the timer, single step |
 | `paging/` | translation, permission faults, superpages, the TLB |
+| `bundles/` | compressed bundles: both slots, linking, branches, traps in a slot, `sys` and `tval` |
 | `harts/` | several harts: starting and stopping, mailboxes, group sends, `wfi`, the shared clock, hot-plug |
 | `devices/` | the interrupt controller, console input states and the block device |
 | `asm/` | the assembler: layout, local labels, sections, and its errors |

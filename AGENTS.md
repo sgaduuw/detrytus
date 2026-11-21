@@ -54,7 +54,7 @@ and hides a failure.
 | `docs/debugger.md` | the debugger's commands |
 | `rust/core/src/trits.rs` | balanced-ternary arithmetic on `i64` |
 | `rust/core/src/isa.rs` | the instruction set as data: opcodes, formats, fields, CSRs, decode and encode |
-| `rust/core/src/compressed.rs` | compressed bundles: which compressed form a full instruction fits |
+| `rust/core/src/compressed.rs` | compressed bundles: slots, what a slot expands to, and which slot a full instruction fits |
 | `rust/core/src/alu.rs` | integer and tritwise operations as pure functions |
 | `rust/core/src/hart.rs` | one hart: the fetch loop and what each instruction does, and the events a debugger reads |
 | `rust/core/src/privileged.rs` | traps, interrupts, CSRs, `tret`, `wfi` |

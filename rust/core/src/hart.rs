@@ -2,8 +2,9 @@
 //! Traps, CSRs and interrupts are in `privileged.rs`.
 //!
 //! Every integer, logic, memory, atomic, control and system instruction
-//! (docs/isa.md 7), ported from the original Python core. Not yet:
-//! floating point and compressed bundles, which stop the machine as
+//! (docs/isa.md 7), ported from the original Python core, and compressed
+//! bundles (6.1), whose slots run as the full instructions they expand
+//! to. Not yet: floating point, which stops the machine as
 //! [`Stop::Unsupported`] rather than being approximated.
 //!
 //! The machine steps harts one instruction at a time with no store
@@ -16,6 +17,7 @@ use std::collections::HashMap;
 
 use crate::alu;
 use crate::bus::{Access, Bus, BusError};
+use crate::compressed;
 use crate::entropy::Entropy;
 use crate::isa::{self, Decoded, Kind};
 use crate::mmu::{self, Mmu, Ptbr};
@@ -64,7 +66,8 @@ pub enum AccessKind {
 /// watchpoints and caught traps, and to trace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// An instruction was fetched and decoded at pc, about to run.
+    /// An instruction was fetched and decoded at pc, about to run. For
+    /// a slot of a bundle, word is the full instruction it expands to.
     Execute { pc: i64, word: i64 },
     /// A completed data access, at a virtual address.
     Access { addr: i64, width: u32, kind: AccessKind },
@@ -103,6 +106,8 @@ pub struct Hart {
     pub(crate) step_ring: Option<i64>,
     pub(crate) entropy: Entropy,
     cache: HashMap<i64, Result<Decoded, isa::Illegal>>,
+    /// Slots by value, expanded and decoded; None for an illegal slot.
+    slot_cache: HashMap<i64, Option<Decoded>>,
     /// When Some, every [`Event`] is appended here; a debugger drains it
     /// after each step. None (the default) costs nothing.
     pub events: Option<Vec<Event>>,
@@ -140,6 +145,7 @@ impl Hart {
             step_ring: None,
             entropy: Entropy::new(seed),
             cache: HashMap::new(),
+            slot_cache: HashMap::new(),
             events: None,
         }
     }
@@ -222,31 +228,59 @@ impl Hart {
         }
     }
 
+    /// Fetch and run the instruction at pc. pc's low trit picks the slot
+    /// of a bundle: 0 is a full instruction or slot A, `+` slot B of the
+    /// word at pc - 1, and `-` is reserved (docs/isa.md 6.1).
     fn execute(&mut self, bus: &mut Bus, pc: i64) -> Exec {
-        if low(pc, 1) != 0 {
-            return Err(unsupported("compressed bundles (slot B) are not implemented"));
+        let slot = low(pc, 1);
+        if slot == -1 {
+            return Err(trap(isa::MISALIGNED, pc));
         }
         let physical = self.translate(bus, pc, mmu::Access::Fetch)?;
-        let word = bus.read(physical, 3, Access::Fetch).map_err(|e| match e {
+        let word = bus.read(physical - slot, 3, Access::Fetch).map_err(|e| match e {
             BusError::Fault(addr) => trap(isa::ACCESS_FAULT, addr),
             BusError::Halt(code) => Exception::Stop(Stop::Halt(code)),
         })?;
-        let d = self.decode(word)?;
-        self.record(Event::Execute { pc, word });
-        self.next_pc = wrap(pc + 3);
+        let (mut d, next) = if compressed::is_bundle(word) {
+            // After slot A comes slot B (a + 1); after slot B, a + 3.
+            (self.decode_slot(word, slot)?, pc + 1 + slot)
+        } else if slot == 1 {
+            return Err(trap(isa::ILLEGAL, word));
+        } else {
+            (self.decode(word)?, pc + 3)
+        };
+        self.record(Event::Execute { pc, word: d.word });
+        // An illegal expansion (a bad tex field, a tret that may not
+        // return) reports the bundle, as an illegal slot does.
+        d.word = word;
+        self.next_pc = wrap(next);
         self.run(bus, &d)?;
         self.pc = self.next_pc;
         Ok(())
     }
 
     fn decode(&mut self, word: i64) -> Result<Decoded, Exception> {
-        if low(word, 5) == isa::BUNDLE_OPCODE {
-            return Err(unsupported("compressed bundles are not implemented"));
-        }
         match self.cache.entry(word).or_insert_with(|| isa::decode(word)) {
             Ok(d) => Ok(*d),
             Err(_) => Err(trap(isa::ILLEGAL, word)),
         }
+    }
+
+    /// Slot A (0) or B (1) of a bundle, decoded as the full instruction
+    /// it expands to; an illegal slot traps with the bundle.
+    fn decode_slot(&mut self, word: i64, slot: i64) -> Result<Decoded, Exception> {
+        let s = compressed::slots(word)[slot as usize];
+        let d = self
+            .slot_cache
+            .entry(s)
+            .or_insert_with(|| compressed::expand(s).and_then(|w| isa::decode(w).ok()));
+        d.ok_or_else(|| trap(isa::ILLEGAL, word))
+    }
+
+    /// The address branch and jump offsets count from: the bundle's, for
+    /// either slot (6.1).
+    fn base(&self) -> i64 {
+        self.pc - low(self.pc, 1)
     }
 
     // --- memory ------------------------------------------------------------
@@ -431,7 +465,7 @@ impl Hart {
             Kind::Sw => self.store(bus, addr, 3, b)?,
             Kind::Jal => {
                 self.set_x(d.rd, self.next_pc);
-                self.next_pc = wrap(self.pc + 3 * d.imm);
+                self.next_pc = wrap(self.base() + 3 * d.imm);
             }
             Kind::Jalr => {
                 if low(addr, 1) == -1 {
@@ -442,12 +476,12 @@ impl Hart {
             }
             Kind::B => {
                 if isa::cond_taken(d.cond, (a - b).signum()) == Some(true) {
-                    self.next_pc = wrap(self.pc + 3 * d.off);
+                    self.next_pc = wrap(self.base() + 3 * d.off);
                 }
             }
             Kind::Br3 => match a.signum() {
-                -1 => self.next_pc = wrap(self.pc + 3 * d.offn),
-                1 => self.next_pc = wrap(self.pc + 3 * d.offp),
+                -1 => self.next_pc = wrap(self.base() + 3 * d.offn),
+                1 => self.next_pc = wrap(self.base() + 3 * d.offp),
                 _ => {}
             },
             _ => return self.atomic(bus, d, b),
@@ -514,7 +548,9 @@ impl Hart {
 
     fn system(&mut self, d: &Decoded) -> Exec {
         match d.op.kind {
-            Kind::Sys => Err(trap(isa::SYSCALL, 0)),
+            // tval is where the handler resumes, which tpc + 3 is not
+            // for a slot (8.4).
+            Kind::Sys => Err(trap(isa::SYSCALL, self.next_pc)),
             Kind::Brk => Err(trap(isa::BREAKPOINT, self.pc)),
             // Harts run one instruction at a time with no caches, so these
             // hold already: nothing is reordered, and the decode cache is

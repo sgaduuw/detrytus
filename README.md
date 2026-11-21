@@ -18,8 +18,9 @@ The instruction set is a draft, specified in [`docs/isa.md`](docs/isa.md).
 The `detrytus` command, written in Rust, assembles, runs and debugs
 programs for its integer core: every integer, tritwise, memory, atomic,
 control and system instruction, plus traps, delegation, interrupts, the
-timer, single step and paged virtual memory. Floating point, compressed
-bundles and debug triggers are specified but not implemented yet.
+timer, single step, paged virtual memory and compressed bundles
+(running them; the assembler does not write them yet). Floating point
+and debug triggers are specified but not implemented yet.
 
 The first implementation was Python. The Rust tools replaced it
 ([`docs/rust-plan.md`](docs/rust-plan.md)), producing exactly its output

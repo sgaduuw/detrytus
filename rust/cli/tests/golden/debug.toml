@@ -179,7 +179,7 @@ catching trap causes [-1, 4]
   1: break at 9 <start>
   catch: [-1, 4]
 catching every trap
-stopped: trap cause +4 at 33 <start+24>, tval 0
+stopped: trap cause +4 at 33 <start+24>, tval 36
 => 48 <handler>  [ring +1]  csrrw t1, mtpc, zero
 catching every trap
   1: break at 9 <start>
@@ -1525,7 +1525,7 @@ stdout = '''
 breakpoint 1 at 0 <start>
 catching trap causes [4]
 user: hello from virtual page 1
-stopped: trap cause +4 at 19707 <done>, tval 0
+stopped: trap cause +4 at 19707 <done>, tval 19710
 => 66 <trap>  [ring +1]  csrrw s0, mtcause, zero
   a0               0     a1               0     a2               0
   a3               0     a4               0     a5               0
@@ -2005,7 +2005,7 @@ catching trap causes [-1, 4]
   1: break at 9 <begin>
   catch: [-1, 4]
 catching every trap
-stopped: trap cause +4 at 33 <begin+24>, tval 0
+stopped: trap cause +4 at 33 <begin+24>, tval 36
 => 48 <handler>  [ring +1]  csrrw t1, mtpc, zero
 catching every trap
   1: break at 9 <begin>
