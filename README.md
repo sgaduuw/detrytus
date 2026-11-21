@@ -58,6 +58,13 @@ instruction for stepping, breakpoints, watchpoints and inspection. `--stats` pri
 the step count and `--trace` every instruction. `asm` prints a listing with each word's trits
 and its disassembly.
 
+`--input FILE` gives `run` or `debug` text for the program to read from
+the console, `-` meaning stdin:
+
+```bash
+echo "hello" | detrytus run --input - examples/echo.s
+```
+
 - [`docs/assembler.md`](docs/assembler.md): source syntax, directives
   and pseudo-instructions.
 - [`docs/platform.md`](docs/platform.md): the emulated memory map and

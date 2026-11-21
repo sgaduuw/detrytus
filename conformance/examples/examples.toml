@@ -35,3 +35,10 @@ name = "harts needs three harts"
 source = "../../examples/harts.s"
 expect.exit_code = 1
 expect.console = "this example needs three harts: run it with --harts 3\n"
+
+[[case]]
+name = "echo copies its input, capitalised, and stops when it runs out"
+source = "../../examples/echo.s"
+input = "Setun, 1958\n\u0000ok"
+expect.exit_code = 0
+expect.console = "SETUN, 1958\nOK"

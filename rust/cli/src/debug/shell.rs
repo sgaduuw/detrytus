@@ -44,7 +44,7 @@ const CAUSES: [(&str, i64); 9] = [
 
 /// Each command's help, as `inspect.cleandoc` leaves the Python
 /// docstring; `help CMD` prints it.
-const HELP: [(&str, &str); 22] = [
+const HELP: [(&str, &str); 23] = [
     ("EOF", "quit: leave the debugger. Alias: q"),
     (
         "break",
@@ -68,6 +68,10 @@ const HELP: [(&str, &str); 22] = [
     ),
     ("help", "List available commands with \"help\" or detailed help with \"help cmd\"."),
     ("info", "info: list breakpoints, watchpoints and caught traps. Alias: i"),
+    (
+        "input",
+        "input TEXT: queue TEXT on the console's input, after what is left.\n\n\\n is a newline, \\t a tab, \\s a space and \\\\ a backslash; nothing\nelse is added, so end a line with \\n. restart drops this text.",
+    ),
     ("next", "next: step, running a whole call as one step. Alias: n"),
     (
         "plug",
@@ -94,7 +98,7 @@ const HELP: [(&str, &str); 22] = [
 ];
 
 /// `help` with no topic: cmd.Cmd's columns of documented commands.
-const HELP_LIST: &str = "\nDocumented commands (type help <topic>):\n========================================\nEOF    continue  disas    help  plug   regs     trace   xp\nbreak  csr       examine  info  print  restart  unplug\ncatch  delete    hart     next  quit   step     watch \n\n";
+const HELP_LIST: &str = "\nDocumented commands (type help <topic>):\n========================================\nEOF    continue  disas    help   next   quit     step    watch\nbreak  csr       examine  info   plug   regs     trace   xp   \ncatch  delete    hart     input  print  restart  unplug\n\n";
 
 fn format_trits(value: i64) -> String {
     let mut x = value;
@@ -109,6 +113,28 @@ fn format_trits(value: i64) -> String {
         x = (x - t) / 3;
     }
     trits.iter().rev().collect()
+}
+
+/// The text of `input TEXT`, its escapes read. Space at either end is
+/// trimmed with the rest of the line, so `\s` writes one there.
+fn unescape(arg: &str) -> Result<String, String> {
+    let mut text = String::new();
+    let mut chars = arg.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            text.push(c);
+            continue;
+        }
+        text.push(match chars.next() {
+            Some('n') => '\n',
+            Some('t') => '\t',
+            Some('s') => ' ',
+            Some('\\') => '\\',
+            Some(other) => return Err(format!("unknown escape \\{other}")),
+            None => return Err("a lone \\ at the end".into()),
+        });
+    }
+    Ok(text)
 }
 
 /// Python's sorted(set) as a list repr: "[-1, 4]".
@@ -199,6 +225,11 @@ impl Shell {
             "hart" => self.do_hart(arg),
             "plug" => self.do_plug(arg, Hotplug::Add),
             "unplug" => self.do_plug(arg, Hotplug::Remove),
+            "input" => {
+                let text = unescape(arg)?;
+                self.dbg.machine.bus.console.feed(&text);
+                Ok(false)
+            }
             "regs" => self.do_regs(),
             "csr" => self.do_csr(arg),
             "print" => {

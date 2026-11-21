@@ -14,7 +14,9 @@ detrytus debug examples/bsearch.s -b bsearch -x commands.txt --batch
 
 `-b ADDR` sets a breakpoint before starting (repeatable), `-x FILE` runs
 debugger commands from a file first, and `--batch` exits once they are
-done, which makes sessions scriptable. `--harts N`, `--plug TIME:HART`
+done, which makes sessions scriptable. `--input FILE` queues the file's
+text on the console's input, as for `run`, and again on every `restart`.
+`--harts N`, `--plug TIME:HART`
 and `--unplug TIME:HART` set up harts as for `run` (see Several harts,
 below).
 
@@ -41,6 +43,7 @@ below).
 | `hart [N]` | | list the harts, or look at hart N |
 | `plug HART [TIME]` | | plug a hart in at TIME (default: the next step) |
 | `unplug HART [TIME]` | | ask for a hart to go at TIME (default: the next step) |
+| `input TEXT` | | queue TEXT on the console's input; `\n` newline, `\t` tab, `\s` space, `\\` backslash |
 | `quit` | `q` | leave |
 
 `help CMD` explains any of them.

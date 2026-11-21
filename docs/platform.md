@@ -24,8 +24,14 @@ RAM pages too; only the program writes are checked.
 | Address | Register | Behaviour |
 |---------|----------|-----------|
 | −19683 | console out | writing a Unicode code point prints it |
-| −19680 | console in | reading returns the next input code point, or −1 if none |
+| −19680 | console in | reading returns the next input code point, or −1 if none (test the sign: a code point is never negative) |
 | −39366 | power off | writing any value stops the machine; the value becomes the exit code |
+
+Console input is the text `--input FILE` names, queued before the
+first step, plus whatever the debugger's `input` command adds. Once it
+is used up, reads return −1 until more is added. A run's input is fixed
+in advance, so runs stay deterministic and nothing waits for a person
+to type.
 
 ## Time
 
