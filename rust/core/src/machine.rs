@@ -51,6 +51,22 @@ pub struct Machine {
     order: Vec<i64>,
 }
 
+/// Whether hart `h`, waiting, may run: an interrupt pending and enabled
+/// ends `wfi` and `wrs`; a lost reservation or a deadline reached also
+/// ends `wrs`.
+fn can_wake(hart: &Hart, bus: &Bus, h: i64) -> bool {
+    hart.wakeable()
+        || hart.watching
+            && (!bus.holds_reservation(h) || hart.deadline.is_some_and(|d| hart.time >= d))
+}
+
+/// Stop waiting, as the hart runs again.
+fn wake(hart: &mut Hart) {
+    hart.waiting = false;
+    hart.watching = false;
+    hart.deadline = None;
+}
+
 /// The first `n` hart numbers outward from 0: 0, −1, +1, −2, +2, ...
 pub fn hart_numbers(n: i64) -> Vec<i64> {
     (0..n).map(|i| if i % 2 == 1 { -(i + 1) / 2 } else { i / 2 }).collect()
@@ -162,10 +178,10 @@ impl Machine {
         let time = self.time + 1;
         order
             .into_iter()
-            .filter(|h| {
-                let hart = self.harts.get_mut(h).unwrap();
+            .filter(|&h| {
+                let hart = self.harts.get_mut(&h).unwrap();
                 let now = std::mem::replace(&mut hart.time, time);
-                let runs = !hart.waiting || hart.wakeable();
+                let runs = !hart.waiting || can_wake(hart, &self.bus, h);
                 hart.time = now;
                 runs
             })
@@ -215,10 +231,10 @@ impl Machine {
             hart.time = self.time;
             hart.doorbell = self.bus.harts.doorbell(h);
             hart.external = self.bus.harts.event_pending(h);
-            if hart.waiting && !hart.wakeable() {
+            if hart.waiting && !can_wake(hart, &self.bus, h) {
                 continue;
             }
-            hart.waiting = false;
+            wake(hart);
             self.bus.current = h;
             if let Err(stop) = hart.step(&mut self.bus) {
                 return Some(Self::outcome(h, stop, steps));
@@ -238,18 +254,27 @@ impl Machine {
     /// nothing could, wake them all, as `wfi` is allowed to return early.
     /// (Stopped harts never wait: a hart is replaced when it starts.)
     fn skip_idle_time(&mut self, running: &[i64]) {
-        let waiting: Vec<&mut Hart> =
-            self.harts.iter_mut().filter(|(h, _)| running.contains(h)).map(|(_, h)| h).collect();
-        if !waiting.iter().all(|h| h.waiting) || waiting.iter().any(|h| h.wakeable()) {
+        let bus = &self.bus;
+        let waiting: Vec<(i64, &mut Hart)> = self
+            .harts
+            .iter_mut()
+            .filter(|(h, _)| running.contains(h))
+            .map(|(&h, hart)| (h, hart))
+            .collect();
+        if !waiting.iter().all(|(_, hart)| hart.waiting)
+            || waiting.iter().any(|(h, hart)| can_wake(hart, bus, *h))
+        {
             return;
         }
-        let timers = waiting.iter().filter_map(|h| h.timer_deadline());
-        let plugs = self.schedule.iter().map(|(t, _)| t - 1).filter(|&t| t > self.time);
-        match timers.chain(plugs).min() {
+        let now = self.time;
+        let timers = waiting.iter().filter_map(|(_, hart)| hart.timer_deadline());
+        let deadlines = waiting.iter().filter_map(|(_, hart)| hart.deadline).filter(|&d| d > now);
+        let plugs = self.schedule.iter().map(|(t, _)| t - 1).filter(|&t| t > now);
+        match timers.chain(deadlines).chain(plugs).min() {
             Some(t) => self.time = t,
             None => {
-                for hart in waiting {
-                    hart.waiting = false;
+                for (_, hart) in waiting {
+                    wake(hart);
                 }
             }
         }

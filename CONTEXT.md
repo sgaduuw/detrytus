@@ -681,3 +681,12 @@ bus reservation is gone, an interrupt is pending, or the deadline, which
 also joins the moments the clock may skip to when every hart waits;
 conformance cases cover each way out; trylobite's lock waits with `wrs`
 instead of spinning.
+
+### 2026-11-21 · `wrs` accepted and built
+
+The owner accepted the proposal above; `wrs` is now in the opcode table
+(−28) and the core. ISA 0.7. In the emulator a hart in `wrs` waits like
+one in `wfi`, and also runs again once the bus no longer holds its
+reservation or its deadline has come; deadlines join the moments time
+skips to when every hart waits. With no reservation, `wrs` does not wait
+at all. The `TW`-like trap bit stays open, now covering `wfi` too.

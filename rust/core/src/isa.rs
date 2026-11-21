@@ -64,6 +64,7 @@ pub enum Kind {
     Amomax,
     Amotlut,
     Cas,
+    Wrs,
     Jal,
     Jalr,
     B,
@@ -172,6 +173,7 @@ pub const OPS: &[Op] = &[
     op(Kind::Amomax, "amomax", -25, R, "d,t,a"),
     op(Kind::Amotlut, "amotlut", -26, R, "d,t,a,x"),
     op(Kind::Cas, "cas", -27, R, "d,t,a"),
+    op(Kind::Wrs, "wrs", -28, I, "s"),
     // 7.10 control transfer
     op(Kind::Jal, "jal", -10, J, "d,L"),
     op(Kind::Jalr, "jalr", -11, I, "d,m"),
