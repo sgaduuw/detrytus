@@ -2495,8 +2495,8 @@ args = ["debug", "--input", "-", "{root}/examples/echo.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]

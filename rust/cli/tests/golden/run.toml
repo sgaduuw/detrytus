@@ -784,8 +784,8 @@ args = ["run", "--harts", "730", "{here}/programs/harts.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -800,8 +800,8 @@ args = ["run", "--unplug", "5:0", "{here}/programs/harts.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -816,8 +816,8 @@ args = ["run", "--plug", "5", "{here}/programs/harts.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -894,8 +894,8 @@ args = ["run", "--input", "-", "-"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -910,8 +910,8 @@ args = ["run", "{root}/examples/echo.s", "--input"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -954,8 +954,8 @@ args = ["run", "--disk-blocks", "2", "{here}/programs/disk.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -970,8 +970,8 @@ args = ["run", "--disk", "{tmp}/disk.img", "--disk-blocks", "0", "{here}/program
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing]
-       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -996,4 +996,78 @@ status = 65
 stdout = ""
 stderr = '''
 detrytus: {here}/programs/bad.img: byte 0 holds a value that is not a tryte
+'''
+
+[[case]]
+name = "bsearch with its mix"
+args = ["run", "--mix", "{root}/examples/bsearch.s"]
+status = 0
+stderr = '''
+
+389 instructions executed, 191 compressible (49.1%)
+mnemonic            count   share          fit   of it
+addi                  115   29.6%           68   59.1%
+jal                    39   10.0%           18   46.2%
+add                    34    8.7%           17   50.0%
+lw                     28    7.2%           28  100.0%
+div                    22    5.7%            0    0.0%
+jalr                   21    5.4%           21  100.0%
+bgt                    18    4.6%            0    0.0%
+sw                     18    4.6%           18  100.0%
+br3                    17    4.4%            0    0.0%
+cmp                    17    4.4%            0    0.0%
+shi                    17    4.4%            0    0.0%
+bne                    10    2.6%            5   50.0%
+auipc                   6    1.5%            0    0.0%
+beq                     6    1.5%            6  100.0%
+bge                     5    1.3%            0    0.0%
+lt                      5    1.3%            5  100.0%
+rem                     5    1.3%            0    0.0%
+st                      5    1.3%            5  100.0%
+sub                     1    0.3%            0    0.0%
+
+form                count   share
+c.addi                 35    9.0%
+c.li                   28    7.2%
+c.lw                   22    5.7%
+c.jr                   21    5.4%
+c.j                    18    4.6%
+c.add                  17    4.4%
+c.sw                   12    3.1%
+c.beqz                  6    1.5%
+c.lwsp                  6    1.5%
+c.swsp                  6    1.5%
+c.bnez                  5    1.3%
+c.lt                    5    1.3%
+c.mv                    5    1.3%
+c.st                    5    1.3%
+'''
+stdout = '''
+5
+0
+8
+-1
+2
+'''
+
+[[case]]
+name = "a mix after the step limit"
+args = ["run", "--mix", "--max-steps", "5", "{root}/examples/hello.s"]
+status = 124
+stdout = ""
+stderr = '''
+
+5 instructions executed, 3 compressible (60.0%)
+mnemonic            count   share          fit   of it
+addi                    2   40.0%            1   50.0%
+auipc                   1   20.0%            0    0.0%
+beq                     1   20.0%            1  100.0%
+lt                      1   20.0%            1  100.0%
+
+form                count   share
+c.addi                  1   20.0%
+c.beqz                  1   20.0%
+c.lt                    1   20.0%
+
+detrytus: no power-off after 5 steps
 '''

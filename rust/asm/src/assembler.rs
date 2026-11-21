@@ -30,6 +30,8 @@ pub struct Listing {
     pub file: Option<String>,
     /// Where it sits in the image, if not at addr.
     pub load: i128,
+    /// An instruction, not data from .word or .words.
+    pub code: bool,
 }
 
 /// An assembled program.
@@ -362,6 +364,7 @@ impl Assembler {
                 text: String::new(),
                 file: s.file.clone(),
                 load: addr + s.shift,
+                code: !s.mnemonic.starts_with('.'),
             });
         }
         Ok(())
@@ -396,6 +399,7 @@ impl Assembler {
             text: String::new(),
             file: s.file.clone(),
             load: s.addr + s.shift,
+            code: false,
         });
         Ok(())
     }

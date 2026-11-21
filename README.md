@@ -58,6 +58,12 @@ instruction for stepping, breakpoints, watchpoints and inspection. `--stats` pri
 the step count and `--trace` every instruction. `asm` prints a listing with each word's trits
 and its disassembly.
 
+`--mix` counts instructions by mnemonic and how many of each a
+compressed form (docs/isa.md 6.1) could stand for: `run --mix` counts
+what executed, `asm --mix` what a source file holds, with how many words
+pairing compressible neighbours into bundles would save. It is how the
+compressed table is judged against real code.
+
 `--input FILE` gives `run` or `debug` text for the program to read from
 the console, `-` meaning stdin:
 
