@@ -734,7 +734,7 @@ hart -1 says hello
 '''
 stderr = '''
 
-detrytus: 244 steps, exit 0
+detrytus: 246 steps, exit 0
 '''
 
 [[case]]

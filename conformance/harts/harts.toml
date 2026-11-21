@@ -136,8 +136,10 @@ idle:   wfi
 handler:
         li    s0, LOCAL
 drain:  lw    t0, RECEIVE(s0)
+        bltz  t0, drained         # MAILBOX_EMPTY: messages are never negative
         add   s1, s1, t0
-        bnez  t0, drain
+        j     drain
+drained:
         csrr  t0, mip
         li    t1, 15
         beq   s1, t1, done
@@ -153,6 +155,27 @@ done:   li    t1, DATA
 expect.exit_code = 15
 # cause -3; ip keeps only the timer trit (timecmp is 0), the doorbell is off.
 expect.words = { "19686" = -3, "19689" = 3 }
+
+[[case]]
+name = "0 is a message, a negative word is refused, and empty reads -1"
+harts = 1
+program = '''
+        li    s0, LOCAL
+        sw    zero, SEND(s0)
+        lw    a1, LAST(s0)
+        li    t0, -5
+        sw    t0, SEND(s0)
+        lw    a2, LAST(s0)
+        sw    t0, GSEND(s0)       # a group of one, the sender, is skipped:
+        lw    a3, LAST(s0)        # still a refusal, for the word
+        lw    a4, COUNT(s0)
+        lw    a5, RECEIVE(s0)
+        lw    t3, RECEIVE(s0)
+        li    t6, POWER
+        sw    zero, 0(t6)
+'''
+expect.exit_code = 0
+expect.registers = { a1 = 1, a2 = -1, a3 = -1, a4 = 1, a5 = 0, t3 = -1 }
 
 [[case]]
 name = "a full mailbox refuses the tenth message"
@@ -173,7 +196,7 @@ send:   sw    t2, SEND(s0)
         li    t1, DATA
         lw    t0, COUNT(s0)
         sw    t0, 0(t1)
-        lw    t0, RECEIVE(s0)     # not ours: takes nothing
+        lw    t0, RECEIVE(s0)     # not ours: takes nothing, reads MAILBOX_EMPTY
         sw    t0, 3(t1)
         lw    t0, COUNT(s0)
         sw    t0, 6(t1)
@@ -186,7 +209,7 @@ send:   sw    t2, SEND(s0)
 spin:   j     spin
 '''
 expect.exit_code = 8              # nine accepted (+1), one refused (-1)
-expect.words = { "19683" = 9, "19686" = 0, "19689" = 9, "19692" = -1 }
+expect.words = { "19683" = 9, "19686" = -1, "19689" = 9, "19692" = -1 }
 
 [[case]]
 name = "a group send reaches the running harts of a triad"
@@ -508,7 +531,8 @@ name = "the doorbell goes to ring +1 unless delegated"
 harts = 1
 program = '''
         li    t0, LOCAL
-        sw    t0, SEND(t0)        # a hart may message itself
+        li    t1, 1
+        sw    t1, SEND(t0)        # a hart may message itself
         csrr  a1, mip
         csrr  a2, sip
         li    t1, 0t+000
