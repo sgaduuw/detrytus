@@ -732,3 +732,56 @@ adds more by hand.
   skipped, positive: a character) instead of comparing with −1. On a
   balanced machine −1 is an ordinary value, and a convention keyed to
   the sign leaves room for more than one "no character" later.
+
+### 2026-11-21 · Device interrupts and a block device (proposal)
+
+isa.md 12.3 listed an interrupt controller and a block device as still
+to come. trylobite now has a shell whose `getc` can only report "none",
+because nothing tells the kernel that input arrived, and it has no
+storage for a file system. `platform.md` proposes both devices, marked
+proposed until the owner accepts them. No ISA change: devices use the
+external interrupt, cause −2, that the ISA already reserves for them.
+
+- **A pared-down PLIC.** Claim and complete, one target hart per
+  source, no priorities. Priorities and several targets matter when
+  many harts compete for many devices; trylobite runs its kernel under
+  one lock, so they would be unused weight. Claim and complete are kept
+  because they let a handler serve every source in one entry and make
+  level-triggered sources safe.
+- **Level-triggered.** A source is pending for as long as its device's
+  condition holds, so nothing is lost between claim and complete and
+  there is no edge to miss when a source is masked.
+- **Hot-plug stays where it is**, on the same cause through EVENT, so
+  trylobite's hot-plug code is untouched. Folding it in as a source
+  would give one dispatch path and can come later.
+- **Console states named, compared by name.** A kernel that sleeps until
+  a key arrives must also know when none ever will, or a shell at the
+  end of its input sleeps forever. Console in reading −1 for both could
+  not tell them apart. The proposal keeps −1 as `CONSOLE_EMPTY` and adds
+  −2 as `CONSOLE_CLOSED`, using the room the sign convention left:
+  programs test the sign and are unaffected, and only the kernel tells
+  the two apart, by name. The owner asked that neither number be
+  compared with directly. Rejected: a separate status register, which
+  costs every read a second access.
+- **A block is one page.** The kernel's allocator already hands out
+  pages, and a transfer never needs an offset within a page. Smaller
+  blocks (729 or 2,187 trytes) would waste less on small files.
+- **Large transfers coalesce.** One command moves COUNT consecutive
+  blocks through a scatter list of pages, and costs a fixed setup plus
+  a little per block, so gathering a large write into one command pays,
+  as on a real disk. The owner asked for this over one block per
+  command. The list means the kernel never has to find contiguous
+  physical pages.
+- **Two bytes per tryte in the backing file.** Easy to seek and patch
+  with ordinary tools. Because the device writes whole commands, a
+  packed form (five trits per byte, about 10% smaller, like `.dti`)
+  would gain little and lose that.
+- **A fixed transfer time.** Deterministic runs, and a real wait for a
+  kernel to fill.
+- **The mailbox's "0 if empty"** is documented rather than changed:
+  COUNT already tells an empty mailbox from a message of 0.
+
+If accepted, in order: the controller and console states in the core,
+with conformance cases for claim, complete, routing and masking; the
+block device and `--disk`; then trylobite sleeps in `getc` and gains a
+disk driver.
