@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.5, **draft**. Everything here may change until the emulator
+Version 0.6, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -562,6 +562,62 @@ them, which covers what RISC-V spreads across `amoand`, `amoor` and
 unsigned variants. `cas` reads its expected value from `rd` (as x86's
 `cmpxchg` does) so that it fits a three-register format.
 
+**Proposed: waiting on a reservation.** *Under review; not yet in the
+opcode table above, and opcode −28 is held for it.* `wrs rs1` (format I,
+`rd` and `imm` zero) lets a hart sleep until another hart may have
+changed a word it is watching, instead of spinning on loads. The word is
+the one its last `lr` reserved. `wrs` returns, and execution goes on
+with the next instruction, at the latest when one of these holds:
+
+1. The hart holds no reservation: it never took one, or lost it, for
+   instance to another hart's store to the reserved word (5.5).
+2. An interrupt is pending and enabled in `ie` in either bank, whatever
+   the current ring and `IE` bits: what ends a `wfi`.
+3. `rs1` names a register other than `r0`, and `time ≥ rs1`: a
+   deadline, so that a waiter can give up and do something else.
+
+It may also return early for no reason, so it belongs in a loop that
+checks the word again; a hart that cannot wait may treat it as a no-op,
+as it may `wfi`. `wrs` keeps the reservation, so an `sc` after it
+succeeds if nothing broke the reservation meanwhile. It is not a memory
+operation and orders nothing. It is legal in every ring: a user program
+cannot keep a hart asleep, since the kernel's timer interrupt, enabled
+in its `ie`, ends the wait.
+
+Waiting for a lock to come free:
+
+```
+acquire: lr    t1, (a0)        # reserve the lock word
+         beqz  t1, take        # free: try to take it
+         wrs   zero            # held: sleep until someone writes it
+         j     acquire
+take:    li    t2, 1
+         sc.aq t1, t2, (a0)    # 0 if no one got there first
+         bnez  t1, acquire
+```
+
+No wake-up is lost: if the holder releases the lock between the `lr`
+and the `wrs`, its store has already broken the reservation, and `wrs`
+returns at once.
+
+The deadline bounds a wait, so a hart can give up on a busy holder and
+try other work: another queue's lock, or work to take from a neighbour.
+A new `lr` simply replaces the reservation:
+
+```
+wait:    lr    t1, (a0)        # this queue's lock
+         beqz  t1, take
+         wrs   s5              # sleep, but only until time s5
+         csrr  t0, time
+         blt   t0, s5, wait    # woken before the deadline: look again
+         addi  a0, a0, STRIDE  # the holder is busy: try the next queue
+         addi  s5, t0, PATIENCE
+         j     wait
+```
+
+The timer could end a wait too (rule 2), but it is the kernel's for
+scheduling; a deadline of the wait's own leaves it alone.
+
 ### 7.10 Control transfer (B, T, J, I)
 
 | Op  | Mnemonic | Format | Semantics |
@@ -1082,9 +1138,10 @@ numbers like the rest.
    guess, to be revisited against measured instruction frequencies.
 3. **Hypervisor support.** Whether ring +1 should grow two-stage
    translation so detrytus can host detrytus guests.
-4. **Waiting on a word.** Whether a hart should be able to sleep until
-   another hart writes a word it reserved with `lr` (as RISC-V's Zawrs
-   does), which lets a lock waiter sleep without an interrupt. Mailboxes
-   and `wfi` cover signalling for now.
+4. **Waiting on a word.** Proposed as `wrs` (7.9), after RISC-V's
+   Zawrs: a hart sleeps until the word it reserved with `lr` is written,
+   an interrupt is pending, or a deadline passes. Open until accepted,
+   and with it: whether ring 0 should be able to make `wrs` in user mode
+   trap, as RISC-V's `TW` bit does for `wfi`.
 5. **Removing hart 0.** Whether the boot hart may ever be removed, once
    another hart has taken over its duties.
