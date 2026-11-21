@@ -62,6 +62,7 @@ reset address.
 | `.include "PATH"` | assemble another file here (below) |
 | `.assert E, "MESSAGE"` | stop with MESSAGE as the error if E is 0 |
 | `.compress` / `.nocompress` | turn automatic bundling on and off from here (below); off at the start |
+| `.gp E` / `.nogp` | in this section, from here: `gp` holds E, or nothing known (below) |
 
 `.assert` is checked once every symbol is known, so it may use labels
 defined after it. If assembly stops earlier, on a line that needs a
@@ -188,7 +189,8 @@ the top of `rust/core/src/image.rs`.
 | `nop` | `addi zero, zero, 0` |
 | `mv rd, rs` | `addi rd, rs, 0` |
 | `li rd, value` | `addi`, or `lui` + `addi` when the value needs more than 16 trits or is not known yet |
-| `la rd, symbol` | `auipc` + `addi` |
+| `la rd, symbol` | `auipc` + `addi`; under `.gp`, `addi rd, gp, symbol − E` (below) |
+| `lw rd, symbol`, `lt`, `sw rs2, symbol`, `st` | under `.gp` only: `lw rd, symbol − E(gp)` and so on |
 | `neg rd, rs` / `not rd, rs` | `sub rd, zero, rs` |
 | `sgn rd, rs` | `cmp rd, rs, zero` |
 | `beq`, `bne`, `blt`, `bgt`, `ble`, `bge` | `b<cond>` |
@@ -206,6 +208,41 @@ whose source is `r0` only reads the CSR (`isa.md` 7.12), so the
 expansion would write nothing. To write zero, write from a register
 that holds 0. The raw form `csrrw rd, csr, zero` stays legal, since it
 is the read form that `csrr` expands to.
+
+## The global pointer
+
+`.gp E` tells the assembler that `gp` holds the value of E (`isa.md`
+4.2) in the code that follows in the current section. Each section
+keeps its own: switching away and back resumes it, a section starts
+with none, and `.nogp` ends it. E may name labels defined later. Under
+`.gp`:
+
+- `la rd, symbol` is the single instruction `addi rd, gp, symbol − E`,
+  which fits a slot (`c.lagp`) when the distance is a multiple of 3
+  within ±363. `la gp, ...` stays an `auipc` pair, since that is how
+  `gp` gets its value.
+- `lw rd, symbol` (and `lt`, `sw rs2, symbol`, `st`) loads or stores
+  the global itself: `lw rd, symbol − E(gp)`, with no register spent on
+  its address. Outside `.gp` these forms are an error.
+- A symbol more than 16 trits (±21,523,360) from E stops assembly.
+
+The assembler takes E on trust: setting the register is the program's
+job, before the first instruction that relies on it.
+
+```asm
+        .section kernel, 1 * 19683
+        .gp   kgp
+start:  la    gp, kgp              # auipc + addi: this is what sets gp
+        la    t0, procs            # addi t0, gp, procs - kgp
+        lw    t1, ticks            # lw t1, ticks - kgp(gp)
+        addi  t1, t1, 1
+        sw    t1, ticks
+        ...
+        .section kdata, 2 * 19683
+ticks:  .word 0
+kgp:                               # gp points here, next to the globals
+procs:  .words 100
+```
 
 ## Compressed instructions
 
@@ -236,6 +273,7 @@ written as for the full instruction:
 | `c.addi rd, imm` (and `shi`, `cmpi`) | `addi rd, rd, imm` |
 | `c.li rd, imm`, `c.lip rd, value` | `addi rd, zero, imm` |
 | `c.lwsp rd, off`, `c.swsp rs2, off` | `lw rd, off(sp)`, `sw rs2, off(sp)`: `off` in trytes |
+| `c.lagp rd, off` | `addi rd, gp, off`: `off` in trytes |
 | `c.beqz rs, label`, `c.bnez rs, label` | `beq rs, zero, label` |
 | `c.beq rs1, rs2, label` (and `bne`, `blt`, `ble`) | `beq rs1, rs2, label` |
 | `c.j label`, `c.jal label` | `jal zero, label`, `jal ra, label` |
