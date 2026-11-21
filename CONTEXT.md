@@ -934,3 +934,20 @@ the form's limits live in one place, and a unit test reassembles the
 disassembly of every slot value. Two in a row share a word; a label or
 any other statement between them starts a new one, a rule simple
 enough to see in the source.
+
+### 2026-11-21 · Automatic bundling with `.compress`
+
+Eelco chose directives over a command-line flag: the places that must
+stay full width (vectored trap tables, size-checked blocks) are known
+in the source, and the build command stays the same. Under `.compress`
+the assembler pairs neighbours by the rules `c.` instructions already
+follow, and leaves a lone instruction full, since a `c.nop` filler
+saves nothing. Short branches make it a fixed point: layout runs with
+every candidate allowed into a slot, drops the paired ones whose full
+instruction does not fit where they landed, and runs again. The set
+only shrinks, so it ends, usually in two or three rounds; an
+instruction once dropped is not retried, which can only cost a few
+words. A trial build of trylobite with `.compress` around its kernel
+and programs (and its syscall return moved to `tval`) went from 1,598
+to 1,314 words, 18% smaller, data included, and passed its tests but
+one that searched the debugger's output for the letter c.

@@ -296,3 +296,9 @@ name = "a c. instruction needs its operands"
 program = "c.li a0"
 expect.asm_error = "c.li takes 2 operand(s), got 1"
 expect.asm_error_line = 1
+
+[[case]]
+name = ".compress takes no operands"
+program = ".compress 1"
+expect.asm_error = ".compress takes 0 operand(s)"
+expect.asm_error_line = 1
