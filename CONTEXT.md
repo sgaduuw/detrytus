@@ -802,3 +802,28 @@ console's two states are in the core; the block device follows.
   debugger's behaviour; the debugger closes it on `eof`.
 - **`eof`, not `close`**, as the spec named it. `EOF` (end of the command
   file, or Ctrl-D) still quits; commands are case-sensitive, as before.
+
+### 2026-11-21 · The block device built
+
+The last device of the accepted proposal.
+
+- **The core touches no files.** It holds a `Disk` (blocks in, blocks
+  out); the command line gives it the file and the conformance suite a
+  disk in memory (`disk_blocks`), so the core keeps its no-dependency,
+  no-I/O shape and every case is self-contained.
+- **A command finishes at the start of a round**, before any hart
+  steps, and the clock skips to that round when every hart waits, as it
+  does for a timer. So a kernel that sleeps in `wfi` waiting for the
+  disk costs nothing to emulate.
+- **The list is read when the command starts and checked whole.** A
+  word that names no RAM page, a list that is not word-aligned, or a run
+  off the end of the disk fails the command at once and moves nothing.
+  Memory with nothing behind it reads 0, which names no page, so a list
+  pointed at a device fails without a separate check.
+- **A read breaks reservations on its pages**, as a store would, so an
+  `lr`/`sc` pair across a DMA read fails rather than succeeding on
+  stale data.
+- **The file is checked when it opens**, for an odd length and for
+  values outside a tryte, so a bad image is a startup error rather than
+  garbage in RAM later. A write error later is reported once on stderr
+  and the run goes on, as a real disk's error would not stop the CPU.

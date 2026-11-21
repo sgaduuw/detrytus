@@ -65,6 +65,10 @@ the console, `-` meaning stdin:
 echo "hello" | detrytus run --input - examples/echo.s
 ```
 
+`--disk FILE` attaches a block device whose blocks live in FILE, two
+bytes per tryte; `--disk-blocks N` sets its size and creates the file if
+it is missing. What a program writes stays in the file for the next run.
+
 - [`docs/assembler.md`](docs/assembler.md): source syntax, directives
   and pseudo-instructions.
 - [`docs/platform.md`](docs/platform.md): the emulated memory map and

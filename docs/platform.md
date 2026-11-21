@@ -15,7 +15,7 @@ the platform (`isa.md` 8.5 and 12.3).
 | -4 | hart controller: this hart's slot, group send, events |
 | -5 .. -12 | reserved for more harts |
 | -13 | interrupt controller (Device interrupts, below) |
-| -14 | block device (proposed: The block device, below) |
+| -14 | block device (The block device, below) |
 
 A page is 19,683 trytes centred on a multiple of 19,683, so page `p`
 spans `p·19683 − 9841` .. `p·19683 + 9841`. The loader may place data in
@@ -152,10 +152,6 @@ system. Neither changes the ISA: devices raise the existing external
 interrupt, cause −2. CONTEXT.md gives the reasoning and what was
 rejected.
 
-The interrupt controller and the console input states are built. **The
-block device is still proposed, not implemented:** it reads as absent
-(page −14 is unmapped) until it is built.
-
 ### Device interrupts (page −13)
 
 A small interrupt controller gathers device interrupts and raises
@@ -227,7 +223,7 @@ are named; code compares with the names, never with the numbers.
   closed. Closed is a lasting condition, so a kernel masks source 1 once
   it has seen `CONSOLE_CLOSED`, and whenever nobody is reading.
 
-### The block device (page −14, proposed)
+### The block device (page −14)
 
 A disk that moves whole blocks between itself and RAM on its own, then
 raises source 2. **A block is one page**, 19,683 trytes, so each block

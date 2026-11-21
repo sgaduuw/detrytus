@@ -2497,9 +2497,11 @@ stdout = ""
 stderr = '''
 usage: detrytus asm FILE [-o FILE] [--listing]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]... FILE...
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
 detrytus: debug reads its commands from stdin; give --input a file
 '''
 
@@ -2529,5 +2531,21 @@ eof: close the console's input.
 Once what is queued is read, console in reads CONSOLE_CLOSED (-2)
 instead of CONSOLE_EMPTY (-1): no more input will come. restart opens
 it again.
+'''
+stderr = ""
+
+[[case]]
+name = "debug keeps what a run wrote to the disk across restart"
+args = ["debug", "--disk", "{tmp}/disk.img", "--disk-blocks", "1", "{here}/programs/disk.s", "-x", "{tmp}/script.txt", "--batch"]
+script = '''
+continue
+restart
+continue
+'''
+status = 0
+stdout = '''
+stopped: powered off with exit code 0
+=> 0  [ring +1]  addi s1, zero, -275562
+stopped: powered off with exit code 42
 '''
 stderr = ""
