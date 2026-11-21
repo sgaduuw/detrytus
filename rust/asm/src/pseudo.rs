@@ -80,6 +80,17 @@ pub fn expand(
 ) -> Result<Vec<Expansion>, OperandError> {
     if let Some(&(_, op, template, n)) = FIXED.iter().find(|f| f.0 == name) {
         arity(name, texts, n)?;
+        // A CSR instruction whose rs1 is r0 only reads (isa.md 7.12), so
+        // `csrw csr, zero` would assemble to a read and leave the CSR as
+        // it was. The raw `csrrw rd, csr, zero` stays legal: it is the
+        // documented read form, and its name says nothing about writing.
+        if name == "csrw" && matches!(Operands::reg(&texts[1]), Ok(0)) {
+            return fail(
+                "csrw from zero writes nothing (a CSR instruction with r0 as its source \
+                 only reads): write from a register holding 0"
+                    .to_string(),
+            );
+        }
         let filled = template
             .iter()
             .map(|t| match *t {

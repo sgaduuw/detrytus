@@ -187,3 +187,15 @@ name = "an include needs a quoted path"
 program = ".include nope.s"
 expect.asm_error = ".include takes one \"path\""
 expect.asm_error_line = 1
+
+[[case]]
+name = "csrw from zero would only read, so it is refused"
+program = "csrw mscratch, zero"
+expect.asm_error = "csrw from zero writes nothing (a CSR instruction with r0 as its source only reads): write from a register holding 0"
+expect.asm_error_line = 1
+
+[[case]]
+name = "csrw from r0 is refused too"
+program = "nop\ncsrw sie, r0"
+expect.asm_error = "csrw from zero writes nothing (a CSR instruction with r0 as its source only reads): write from a register holding 0"
+expect.asm_error_line = 2
