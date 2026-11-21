@@ -667,6 +667,12 @@ emulator burns steps.
   when `rs1` is not `r0`. One instruction with an optional deadline
   rather than Zawrs' pair (no timeout, short timeout); the register
   convention, `r0` for none, is the one `fence.vm` already uses.
+- **The deadline stays**, at the owner's suggestion: a hart waiting on a
+  busy holder can give up after a while and try other work, such as the
+  next run queue's lock once trylobite has one per triad, or work to
+  take from a neighbour. The timer could end the wait instead, but the
+  kernel uses it for scheduling slices, and borrowing it for every
+  bounded wait would mean saving and restoring `stimecmp` each time.
 - **May be a no-op**, like `wfi`: correct code loops anyway, so a simple
   core need not implement waiting at all.
 

@@ -600,6 +600,24 @@ No wake-up is lost: if the holder releases the lock between the `lr`
 and the `wrs`, its store has already broken the reservation, and `wrs`
 returns at once.
 
+The deadline bounds a wait, so a hart can give up on a busy holder and
+try other work: another queue's lock, or work to take from a neighbour.
+A new `lr` simply replaces the reservation:
+
+```
+wait:    lr    t1, (a0)        # this queue's lock
+         beqz  t1, take
+         wrs   s5              # sleep, but only until time s5
+         csrr  t0, time
+         blt   t0, s5, wait    # woken before the deadline: look again
+         addi  a0, a0, STRIDE  # the holder is busy: try the next queue
+         addi  s5, t0, PATIENCE
+         j     wait
+```
+
+The timer could end a wait too (rule 2), but it is the kernel's for
+scheduling; a deadline of the wait's own leaves it alone.
+
 ### 7.10 Control transfer (B, T, J, I)
 
 | Op  | Mnemonic | Format | Semantics |
@@ -1123,9 +1141,7 @@ numbers like the rest.
 4. **Waiting on a word.** Proposed as `wrs` (7.9), after RISC-V's
    Zawrs: a hart sleeps until the word it reserved with `lr` is written,
    an interrupt is pending, or a deadline passes. Open until accepted,
-   and with it: whether the deadline operand earns its place (Zawrs has
-   two instructions instead, with and without a short timeout), and
-   whether ring 0 should be able to make `wrs` in user mode trap, as
-   RISC-V's `TW` bit does for `wfi`.
+   and with it: whether ring 0 should be able to make `wrs` in user mode
+   trap, as RISC-V's `TW` bit does for `wfi`.
 5. **Removing hart 0.** Whether the boot hart may ever be removed, once
    another hart has taken over its duties.
