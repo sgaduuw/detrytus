@@ -870,3 +870,20 @@ build ever needs to vary its code.
 
 Unknown escapes (`\b`) became errors at the same time: they used to
 stand for the character itself.
+
+### 2026-11-21 · The mailbox's empty value (proposal)
+
+RECEIVE read 0 from an empty mailbox, and 0 is also a message, so a
+receiver had to read COUNT first whenever 0 could be sent. The
+device-interrupts proposal documented that rather than changing it; it
+was the one place left that broke the rule the console now follows
+(no value is negative, named, and tested by sign).
+
+A sentinel alone cannot fix it, since a message was any word. The
+proposal gives up negative messages instead: SEND and GSEND refuse a
+negative word (LAST says so), and an empty RECEIVE reads
+`MAILBOX_EMPTY`, −1. Messages keep 0 to 3,812,798,742,493, far more
+than a hart number, a page or a pointer into a kernel needs, and a
+receiver takes a message with one load and a sign test. Keeping full
+words with a second register that says whether the last RECEIVE took
+one was the alternative; it costs a load on every receive. ISA 0.9.

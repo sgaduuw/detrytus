@@ -81,8 +81,8 @@ word, centred on the address given.
 | S−9 | START_PC | rw | where the hart starts |
 | S−6 | START_ARG | rw | put in `a0` when it starts |
 | S−3 | CONTROL | wo | +1 starts a stopped hart; −1 stops the hart writing it (own slot only) |
-| S | SEND | wo | queues the word in hart `h`'s mailbox |
-| S+3 | RECEIVE | ro | own slot only: takes the oldest message, 0 if empty (a message can be 0 too: read COUNT first when it may be) |
+| S | SEND | wo | queues the word, which must be 0 or more, in hart `h`'s mailbox |
+| S+3 | RECEIVE | ro | own slot only: takes the oldest message, or reads `MAILBOX_EMPTY` (−1) if there is none |
 | S+6 | COUNT | ro | messages waiting, 0..9 |
 | S+9, S+12 | — | — | reserved, read 0 |
 
@@ -94,8 +94,10 @@ word, centred on the address given.
   registers, TLB, reservation and messages are discarded. Writing −1 to
   another hart's CONTROL does nothing: removal is cooperative.
 - **Mailbox.** Nine words deep. A SEND is accepted only if hart `h` is
-  running and its mailbox has room; otherwise it is rejected and the
-  word is dropped. The result of the hart's last send, to any slot or
+  running, its mailbox has room and the word is 0 or more; otherwise it
+  is rejected and the word is dropped. Messages are never negative, so
+  RECEIVE's negative `MAILBOX_EMPTY` cannot be mistaken for one: a
+  receiver tests the sign (`bltz`), never the number. The result of the hart's last send, to any slot or
   group, is in LAST (below), so a sender checks it when delivery
   matters; a send never fails silently.
 - **Doorbell.** Hart `h`'s software interrupt (cause −3, `ip` trit 3)
@@ -103,8 +105,8 @@ word, centred on the address given.
   itself. Reading RECEIVE until it is empty clears it. It appears in
   ring +1's `ip`, or ring 0's when `ideleg` trit 3 is `+`.
 - **Own slot only.** RECEIVE and CONTROL −1 act only from the hart that
-  owns the slot; from another hart a read of RECEIVE gives 0 and takes
-  nothing.
+  owns the slot; from another hart a read of RECEIVE gives
+  `MAILBOX_EMPTY` and takes nothing.
 - **Ordering.** The slots are MMIO: a sender fills any shared buffer,
   then `fence w, o`, then SEND; a receiver reads RECEIVE, then
   `fence i, r`, then reads the buffer.
@@ -120,7 +122,7 @@ reach its own mailbox without computing its address from `hartid`.
 | C−12 .. C+12 | own slot | as above | the accessing hart's slot in page −3 |
 | C+27 | TARGET | rw, per hart | a hart number naming a subtree |
 | C+30 | SPAN | rw, per hart | `k`, 0..6 (a write outside is clamped): the subtree is every hart whose number agrees with TARGET except in its lowest `k` trits |
-| C+33 | GSEND | wo | sends the word to every running hart in the subtree except the sender |
+| C+33 | GSEND | wo | sends the word, 0 or more, to every running hart in the subtree except the sender; a negative word reaches none and is a refusal |
 | C+36 | LAST | ro, per hart | the last send's result: +1 accepted by all, −1 refused by at least one, 0 none yet |
 | C−27 | HARTS | ro | slots on this platform: 729 |
 | C−30 | EVENT_HART | rw | the hart that receives hot-plug events; 0 at reset |
