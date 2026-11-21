@@ -7,14 +7,14 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use detrytus_core::isa;
 use detrytus_core::trits::{TRYTE_MAX, TRYTE_TRITS, low, split_high};
+use detrytus_core::{compressed, isa};
 
 use crate::error::AsmError;
 use crate::expr::{ExprError, Symbols, Value, evaluate};
 use crate::operands::{Fields, OperandError, Operands};
-use crate::pseudo;
 use crate::source::{Kind, Statement, parse};
+use crate::{pseudo, slots};
 
 const TRYTE_DIRECTIVES: [&str; 4] = [".tryte", ".string", ".ascii", ".zero"];
 
@@ -117,6 +117,8 @@ struct Assembler {
     shift: Value,
     /// (next free tryte, shift) of each section but the current one.
     sections: HashMap<String, (Value, Value)>,
+    /// A `c.` instruction in slot A whose slot B is still free.
+    open_slot: Option<usize>,
 }
 
 impl Assembler {
@@ -130,6 +132,11 @@ impl Assembler {
         for i in 0..stmts.len() {
             if !stmts[i].labels.is_empty() {
                 self.pending.push(i);
+            }
+            // Two c. instructions share a bundle only when nothing else
+            // comes between them.
+            if !stmts[i].mnemonic.is_empty() && !slots::is_slot(&stmts[i].mnemonic) {
+                self.open_slot = None;
             }
             if let Err(e) = self.lay(stmts, i) {
                 // A check before the failing line that already fails is
@@ -285,6 +292,19 @@ impl Assembler {
     }
 
     fn lay_words(&mut self, stmts: &mut [Statement], i: usize) -> PassResult<()> {
+        if slots::is_slot(&stmts[i].mnemonic) {
+            // A label starts a new word: a branch cannot enter slot B.
+            if let Some(a) = self.open_slot.take()
+                && self.pending.is_empty()
+            {
+                let (addr, shift) = (stmts[a].addr + 1, self.shift);
+                stmts[a].partner = Some(i);
+                let s = &mut stmts[i];
+                (s.kind, s.shift, s.size, s.addr) = (Kind::SlotB, shift, 0, addr);
+                return Ok(());
+            }
+            self.open_slot = Some(i);
+        }
         let s = &stmts[i];
         let size = match s.mnemonic.as_str() {
             ".word" => s.operands.len() as i128,
@@ -296,6 +316,7 @@ impl Assembler {
                 }
                 n
             }
+            m if slots::is_slot(m) => 1,
             m => pseudo::size(split_suffix(m).0, &s.operands, &self.symbols)?,
         };
         let addr = next_centre(self.loc, 3);
@@ -320,10 +341,12 @@ impl Assembler {
     // --- pass two: emit ------------------------------------------------------
 
     fn emit(&mut self, stmts: &[Statement]) -> Result<(), AsmError> {
-        for s in stmts {
+        for (i, s) in stmts.iter().enumerate() {
             let result = match s.kind {
                 Kind::Tryte => self.emit_trytes(s),
+                Kind::Word if slots::is_slot(&s.mnemonic) => self.emit_bundle(stmts, i),
                 Kind::Word => self.emit_words(s),
+                Kind::SlotB => Ok(()),
                 Kind::None if s.mnemonic == ".assert" => self.check(s),
                 Kind::None => Ok(()),
             };
@@ -398,6 +421,62 @@ impl Assembler {
             });
         }
         Ok(())
+    }
+
+    /// A bundle: the `c.` instruction at i in slot A, and its partner in
+    /// slot B or `c.nop`. Each slot has its line in the listing.
+    fn emit_bundle(&mut self, stmts: &[Statement], i: usize) -> PassResult<()> {
+        let a = &stmts[i];
+        let b = a.partner.map(|j| &stmts[j]);
+        let slot_a = self.slot(a)?;
+        let slot_b = match b {
+            Some(b) => self.slot(b).map_err(|e| match e {
+                PassError::Operand(e) => PassError::Located(b.error(e.message())),
+                located => located,
+            })?,
+            None => compressed::NOP,
+        };
+        let word = compressed::bundle(slot_a, slot_b);
+        for (offset, tryte) in [-1, 0, 1].into_iter().zip(split_word(word)) {
+            self.put(a.addr + offset, tryte, a)?;
+        }
+        let pc = Some(a.addr as i64);
+        for (s, slot, w) in
+            [(a, slot_a, Some(word))].into_iter().chain(b.map(|b| (b, slot_b, None)))
+        {
+            self.image.listing.push(Listing {
+                addr: s.addr,
+                word: w,
+                line: s.line,
+                source: s.source.clone(),
+                text: crate::disasm::disassemble_slot(slot, pc),
+                file: s.file.clone(),
+                load: s.addr + s.shift,
+                code: true,
+            });
+        }
+        Ok(())
+    }
+
+    /// The slot a `c.` instruction encodes to: its full instruction,
+    /// encoded with the bundle's address as pc, must fit the form.
+    fn slot(&self, s: &Statement) -> PassResult<i64> {
+        let base = s.addr - low3(s.addr);
+        let ops = Operands { symbols: &self.symbols };
+        let (name, texts) = slots::full(&s.mnemonic, &s.operands)?;
+        let mut expansions = if pseudo::is_pseudo(name) {
+            pseudo::expand(&ops, name, &texts, base, 1)?
+        } else {
+            vec![(name, texts, Fields::default())]
+        };
+        let (op, texts, extra) = expansions.pop().expect("one word");
+        let op = isa::by_name(op).expect("a c. form names a real instruction");
+        let word = ops.encode_instruction(op, "", &texts, base, extra)?;
+        let d = isa::decode(word).expect("an encoded instruction decodes");
+        compressed::compress(&d).ok_or_else(|| {
+            let full = crate::disasm::disassemble(word, Some(base as i64));
+            OperandError::Message(format!("{full} does not fit {}", s.mnemonic)).into()
+        })
     }
 
     fn emit_trytes(&mut self, s: &Statement) -> PassResult<()> {
@@ -522,7 +601,7 @@ pub fn assemble(source: &str, file: Option<&str>) -> Result<Image, AsmError> {
     asm.emit(&stmts)?;
     let mut image = asm.image;
     image.symbols = asm.symbols.into_iter().collect();
-    for entry in &mut image.listing {
+    for entry in image.listing.iter_mut().filter(|e| e.text.is_empty()) {
         if let Some(word) = entry.word {
             entry.text = crate::disasm::disassemble(word, Some(entry.addr as i64));
         }

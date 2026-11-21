@@ -1295,3 +1295,18 @@ stdout = ""
 stderr = '''
 detrytus: {tmp}/hello.dti: --mix needs source
 '''
+
+[[case]]
+name = "listing of bundles written by hand"
+args = ["asm", "{here}/programs/bundles.s"]
+status = 0
+stdout = '''
+                     0  0000+00+0++00+--00++--+++++  c.li a0, 5                    start:  c.li  a0, 5
+                     1                               c.addi a0, 1                  c.addi a0, 1
+                     3  000000000++000000+0++++++++  c.jal 12                      c.jal sub
+                     6  00000-+000000000000+++0++-+  addi t6, zero, -39366         li    t6, -39366
+                     9  0000000000000000+++00+000--  sw a0, 0(t6)                  sw    a0, 0(t6)
+                    12  00--00000+00000+00++-0+++++  c.shi a0, 1                   sub:    c.shi a0, 1
+                    13                               c.jr ra                       c.jr  ra
+'''
+stderr = ""

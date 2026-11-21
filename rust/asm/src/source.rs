@@ -18,6 +18,8 @@ const MAX_INCLUDE_DEPTH: usize = 32;
 pub enum Kind {
     Word,
     Tryte,
+    /// Slot B of a bundle: emitted with the statement in slot A.
+    SlotB,
     None,
 }
 
@@ -37,6 +39,8 @@ pub struct Statement {
     pub kind: Kind,
     /// Load address minus run address, from its section.
     pub shift: i128,
+    /// For a `c.` instruction in slot A, the statement in slot B.
+    pub partner: Option<usize>,
 }
 
 impl Statement {
@@ -59,6 +63,7 @@ impl Statement {
             size: 0,
             kind: Kind::Word,
             shift: 0,
+            partner: None,
         }
     }
 

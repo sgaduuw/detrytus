@@ -13,11 +13,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 
-use detrytus_asm::disasm::disassemble;
+use detrytus_asm::disasm::{disassemble, disassemble_slot};
 use detrytus_asm::expr::{Symbols, evaluate};
 use detrytus_core::hart::{AccessKind, Event, Hart};
-use detrytus_core::isa;
+use detrytus_core::trits::low;
 use detrytus_core::{Hotplug, Machine, Outcome};
+use detrytus_core::{compressed, isa};
 
 use crate::disk::DiskSpec;
 use crate::program::Program;
@@ -499,15 +500,34 @@ impl Debugger {
         if last > first { self.peek(first + 1, 3) } else { self.peek(first, 1) }
     }
 
+    /// count words from addr. An addr in slot B of a bundle shows that
+    /// slot alone, then the words after.
     pub fn disassemble(&mut self, addr: i64, count: usize) -> Vec<(i64, String)> {
+        let slot = low(addr, 1);
         (0..count as i64)
             .map(|i| {
-                let a = addr + 3 * i;
-                let text = self
-                    .peek(a, 3)
-                    .map_or_else(|| "<unmapped>".to_string(), |w| disassemble(w, Some(a)));
-                (a, text)
+                let a = addr - slot + 3 * i;
+                let text = if i == 0 && slot == 1 {
+                    self.instruction(addr)
+                } else {
+                    self.peek(a, 3)
+                        .map_or_else(|| "<unmapped>".to_string(), |w| disassemble(w, Some(a)))
+                };
+                (if i == 0 { addr } else { a }, text)
             })
             .collect()
+    }
+
+    /// The one instruction at addr: in a bundle, the slot addr names.
+    pub fn instruction(&mut self, addr: i64) -> String {
+        let slot = low(addr, 1);
+        let a = addr - slot;
+        match self.peek(a, 3) {
+            None => "<unmapped>".to_string(),
+            Some(w) if compressed::is_bundle(w) && slot >= 0 => {
+                disassemble_slot(compressed::slots(w)[slot as usize], Some(a))
+            }
+            Some(w) => disassemble(w, Some(a)),
+        }
     }
 }

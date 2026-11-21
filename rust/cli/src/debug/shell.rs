@@ -297,7 +297,7 @@ impl Shell {
 
     pub fn show_current(&mut self) {
         let (pc, ring) = (self.dbg.hart().pc, self.dbg.hart().ring);
-        let (_, text) = self.dbg.disassemble(pc, 1).remove(0);
+        let text = self.dbg.instruction(pc);
         let mut place = format!("ring {ring:+}");
         if self.dbg.several() {
             let state = match self.dbg.machine.bus.harts.state(self.dbg.focus) {

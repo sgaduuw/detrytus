@@ -32,8 +32,18 @@ fn percent(part: u64, whole: u64) -> String {
 }
 
 impl Mix {
-    /// Count one instruction word; whether it fits a compressed form.
+    /// Count one instruction word; whether it fits a compressed form. A
+    /// bundle counts as the two instructions its slots expand to, and
+    /// is not a candidate for pairing: it is paired already.
     pub fn add(&mut self, word: i64) -> bool {
+        if compressed::is_bundle(word) {
+            for slot in compressed::slots(word) {
+                if let Some(full) = compressed::expand(slot) {
+                    self.add(full);
+                }
+            }
+            return false;
+        }
         let Ok(d) = isa::decode(word) else { return false };
         let form = compressed::form(&d);
         let row = self.rows.entry(mnemonic(&d)).or_default();
@@ -74,6 +84,11 @@ impl Mix {
 
 /// Where a direct branch or jump at `addr` can go.
 fn targets(addr: i64, word: i64) -> Vec<i64> {
+    if compressed::is_bundle(word) {
+        // Both slots' offsets count from the bundle.
+        let slots = compressed::slots(word).into_iter().filter_map(compressed::expand);
+        return slots.flat_map(|full| targets(addr, full)).collect();
+    }
     let Ok(d) = isa::decode(word) else { return vec![] };
     match d.op.format {
         Format::B => vec![addr + 3 * d.off],
@@ -139,6 +154,13 @@ mod tests {
         let out = mix_of("addi a0, a0, 1\naddi a0, a1, 1\naddi a0, a0, 1\n");
         assert!(out.contains("bundles: 0 pairs would save 0 of 3 words"), "{out}");
         let out = mix_of("addi a0, a0, 1\n.word 0\naddi a0, a0, 1\n");
+        assert!(out.contains("bundles: 0 pairs would save 0 of 2 words"), "{out}");
+    }
+
+    #[test]
+    fn a_bundle_counts_its_slots_and_is_paired_already() {
+        let out = mix_of("c.li a0, 1\nc.j 0\naddi a0, a0, 1\n");
+        assert!(out.starts_with("3 instructions written, 3 compressible"), "{out}");
         assert!(out.contains("bundles: 0 pairs would save 0 of 2 words"), "{out}");
     }
 
