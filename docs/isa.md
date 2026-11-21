@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.6, **draft**. Everything here may change until the emulator
+Version 0.7, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -554,6 +554,7 @@ the operation sequentially consistent. Assembler suffixes: `.aq`, `.rl`,
 | −25 | `amomax rd, rs2, (rs1)`   | `rd = mem`; `mem = max(rd, rs2)` |
 | −26 | `amotlut rd, rs2, (rs1), table` | `rd = mem`; `mem = tlut(rd, rs2, table)`, table in `fn[8:0]` |
 | −27 | `cas rd, rs2, (rs1)`      | if `mem = rd` then `mem = rs2`; `rd = ` the old `mem` |
+| −28 | `wrs rs1`                 | wait until the reserved word may have changed, an interrupt is pending, or `time ≥ rs1` (below) |
 
 `amotlut` is one atomic instruction for every tritwise update: with
 `tmax` it sets trits, with `tmin` it clears them, with `tsum` it cycles
@@ -562,9 +563,8 @@ them, which covers what RISC-V spreads across `amoand`, `amoor` and
 unsigned variants. `cas` reads its expected value from `rd` (as x86's
 `cmpxchg` does) so that it fits a three-register format.
 
-**Proposed: waiting on a reservation.** *Under review; not yet in the
-opcode table above, and opcode −28 is held for it.* `wrs rs1` (format I,
-`rd` and `imm` zero) lets a hart sleep until another hart may have
+**Waiting on a reservation.** `wrs rs1` (format I, `rd` and `imm` zero,
+no ordering trits) lets a hart sleep until another hart may have
 changed a word it is watching, instead of spinning on loads. The word is
 the one its last `lr` reserved. `wrs` returns, and execution goes on
 with the next instruction, at the latest when one of these holds:
@@ -1138,10 +1138,8 @@ numbers like the rest.
    guess, to be revisited against measured instruction frequencies.
 3. **Hypervisor support.** Whether ring +1 should grow two-stage
    translation so detrytus can host detrytus guests.
-4. **Waiting on a word.** Proposed as `wrs` (7.9), after RISC-V's
-   Zawrs: a hart sleeps until the word it reserved with `lr` is written,
-   an interrupt is pending, or a deadline passes. Open until accepted,
-   and with it: whether ring 0 should be able to make `wrs` in user mode
-   trap, as RISC-V's `TW` bit does for `wfi`.
+4. **Trapping waits in user mode.** Whether ring 0 should be able to
+   make `wfi` and `wrs` trap in ring −1, as RISC-V's `TW` bit does. Both
+   are harmless there now, since the kernel's timer ends any wait.
 5. **Removing hart 0.** Whether the boot hart may ever be removed, once
    another hart has taken over its duties.

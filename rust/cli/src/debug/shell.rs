@@ -282,7 +282,12 @@ impl Shell {
                 let mark = if h == self.dbg.focus { '*' } else { ' ' };
                 let mut line = format!("{mark} {h:>4}  {state}");
                 if let Some(hart) = self.dbg.machine.hart(h) {
-                    let wait = if hart.waiting() && state == "running" { ", in wfi" } else { "" };
+                    let wait = match (hart.waiting(), hart.watching()) {
+                        _ if state != "running" => "",
+                        (true, true) => ", in wrs",
+                        (true, false) => ", in wfi",
+                        _ => "",
+                    };
                     let (pc, ring) = (hart.pc, hart.ring);
                     line += &format!("  pc {}  ring {ring:+}{wait}", self.dbg.where_(pc));
                 }

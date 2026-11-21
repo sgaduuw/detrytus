@@ -112,6 +112,11 @@ impl Bus {
         self.reservations.insert(self.current, addr);
     }
 
+    /// Whether hart h still holds a reservation, without using it up.
+    pub fn holds_reservation(&self, h: i64) -> bool {
+        self.reservations.contains_key(&h)
+    }
+
     /// Whether the current hart's reservation survives; it is used up
     /// either way.
     pub fn take_reservation(&mut self) -> bool {

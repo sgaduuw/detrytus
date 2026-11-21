@@ -81,9 +81,13 @@ pub struct Hart {
     /// The shared clock, as the machine last set it.
     pub time: i64,
     pub hartid: i64,
-    /// Set by `wfi`: the machine runs the hart again once an interrupt
-    /// is pending.
+    /// Set by `wfi` and `wrs`: the machine runs the hart again once an
+    /// interrupt is pending.
     pub(crate) waiting: bool,
+    /// Set by `wrs`, with `waiting`: the hart also runs again once its
+    /// reservation is gone, or `time` reaches the deadline.
+    pub(crate) watching: bool,
+    pub(crate) deadline: Option<i64>,
     /// Interrupt lines from the hart controller, set by the machine:
     /// software (the mailbox) and external (hot-plug events).
     pub(crate) doorbell: bool,
@@ -124,6 +128,8 @@ impl Hart {
             time: 0,
             hartid,
             waiting: false,
+            watching: false,
+            deadline: None,
             doorbell: false,
             external: false,
             banks: [[0; 9]; 2],
@@ -175,9 +181,14 @@ impl Hart {
         csrs
     }
 
-    /// Whether the hart is waiting in `wfi`.
+    /// Whether the hart is waiting, in `wfi` or `wrs`.
     pub fn waiting(&self) -> bool {
         self.waiting
+    }
+
+    /// Whether the hart is waiting in `wrs`, for its reserved word.
+    pub fn watching(&self) -> bool {
+        self.watching
     }
 
     pub fn reservation(&self) -> Option<i64> {
@@ -478,6 +489,15 @@ impl Hart {
                     self.store(bus, addr, 3, src)?;
                 }
                 self.set_x(d.rd, if ok { 0 } else { 1 });
+            }
+            Kind::Wrs => {
+                // With no reservation there is nothing to wait for: the
+                // word may already have changed.
+                if self.reservation.is_some() && bus.holds_reservation(bus.current) {
+                    self.waiting = true;
+                    self.watching = true;
+                    self.deadline = (d.rs1 != 0).then(|| self.x(d.rs1));
+                }
             }
             Kind::Cas => {
                 let expected = self.x(d.rd);

@@ -1,0 +1,203 @@
+# wrs: waiting on a reservation (docs/isa.md 7.9). Each way out of the
+# wait, on one hart and with another hart doing the waking.
+
+[defaults]
+harts = 3
+prelude = '''
+        .equ  SLOTS, -59049
+        .equ  LOCAL, -78732
+        .equ  STATE, -12
+        .equ  START_PC, -9
+        .equ  CONTROL, -3
+        .equ  SEND, 0
+        .equ  COUNT, 6
+        .equ  POWER, -39366
+        .equ  DATA, 19683
+'''
+
+[[case]]
+name = "with no reservation wrs does not wait"
+harts = 1
+max_steps = 20
+program = '''
+        wrs   zero
+        li    a0, 7
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 7
+
+[[case]]
+name = "a lone hart is not stuck waiting for a store that cannot come"
+# Nothing else could break the reservation: like wfi with nothing to
+# wake it, the wait ends at once.
+harts = 1
+max_steps = 20
+program = '''
+        li    s0, DATA
+        lr    t0, (s0)
+        wrs   zero
+        li    a0, 7
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 7
+
+[[case]]
+name = "the deadline ends the wait, and time skips to it"
+# 100 steps could not reach the deadline without the skip.
+harts = 1
+max_steps = 100
+program = '''
+        li    s0, DATA
+        lr    t0, (s0)
+        csrr  t1, time
+        li    t2, 100000
+        add   s1, t1, t2          # the deadline
+        wrs   s1
+        csrr  t1, time
+        li    a0, 1               # 1: not woken before the deadline
+        bge   t1, s1, 3f
+        li    a0, 0
+3:      li    t6, POWER
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "the deadline ends the wait while another hart keeps running"
+# Hart 1 never touches the word and never waits, so neither a store nor
+# an idle machine can end hart 0's wait: only the deadline.
+max_steps = 2000
+program = '''
+        li    t1, SLOTS + 27
+        la    t2, spin
+        sw    t2, START_PC(t1)
+        li    t2, 1
+        sw    t2, CONTROL(t1)
+        li    s0, DATA
+        lr    t0, (s0)
+        csrr  s1, time
+        addi  s1, s1, 200
+        wrs   s1
+        csrr  t1, time
+        li    a0, 1               # 1: not woken before the deadline
+        bge   t1, s1, 3f
+        li    a0, 0
+3:      li    t6, POWER
+        sw    a0, 0(t6)
+spin:   j     spin
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "wrs keeps the reservation"
+harts = 1
+max_steps = 100
+program = '''
+        li    s0, DATA
+        lr    t0, (s0)
+        csrr  s1, time
+        addi  s1, s1, 50
+        wrs   s1
+        li    t1, 9
+        sc    a0, t1, (s0)        # 0: the reservation held
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 0
+expect.words = { "19683" = 9 }
+
+[[case]]
+name = "another hart's store to the word ends the wait"
+# Hart 1 stores, then keeps running: only the store can wake hart 0.
+program = '''
+        li    s0, DATA
+        lr    t0, (s0)
+        li    t1, SLOTS + 27
+        la    t2, writer
+        sw    t2, START_PC(t1)
+        li    t2, 1
+        sw    t2, CONTROL(t1)
+        wrs   zero
+        lw    a0, 0(s0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+writer: li    t0, 0
+1:      addi  t0, t0, 1
+        li    t1, 50
+        blt   t0, t1, 1b
+        li    t1, DATA
+        li    t2, 5
+        sw    t2, 0(t1)
+2:      j     2b
+'''
+expect.exit_code = 5
+
+[[case]]
+name = "a store to another word does not end the wait"
+# Hart 1 writes the next word, waits, then writes the reserved one. The
+# value hart 0 sees after waking is the second store's.
+program = '''
+        li    s0, DATA
+        lr    t0, (s0)
+        li    t1, SLOTS + 27
+        la    t2, writer
+        sw    t2, START_PC(t1)
+        li    t2, 1
+        sw    t2, CONTROL(t1)
+        wrs   zero
+        lw    a0, 0(s0)
+        lw    a1, 3(s0)
+        add   a0, a0, a1
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+writer: li    t1, DATA
+        li    t2, 1
+        sw    t2, 3(t1)           # the word beside it
+        li    t0, 0
+1:      addi  t0, t0, 1
+        li    t3, 50
+        blt   t0, t3, 1b
+        li    t2, 20
+        sw    t2, 0(t1)
+2:      j     2b
+'''
+expect.exit_code = 21
+
+[[case]]
+name = "an interrupt ends the wait"
+# Interrupts are off (tstatus.IE = 0); the doorbell, enabled in ie, only
+# ends the wait. Hart 1 then keeps running.
+program = '''
+        li    t0, 0t+000          # ie trit 3: software
+        csrw  mie, t0
+        li    s0, DATA
+        lr    t0, (s0)
+        li    t1, SLOTS + 27
+        la    t2, sender
+        sw    t2, START_PC(t1)
+        li    t2, 1
+        sw    t2, CONTROL(t1)
+        wrs   zero
+        li    t0, LOCAL
+        lw    a0, COUNT(t0)
+        li    t6, POWER
+        sw    a0, 0(t6)
+
+sender: li    t0, 0
+1:      addi  t0, t0, 1
+        li    t1, 50
+        blt   t0, t1, 1b
+        li    t1, SLOTS
+        sw    t0, SEND(t1)
+2:      j     2b
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "wrs takes no destination register"
+program = "wrs t0, t1"
+expect.asm_error = "wrs takes 1 operand(s), got 2"

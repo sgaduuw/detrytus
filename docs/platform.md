@@ -41,9 +41,11 @@ rounds. With one hart this is the same machine as before.
 
 `wfi` waits: the hart sits rounds out until an interrupt is pending and
 enabled in its `ie` (in either bank, whatever the rings and `IE` bits).
-When every running hart is waiting, time skips forward to the earliest
-moment one could wake: an enabled timer compare or a scheduled hot-plug
-change. If nothing could ever wake them, they all return from `wfi` at
+`wrs` waits the same way, and also ends once the hart's reservation is
+gone (another hart stored to the word) or `time` reaches its deadline;
+with no reservation it does not wait at all. When every running hart is
+waiting, time skips forward to the earliest moment one could wake: an
+enabled timer compare, a `wrs` deadline or a scheduled hot-plug change. If nothing could ever wake them, they all return from `wfi` at
 once, which the ISA allows.
 
 ## Harts
