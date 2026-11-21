@@ -641,3 +641,37 @@ watchpoint or caught trap on another hart moves the focus there, as an
 all-stop debugger does. Stepping a single hart while the others wait
 would be legal under the memory model, but would make a debugging
 session diverge from `run`, which is worth more.
+
+### 2026-11-21 · Waiting on a word: the proposal
+
+ISA 0.6 (draft) proposes `wrs`, opcode −28 held, written beside the
+atomics (7.9) but kept out of the opcode table until accepted, since a
+table row and its implementation go in together. Multi-hart trylobite
+showed the need: a hart waiting for the kernel lock spins on `amoswap`,
+which on real hardware burns power and bus bandwidth, and in the
+emulator burns steps.
+
+- **Reservation, not value.** `wrs` waits on the word the last `lr`
+  reserved, as RISC-V's Zawrs does. The alternative, "sleep while the
+  word at rs1 equals rs2" (closer to a futex or x86's `umwait`), is one
+  instruction instead of two, but needs a watched-address mechanism of
+  its own. The reservation already is one: `sc` needs it tracked and
+  broken by other harts' stores, and the emulator keeps exactly that on
+  the bus. It also pairs naturally with `sc` for taking the lock once it
+  comes free.
+- **No lost wake-ups.** Check the value after `lr`; a store between the
+  `lr` and the `wrs` breaks the reservation, so `wrs` returns at once.
+- **Ends like `wfi`, plus a deadline.** An enabled pending interrupt
+  ends the wait (so a user program cannot keep a hart asleep past the
+  kernel's timer), as does a lost reservation, or `time` reaching `rs1`
+  when `rs1` is not `r0`. One instruction with an optional deadline
+  rather than Zawrs' pair (no timeout, short timeout); the register
+  convention, `r0` for none, is the one `fence.vm` already uses.
+- **May be a no-op**, like `wfi`: correct code loops anyway, so a simple
+  core need not implement waiting at all.
+
+If accepted: the emulator treats a hart in `wrs` as waiting until its
+bus reservation is gone, an interrupt is pending, or the deadline, which
+also joins the moments the clock may skip to when every hart waits;
+conformance cases cover each way out; trylobite's lock waits with `wrs`
+instead of spinning.
