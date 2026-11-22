@@ -57,6 +57,14 @@ waiting, time skips forward to the earliest moment one could wake: an
 enabled timer compare, a `wrs` deadline or a scheduled hot-plug change. If nothing could ever wake them, they all return from `wfi` at
 once, which the ISA allows.
 
+With a live console (`run` at a terminal, or `--live`) that skip takes
+real time: the clock moves over idle time at about a million ticks a
+second, 20,000 ticks every 20 ms, waiting for a key in between. A
+program that sleeps a million ticks then sleeps about a second, as a
+person watching expects, rather than not at all. Running, the clock
+still moves one tick per step, however fast that is; a run with
+`--input` skips at once, as before, and stays deterministic.
+
 ## Harts
 
 isa.md 5.6 describes harts; this is the reference platform's side.

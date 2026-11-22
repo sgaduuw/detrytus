@@ -51,6 +51,11 @@ pub struct Machine {
     order: Vec<i64>,
     /// Set when every running hart waited with nothing to wake one.
     stalled: bool,
+    /// The most ticks one skip over idle time may move the clock (see
+    /// `set_pace`); None to skip to the next wake-up at once.
+    pace: Option<i64>,
+    /// Set when a skip stopped at that limit, short of the wake-up.
+    paced: bool,
 }
 
 /// Whether hart `h`, waiting, may run: an interrupt pending and enabled
@@ -95,6 +100,8 @@ impl Machine {
             schedule: Vec::new(),
             order: Vec::new(),
             stalled: false,
+            pace: None,
+            paced: false,
         }
     }
 
@@ -210,14 +217,30 @@ impl Machine {
         std::mem::take(&mut self.stalled)
     }
 
+    /// Limit each skip over idle time (when every hart waits for a timer,
+    /// a `wrs` deadline, a hot-plug change or the disk) to `ticks`, so
+    /// that a caller pacing the clock against real time, as a live
+    /// console does, can wait between skips (`take_paced`). None, the
+    /// default, skips to the wake-up at once.
+    pub fn set_pace(&mut self, ticks: Option<i64>) {
+        self.pace = ticks;
+    }
+
+    /// Whether, since the last call, a skip over idle time stopped at the
+    /// pace limit (`set_pace`), short of the wake-up it was moving to.
+    pub fn take_paced(&mut self) -> bool {
+        std::mem::take(&mut self.paced)
+    }
+
     /// As `run`, but stop early, with `StepLimit`, once the machine stalls
-    /// (`take_stalled`); also gives the steps taken.
+    /// (`take_stalled`) or a skip is paced (`take_paced`); also gives the
+    /// steps taken.
     pub fn run_until_stalled(&mut self, max_steps: u64) -> (Outcome, u64) {
         for steps in 0..max_steps {
             if let Some(outcome) = self.round(steps + 1) {
                 return (outcome, steps + 1);
             }
-            if self.stalled {
+            if self.stalled || self.paced {
                 return (Outcome::StepLimit, steps + 1);
             }
         }
@@ -301,7 +324,13 @@ impl Machine {
         let plugs = self.schedule.iter().map(|(t, _)| t - 1).filter(|&t| t > now);
         let disk = self.bus.block.done_at().map(|t| t - 1).filter(|&t| t > now);
         match timers.chain(deadlines).chain(plugs).chain(disk).min() {
-            Some(t) => self.time = t,
+            Some(t) => match self.pace {
+                Some(limit) if t - now > limit => {
+                    self.time = now + limit;
+                    self.paced = true;
+                }
+                _ => self.time = t,
+            },
             None => {
                 for (_, hart) in waiting {
                     wake(hart);

@@ -72,6 +72,7 @@ and hides a failure.
 | `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm`; `error`, `text` and `pyrepr` keep messages and splitting as the Python assembler had them |
 | `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
+| `rust/cli/tests/pace.rs` | pacing the clock over idle time, as a live console does |
 | `rust/conformance/` | the conformance runner (tests only) |
 | `conformance/` | the conformance suite |
 | `examples/` | runnable assembly programs |

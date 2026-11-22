@@ -1023,3 +1023,21 @@ the emulator runs them through the same expansion.
   running on. Typing is answered within a chunk of 10,000 steps. A guest
   that keeps a timer running while idle never stalls and still costs
   CPU; trylobite turns its timer off while idle.
+
+### 2026-11-23 · A live console paces idle time
+
+- **So a guest that sleeps sleeps.** trylobite's `top` redraws every
+  million ticks with a `sleep` that sets a timer. With nothing else to
+  run, every hart waits for that timer and the machine skips the clock
+  straight to it (Time, platform.md), so on a live console top redrew as
+  fast as it could draw. A live run now limits each skip to 20,000 ticks
+  (`Machine::set_pace`) and waits 20 ms, for a key, between them: about
+  a million ticks a second of idle time. The machine stops a chunk at a
+  paced skip as it does at a stall (`take_paced`).
+- **Only idle time is paced.** Running, the clock still moves one tick
+  per step, faster or slower than a million a second depending on the
+  host, so times are only roughly seconds. Tying `time` to the wall
+  clock altogether would make runs depend on the host even without a
+  live console; a run with `--input` still skips at once and stays
+  deterministic. A skip shorter than 20,000 ticks is not slowed at all,
+  which covers the disk: a transfer takes 1,000 ticks plus 100 a block.
