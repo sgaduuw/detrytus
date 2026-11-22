@@ -78,10 +78,11 @@ programs for the integer core. Implemented:
 Floating point and debug triggers are specified but not implemented
 yet.
 
-The machine has an operating system being written for it, trylobite: a
-microkernel with drivers and the filesystem as server processes, a
-shell with pipes and redirection, written in detrytus assembly (it is
-not public yet). Running Linux is not a goal: C and the Linux kernel
+The machine has an operating system being written for it,
+[trylobite](https://github.com/sgaduuw/trylobite): a microkernel with
+drivers and the filesystem as server processes, a shell with pipes and
+redirection, written in detrytus assembly. It is the quickest way to
+see the machine do something real. Running Linux is not a goal: C and the Linux kernel
 assume binary integers and 8-bit bytes throughout
 ([`CONTEXT.md`](CONTEXT.md) explains why).
 
@@ -164,6 +165,8 @@ Running `detrytus` with no arguments lists every option.
 - [`examples/`](examples/): runnable programs.
 - [`conformance/`](conformance/README.md): the conformance suite,
   machine behaviour as data that any implementation runs.
+- [trylobite](https://github.com/sgaduuw/trylobite): the operating
+  system written for the machine.
 
 ## Layout
 
