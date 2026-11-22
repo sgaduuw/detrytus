@@ -25,7 +25,8 @@ output for output, and the Python ones were removed
 ([`docs/rust-plan.md`](docs/rust-plan.md)).
 
 The target is an operating system of its own, a microkernel in a
-separate project (trylobite). Running Linux or other C-era binary
+separate project,
+[trylobite](https://github.com/sgaduuw/trylobite). Running Linux or other C-era binary
 software is not a goal (CONTEXT.md explains why).
 
 ## Tooling
@@ -52,6 +53,7 @@ and hides a failure.
 | `docs/assembler.md` | assembler syntax |
 | `docs/platform.md` | the emulated memory map and devices |
 | `docs/debugger.md` | the debugger's commands |
+| `docs/rust-plan.md` | how the Rust tools replaced the Python ones (history) |
 | `rust/core/src/trits.rs` | balanced-ternary arithmetic on `i64` |
 | `rust/core/src/isa.rs` | the instruction set as data: opcodes, formats, fields, CSRs, decode and encode |
 | `rust/core/src/compressed.rs` | compressed bundles: slots, what a slot expands to, and which slot a full instruction fits |
@@ -59,13 +61,15 @@ and hides a failure.
 | `rust/core/src/hart.rs` | one hart: the fetch loop and what each instruction does, and the events a debugger reads |
 | `rust/core/src/privileged.rs` | traps, interrupts, CSRs, `tret`, `wfi` |
 | `rust/core/src/mmu.rs` | paged virtual memory: the walk, permission checks, the TLB |
-| `rust/core/src/bus.rs` | physical memory and the built-in devices |
+| `rust/core/src/bus.rs` | physical memory and the built-in devices, wired to their registers |
+| `rust/core/src/irq.rs` | the interrupt controller: enables, routes, sources in service |
+| `rust/core/src/block.rs` | the block device: its registers and the command in flight |
 | `rust/core/src/harts.rs` | the hart controller: hart states, mailboxes, group sends, hot-plug events |
 | `rust/core/src/image.rs` | the `.dti` image format: reading and writing |
 | `rust/core/src/entropy.rs` | the seeded entropy source |
 | `rust/core/src/machine.rs` | the platform wired together, and the harts run in rounds |
 | `rust/core/tests/` | the spec sync test |
-| `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm` |
+| `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm`; `error`, `text` and `pyrepr` keep messages and splitting as the Python assembler had them |
 | `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
 | `rust/conformance/` | the conformance runner (tests only) |
