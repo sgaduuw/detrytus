@@ -47,6 +47,11 @@ const LIVE_CHUNK: u64 = 10_000;
 /// How long a stalled machine (Machine::take_stalled) waits for a key
 /// before it runs on.
 const LIVE_WAIT: Duration = Duration::from_millis(20);
+/// With a live console, how fast the clock moves while every hart
+/// waits for it (a timer, a deadline, the disk): ticks per second, so
+/// that a program sleeping a million ticks sleeps about a second rather
+/// than not at all. Running, the clock still moves a tick per step.
+const LIVE_TICKS_PER_SECOND: i64 = 1_000_000;
 
 struct RunArgs {
     files: Vec<String>,
@@ -304,6 +309,8 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     let mut live = None;
     if args.live {
         live = Some(live::Live::start(std::io::stdin().is_terminal()));
+        let per_wait = LIVE_TICKS_PER_SECOND * LIVE_WAIT.as_millis() as i64 / 1000;
+        machine.set_pace(Some(per_wait));
     } else {
         machine.bus.console.closed = true;
     }
@@ -324,9 +331,16 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
             // A machine waiting on the outside waits a little for a key,
             // rather than spin.
             let stalled = machine.take_stalled();
+            let paced = machine.take_paced();
             let console = &mut machine.bus.console;
-            let waiting = stalled && console.input.is_empty() && !console.closed;
+            // A paced skip waits its share of real time too: for a key, or
+            // just waits if no key can come.
+            let keys = console.input.is_empty() && !console.closed;
+            let waiting = (stalled || paced) && keys;
             let typed = live.take(if waiting { LIVE_WAIT } else { Duration::ZERO });
+            if paced && !keys {
+                std::thread::sleep(LIVE_WAIT);
+            }
             console.feed(&typed.text);
             console.closed |= typed.closed;
             if typed.stop {

@@ -134,7 +134,10 @@ goes on, with no step limit, until the program powers off. The terminal
 is switched to pass every key through (no line editing or echo of its
 own, so backspace and Ctrl-C reach the program, which echoes what it
 reads), and switched back when the run ends. Ctrl-D closes the
-console's input; Ctrl-] stops the machine (exit status 130). `--live`
+console's input; Ctrl-] stops the machine (exit status 130). While
+every hart waits for the clock, it moves at about a million ticks a
+second rather than skipping ahead, so a program that sleeps does so in
+real time (docs/platform.md, Time). `--live`
 asks for this from a pipe too, passing bytes on as they arrive and
 closing the console when the pipe ends.
 
