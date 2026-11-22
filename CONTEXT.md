@@ -997,3 +997,29 @@ statement remembers its symbol and E, so a distance beyond 16 trits is
 reported in those terms rather than as an immediate that does not fit.
 The three slot forms are rows of the compressed table like the others;
 the emulator runs them through the same expansion.
+
+### 2026-11-22 · A live console for `run`
+
+- **So a kernel can be used, not only replayed.** trylobite's shell
+  waits at its prompt for input, but `run` closed the console before the
+  first step, so a session ended at the end of `--input`. At a terminal
+  (stdin and stdout both one) without `--input`, or with `--live`, a
+  thread now reads stdin and the bytes reach the console as they come;
+  the end of the pipe, or Ctrl-D at a terminal, closes it. Both
+  terminals, not stdin alone, so that a test harness that captures the
+  output never gets a live console by accident and waits for a key.
+- **The terminal passes every key** (`stty -icanon -echo -isig -iexten
+  -ixon`, put back when the run ends): the guest echoes, edits and acts
+  on Ctrl-C itself, as on a serial line. Output processing stays on, so
+  a newline still returns the carriage. stty rather than a termios crate
+  keeps the command free of dependencies; without stty the run goes on
+  with the terminal as it is. Ctrl-] stops the machine, as telnet's
+  escape, since Ctrl-C now belongs to the guest.
+- **No step limit, and no spinning while it waits.** A live run has no
+  default `--max-steps`. When every running hart waits with nothing in
+  the machine that could wake one (no timer, no block command, no
+  hot-plug change), the machine has stalled: `run_until_stalled` stops
+  the chunk there, and the command sleeps up to 20 ms for a key before
+  running on. Typing is answered within a chunk of 10,000 steps. A guest
+  that keeps a timer running while idle never stalls and still costs
+  CPU; trylobite turns its timer off while idle.

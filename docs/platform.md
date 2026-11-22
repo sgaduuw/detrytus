@@ -30,11 +30,11 @@ RAM pages too; only the program writes are checked.
 | −39366 | power off | writing any value stops the machine; the value becomes the exit code |
 
 Console input is the text `--input FILE` names, queued before the
-first step, plus whatever the debugger's `input` command adds. Once it
-is used up, reads say whether more may come (Console input states,
-below). A run's input is fixed
-in advance, so runs stay deterministic and nothing waits for a person
-to type.
+first step, plus whatever the debugger's `input` command adds, or, with
+a live console (`run` at a terminal, or `--live`), what is typed, as it
+is typed. Once it is used up, reads say whether more may come (Console
+input states, below). With `--input` a run's input is fixed in advance,
+so runs stay deterministic and nothing waits for a person to type.
 
 ## Time
 
@@ -218,7 +218,9 @@ are named; code compares with the names, never with the numbers.
   none. Only code that sleeps until input arrives needs to tell the two
   apart.
 - **`run` closes the console** once its `--input` is used up, or from
-  the start without `--input`, since nothing can type into a run.
+  the start without `--input`, since nothing can type into a run;
+  except with a live console, which closes at Ctrl-D (on a terminal) or
+  when the pipe ends.
 - **`debug` keeps it open**, so `input` can add more; the debugger's
   `eof` command closes it, and `restart` opens it again.
 - **Source 1** is pending while input is waiting or the console is
