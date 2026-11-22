@@ -128,6 +128,16 @@ the console, `-` meaning stdin:
 echo "hello" | detrytus run --input - examples/echo.s
 ```
 
+Started at a terminal without `--input`, `run` has a **live console**
+instead: what you type reaches the program as you type it, and the run
+goes on, with no step limit, until the program powers off. The terminal
+is switched to pass every key through (no line editing or echo of its
+own, so backspace and Ctrl-C reach the program, which echoes what it
+reads), and switched back when the run ends. Ctrl-D closes the
+console's input; Ctrl-] stops the machine (exit status 130). `--live`
+asks for this from a pipe too, passing bytes on as they arrive and
+closing the console when the pipe ends.
+
 `--harts N` starts the machine with N harts (1 to 729), and
 `--plug TIME:HART` / `--unplug TIME:HART` add or remove one while it
 runs:

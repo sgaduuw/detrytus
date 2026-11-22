@@ -49,6 +49,8 @@ pub struct Machine {
     schedule: Vec<(i64, Hotplug)>,
     /// The harts to step this round, kept to save allocating each step.
     order: Vec<i64>,
+    /// Set when every running hart waited with nothing to wake one.
+    stalled: bool,
 }
 
 /// Whether hart `h`, waiting, may run: an interrupt pending and enabled
@@ -92,6 +94,7 @@ impl Machine {
             seeds: Entropy::new(seed.wrapping_add(1)),
             schedule: Vec::new(),
             order: Vec::new(),
+            stalled: false,
         }
     }
 
@@ -198,6 +201,29 @@ impl Machine {
         Outcome::StepLimit
     }
 
+    /// Whether, since the last call, every running hart has waited with
+    /// nothing inside the machine to wake one (no timer set, no block
+    /// command in flight, no hot-plug change due): only the world outside,
+    /// such as console input, could. A live console uses this to sleep
+    /// until something is typed rather than spin.
+    pub fn take_stalled(&mut self) -> bool {
+        std::mem::take(&mut self.stalled)
+    }
+
+    /// As `run`, but stop early, with `StepLimit`, once the machine stalls
+    /// (`take_stalled`); also gives the steps taken.
+    pub fn run_until_stalled(&mut self, max_steps: u64) -> (Outcome, u64) {
+        for steps in 0..max_steps {
+            if let Some(outcome) = self.round(steps + 1) {
+                return (outcome, steps + 1);
+            }
+            if self.stalled {
+                return (Outcome::StepLimit, steps + 1);
+            }
+        }
+        (Outcome::StepLimit, max_steps)
+    }
+
     /// One step (a round): None while the machine keeps running. A
     /// power-off counts this one step.
     pub fn step(&mut self) -> Option<Outcome> {
@@ -280,6 +306,7 @@ impl Machine {
                 for (_, hart) in waiting {
                     wake(hart);
                 }
+                self.stalled = true;
             }
         }
     }

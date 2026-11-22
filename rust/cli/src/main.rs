@@ -4,8 +4,9 @@
 //! command it replaced (docs/rust-plan.md), held there by the recorded
 //! transcripts in tests/golden/.
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use detrytus_asm::disasm::disassemble;
 use detrytus_core::hart::Event;
@@ -14,6 +15,7 @@ use detrytus_core::{Hotplug, Machine, Outcome};
 
 mod debug;
 mod disk;
+mod live;
 mod mix;
 mod program;
 
@@ -23,7 +25,7 @@ use program::{Loaded, load, load_one, strerror};
 
 const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
-                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
@@ -36,20 +38,27 @@ pub(crate) const NO_INPUT: u8 = 66;
 const NOT_IMPLEMENTED: u8 = 69;
 const UNHANDLED_TRAP: u8 = 70;
 const STEP_LIMIT: u8 = 124;
+const STOPPED: u8 = 130; // Ctrl-] on a live console, as for Ctrl-C
 
 /// Console output is written out between chunks of this many steps.
 const CHUNK: u64 = 100_000;
+/// With a live console, smaller chunks, so that typing is answered at once.
+const LIVE_CHUNK: u64 = 10_000;
+/// How long a stalled machine (Machine::take_stalled) waits for a key
+/// before it runs on.
+const LIVE_WAIT: Duration = Duration::from_millis(20);
 
 struct RunArgs {
     files: Vec<String>,
     ram_pages: i64,
-    max_steps: u64,
+    max_steps: Option<u64>,
     stats: bool,
     trace: bool,
     mix: bool,
     harts: i64,
     hotplug: Vec<(i64, Hotplug)>,
     input: Option<String>,
+    live: bool,
     disk: Option<DiskSpec>,
 }
 
@@ -80,13 +89,14 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     let mut run = RunArgs {
         files: Vec::new(),
         ram_pages: 729,
-        max_steps: 10_000_000,
+        max_steps: None,
         stats: false,
         trace: false,
         mix: false,
         harts: 1,
         hotplug: Vec::new(),
         input: None,
+        live: false,
         disk: None,
     };
     let mut disk = DiskArgs::default();
@@ -94,7 +104,8 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--ram-pages" => run.ram_pages = number(&arg, args.next())?,
-            "--max-steps" => run.max_steps = number(&arg, args.next())?,
+            "--max-steps" => run.max_steps = Some(number(&arg, args.next())?),
+            "--live" => run.live = true,
             "--stats" => run.stats = true,
             "--trace" => run.trace = true,
             "--mix" => run.mix = true,
@@ -117,6 +128,17 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     }
     if run.input.as_deref() == Some("-") && run.files.iter().any(|f| f == "-") {
         return Err(usage("stdin can be a FILE or the --input, not both"));
+    }
+    if run.live && run.input.is_some() {
+        return Err(usage("--input and --live both give the console its input"));
+    }
+    // Typed at a terminal, with the output on one, the console is live.
+    let terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    if run.input.is_none() && terminal {
+        run.live = true;
+    }
+    if run.live && run.files.iter().any(|f| f == "-") {
+        return Err(usage("stdin can be a FILE or the live console, not both"));
     }
     Ok(run)
 }
@@ -277,8 +299,15 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     if let Some(path) = &args.input {
         machine.bus.console.feed(&read_input(path)?);
     }
-    // Nothing can type into a run: once its input is read, no more comes.
-    machine.bus.console.closed = true;
+    // Without a live console nothing can type into a run: once its input
+    // is read, no more comes. A live one runs until it powers off.
+    let mut live = None;
+    if args.live {
+        live = Some(live::Live::start(std::io::stdin().is_terminal()));
+    } else {
+        machine.bus.console.closed = true;
+    }
+    let max_steps = args.max_steps.unwrap_or(if args.live { u64::MAX } else { 10_000_000 });
     if let Some(spec) = &args.disk {
         machine.bus.block.disk = Some(Box::new(spec.open()?));
     }
@@ -291,10 +320,29 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     let mut stdout = std::io::stdout();
     let (mut done, mut printed) = (0u64, 0usize);
     let result = loop {
+        if let Some(live) = &mut live {
+            // A machine waiting on the outside waits a little for a key,
+            // rather than spin.
+            let stalled = machine.take_stalled();
+            let console = &mut machine.bus.console;
+            let waiting = stalled && console.input.is_empty() && !console.closed;
+            let typed = live.take(if waiting { LIVE_WAIT } else { Duration::ZERO });
+            console.feed(&typed.text);
+            console.closed |= typed.closed;
+            if typed.stop {
+                break Err(Fail::after_output("stopped".to_string(), STOPPED));
+            }
+        }
         // Tracing runs one step at a time, printing what each executed.
-        let chunk = if args.trace { 1 } else { CHUNK.min(args.max_steps - done) };
+        let size = if live.is_some() { LIVE_CHUNK } else { CHUNK };
+        let chunk = if args.trace { 1 } else { size.min(max_steps - done) };
         let rings: Vec<(i64, i64)> = machine.harts().map(|(h, hart)| (h, hart.ring)).collect();
-        let outcome = machine.run(chunk);
+        // A live run stops as soon as the machine waits on the outside.
+        let (outcome, ran) = if live.is_some() {
+            machine.run_until_stalled(chunk)
+        } else {
+            (machine.run(chunk), chunk)
+        };
         for (h, event) in machine.take_events() {
             if let Event::Execute { pc, word } = event {
                 mix.add(word);
@@ -320,8 +368,8 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
                 break Ok((code & 0xFF) as u8);
             }
             Outcome::StepLimit => {
-                done += chunk;
-                if done >= args.max_steps {
+                done += ran;
+                if done >= max_steps {
                     let message = format!("no power-off after {done} steps");
                     break Err(Fail::after_output(message, STEP_LIMIT));
                 }
