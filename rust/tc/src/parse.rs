@@ -10,7 +10,7 @@ pub struct Parser<'a> {
     file: &'a str,
 }
 
-const TYPE_WORDS: [&str; 5] = ["int", "tryte", "trit", "bool", "void"];
+const TYPE_WORDS: [&str; 6] = ["int", "tryte", "trit", "bool", "void", "struct"];
 
 /// Binary operators by precedence, loosest first (trice.md section 5).
 const LEVELS: [&[&str]; 10] = [
@@ -104,7 +104,10 @@ impl<'a> Parser<'a> {
                 "trit" => Type::Trit,
                 "bool" => Type::Bool,
                 "void" => Type::Void,
-                "struct" => return self.err("structs are not supported yet"),
+                "struct" => {
+                    self.next();
+                    return Ok(Type::Struct(self.ident()?));
+                }
                 _ => return self.err(format!("expected a type, found {w}")),
             },
             other => return self.err(format!("expected a type, found {}", describe(other))),
@@ -149,6 +152,33 @@ impl<'a> Parser<'a> {
             let value = self.expr()?;
             self.expect(";")?;
             return Ok(Item::Const { ty, name, value, line });
+        }
+        if self.is_word("struct")
+            && matches!(self.peek_at(1), Tok::Ident(_))
+            && matches!(self.peek_at(2), Tok::Punct("{"))
+        {
+            self.next();
+            let name = self.ident()?;
+            self.expect("{")?;
+            let mut fields = Vec::new();
+            while !self.eat("}") {
+                if *self.peek() == Tok::Eof {
+                    return self.err("struct not closed");
+                }
+                let ty = self.ty()?;
+                let field = self.ident()?;
+                let array = if self.eat("[") {
+                    let n = self.expr()?;
+                    self.expect("]")?;
+                    Some(n)
+                } else {
+                    None
+                };
+                self.expect(";")?;
+                fields.push((ty, field, array));
+            }
+            self.expect(";")?;
+            return Ok(Item::Struct { name, fields, line });
         }
         let external = self.is_word("extern");
         if external {
@@ -200,9 +230,26 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let init = if self.eat("=") { Some(self.expr()?) } else { None };
+        let init = if self.eat("=") { Some(self.initialiser()?) } else { None };
         self.expect(";")?;
         Ok((array, init))
+    }
+
+    /// An expression, or a list of initialisers in braces.
+    fn initialiser(&mut self) -> Result<Expr, Error> {
+        let line = self.line();
+        if !self.eat("{") {
+            return self.expr();
+        }
+        let mut items = Vec::new();
+        while !self.eat("}") {
+            items.push(self.initialiser()?);
+            if !self.eat(",") {
+                self.expect("}")?;
+                break;
+            }
+        }
+        Ok(Expr { kind: ExprKind::List(items), line })
     }
 
     fn block(&mut self) -> Result<Vec<Stmt>, Error> {
@@ -459,7 +506,10 @@ impl<'a> Parser<'a> {
                 let Tok::Punct(op) = self.next() else { unreachable!() };
                 e = Expr { kind: ExprKind::Step { op, post: true, target: Box::new(e) }, line };
             } else if self.is_punct(".") || self.is_punct("->") {
-                return self.err("structs are not supported yet");
+                let arrow = self.is_punct("->");
+                self.next();
+                let field = self.ident()?;
+                e = Expr { kind: ExprKind::Field(Box::new(e), field, arrow), line };
             } else {
                 return Ok(e);
             }

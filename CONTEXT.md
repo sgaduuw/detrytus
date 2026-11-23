@@ -1106,3 +1106,32 @@ passing its tests unchanged; then `bin/wc`.
   output still says `li a0, SYS_WRITE`; the file is `.include`d where
   the import stands, by a path relative to where the output is
   assembled.
+
+### 2026-11-23 · What porting trylobite's tools asked of Trice
+
+- **The ports came first.** trylobite's wc, grep, head and upper were
+  rewritten in Trice before the compiler grew, to see what real
+  programs need. They needed none of the features the first compiler
+  left out. What they did need was for unused helpers to cost nothing:
+  every program imports trylobite's `lib/io.tc` whole, so `upper` carried
+  all of it.
+- **Unused functions are left out, after checking.** The compiler
+  follows calls from `main`, and counts a function that an `asm` block
+  or imported assembly names (an operand of an instruction, not a
+  comment) as reached, since it cannot see what assembly calls. An
+  unreached function is still compiled, so its errors are reported,
+  and then dropped with its strings. With no `main` everything is kept.
+- **Structs follow abi.md 1.2 exactly**, so a struct global with an
+  initialiser is emitted as whole words: the trytes of a word-aligned
+  struct are packed three to a word, low tryte first (isa.md 5.2),
+  because a label names a word's centre and a leading tryte field sits
+  below it. Struct types are kept by name, with layouts in a registry,
+  so a struct can point to its own kind.
+- **Struct assignment copies**, word by word (or tryte by tryte), and
+  as a loop past nine words. Struct values in calls and results stay in
+  section 11's list; a function takes or fills a struct through a
+  pointer.
+- **A call with more than six arguments stores each argument as it is
+  evaluated**, the seventh onward where abi.md 2.2 puts them and the
+  first six above, then loads `a0` to `a5`. Evaluation stays left to
+  right and needs one temporary however many arguments there are.
