@@ -159,6 +159,9 @@ what executed, `asm --mix` what a source file holds, with how many words
 pairing compressible neighbours into bundles would save. It is how the
 compressed table is judged against real code.
 
+`detrytus tc FILE.tc -o FILE.dti` compiles a program in Trice, the
+machine's first compiled language ([`docs/trice.md`](docs/trice.md)).
+
 Running `detrytus` with no arguments lists every option.
 
 ## Documentation
@@ -172,8 +175,8 @@ Running `detrytus` with no arguments lists every option.
 - [`docs/debugger.md`](docs/debugger.md): the debugger's commands.
 - [`docs/abi.md`](docs/abi.md): how compiled code lays out data and
   calls functions.
-- [`docs/trice.md`](docs/trice.md): Trice, the C-shaped language whose
-  compiler is planned here (draft; no compiler yet).
+- [`docs/trice.md`](docs/trice.md): Trice, the C-shaped language that
+  `detrytus tc` compiles.
 - [`CONTEXT.md`](CONTEXT.md): the decisions behind the design and why
   they were made.
 - [`docs/rust-plan.md`](docs/rust-plan.md): how the implementation

@@ -1,4 +1,4 @@
-//! The `detrytus` command: `asm`, `run` and `debug`.
+//! The `detrytus` command: `asm`, `run`, `debug` and `tc`.
 //!
 //! Its output, messages and exit statuses are those of the Python
 //! command it replaced (docs/rust-plan.md), held there by the recorded
@@ -18,6 +18,7 @@ mod disk;
 mod live;
 mod mix;
 mod program;
+mod tc;
 
 use disk::DiskSpec;
 
@@ -29,7 +30,8 @@ const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] FILE...";
+                    [--disk FILE [--disk-blocks N]] FILE...
+       detrytus tc FILE [-o FILE]";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
 const USAGE_ERROR: u8 = 2;
@@ -486,6 +488,7 @@ fn main() -> ExitCode {
         Some("asm") => cmd_asm(args),
         Some("run") => parse_run(args).and_then(run),
         Some("debug") => cmd_debug(args),
+        Some("tc") => tc::cmd_tc(args),
         Some("--version") => {
             println!("detrytus {}", env!("CARGO_PKG_VERSION"));
             Ok(0)

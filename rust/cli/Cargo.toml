@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 detrytus-asm = { version = "0.1.0", path = "../asm" }
 detrytus-core = { version = "0.1.0", path = "../core" }
+detrytus-tc = { version = "0.1.0", path = "../tc" }
 
 [dev-dependencies]
 toml = "0.8"

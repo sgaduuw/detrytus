@@ -1086,3 +1086,23 @@ next. The owner settled these choices:
 
 The first milestone is trylobite's `bin/echo` rewritten in Trice,
 passing its tests unchanged; then `bin/wc`.
+
+### 2026-11-23 · The first Trice compiler walks the tree
+
+- **Correct before small.** `rust/tc` checks types as it generates
+  code, straight from the tree: values in `t0` to `t6` as a stack,
+  locals in frame slots reached from `s0`, the temporaries a call must
+  keep pushed around it. trylobite's `bin/echo` comes out at about 80
+  words against 21 hand-written. The IR and register allocation of the
+  design's milestone 5 are what shrink it; until then the output is
+  meant to be obviously right, and easy to read beside its source
+  (each statement carries a `# file:line` comment).
+- **Comparisons as values need no branch.** `x > y` as a bool is
+  `sign(2·cmp(x, y) − 1)` and `x >= y` is `sign(2·cmp(x, y) + 1)`:
+  `cmp`, `add`, `cmpi`, with no label, so the assembler can still
+  bundle around it. In conditions, comparisons branch directly.
+- **Imported assembly is read by the assembler's own parser** for its
+  `.equ` values, so a trylobite program writes `SYS_WRITE` and the
+  output still says `li a0, SYS_WRITE`; the file is `.include`d where
+  the import stands, by a path relative to where the output is
+  assembled.
