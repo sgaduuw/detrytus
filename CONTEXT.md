@@ -1135,3 +1135,27 @@ passing its tests unchanged; then `bin/wc`.
   evaluated**, the seventh onward where abi.md 2.2 puts them and the
   first six above, then loads `a0` to `a5`. Evaluation stays left to
   right and needs one temporary however many arguments there are.
+
+### 2026-11-23 · Registers before an IR
+
+- **Rules, not an optimiser.** Register allocation proper needs an
+  IR. Most of what it would win in these programs comes from a few
+  rules the tree walker can follow. Scalar locals go in `s1` to `s8`,
+  and leaves keep their parameters in `a0` to `a5`. Variables and
+  constants are used in place, with no copy to a temporary. A frame
+  pointer is kept only when something is in memory, and with `.gp`
+  globals are reached by name. trylobite's `wc` went from 1,618 trytes
+  to 1,111 (659 hand-written), and `echo` from 247 to 220 (70).
+- **Order stays left to right.** An argument that is a variable is put
+  in its register after the arguments that need code, so it must not
+  change in between. A register variable is moved early only when no
+  other argument assigns to it, and a variable in memory only when no
+  other argument calls or assigns. A comparison or sum copies a
+  register variable first when its right side assigns to it.
+- **A trit in memory is cut to a trit.** `st` keeps nine trits, so a
+  `trit` stored from a wider value needs `tex` first. That was missing
+  in the first compiler, and so was cutting arguments and results to a
+  `tryte` or `trit` parameter or return type. abi.md 2.2 says the
+  value travels as itself, so the caller cuts it.
+- **Test programs run twice**, with and without a global pointer
+  (`tests/bare_gp.s`), and must agree.

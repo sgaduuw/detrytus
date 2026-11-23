@@ -263,12 +263,26 @@ added without changing what is above.
 `-o OUT.dti` assembles it into an image as well. Errors name the file
 and line; warnings go to standard error.
 
-It walks the tree and does no optimisation yet: an expression's values
-live in `t0` to `t6` (an expression that needs more than seven at once
-is refused), every function keeps a frame pointer, and every local has
-a stack slot. Code is a few times the size of hand-written assembly
-(trylobite's `bin/echo` is about 80 words against 21), which is what
-the planned IR and register allocation are for.
+It walks the tree, with a few rules in place of an optimiser:
+
+- An expression's values live in `t0` to `t6` (an expression that
+  needs more than seven at once is refused), but a variable or a
+  constant is used where it is, and goes straight into an argument
+  register.
+- A scalar local whose address is never taken lives in a saved
+  register, `s1` to `s8`, while one is free; other locals live in the
+  frame.
+- A leaf, a function that makes no calls, keeps its parameters in
+  `a0` to `a5` and its locals in the free ones. With nothing in
+  memory it needs no frame at all.
+- Only a function with locals in memory keeps a frame pointer.
+- When imported assembly sets `.gp`, a global scalar is loaded and
+  stored by name, in one instruction.
+
+Code is still two to three times the size of hand-written assembly:
+trylobite's `bin/wc` is 1,111 trytes against 659. Keeping values in
+registers across statements is the next step, which is what an IR is
+for.
 
 Not in it yet, though specified above: `tlut`, `tex` and `tins`. A
 `which` arm must be within `br3`'s reach of 3,280 instructions.

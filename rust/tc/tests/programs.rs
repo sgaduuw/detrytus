@@ -1,5 +1,6 @@
 //! Trice programs compiled, assembled and run on the bare machine
-//! (tests/bare.s), and programs the compiler must refuse.
+//! (tests/bare.s, and again with a global pointer, tests/bare_gp.s),
+//! and programs the compiler must refuse.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -10,13 +11,17 @@ static COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// A program's file: `bare.s` imported and `putc` declared ahead of `src`.
 fn write(src: &str) -> PathBuf {
+    write_with(src, "bare.s")
+}
+
+fn write_with(src: &str, start: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "detrytus-tc-{}-{}",
         std::process::id(),
         COUNT.fetch_add(1, Ordering::SeqCst)
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let bare = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/bare.s");
+    let bare = format!("{}/tests/{start}", env!("CARGO_MANIFEST_DIR"));
     let path = dir.join("main.tc");
     let text = format!("import \"{bare}\";\nextern void putc(int c);\n{src}");
     std::fs::write(&path, text).unwrap();
@@ -28,9 +33,16 @@ fn compile(src: &str) -> Result<detrytus_tc::Output, detrytus_tc::Error> {
     detrytus_tc::compile(&path, path.parent().unwrap())
 }
 
-/// The exit code and console output of running `src`.
+/// The exit code and console output of running `src`, the same with
+/// and without a global pointer.
 fn run(src: &str) -> (i64, String) {
-    let path = write(src);
+    let plain = run_with(src, "bare.s");
+    assert_eq!(run_with(src, "bare_gp.s"), plain, "with .gp");
+    plain
+}
+
+fn run_with(src: &str, start: &str) -> (i64, String) {
+    let path = write_with(src, start);
     let out = detrytus_tc::compile(&path, path.parent().unwrap())
         .unwrap_or_else(|e| panic!("does not compile: {e}"));
     let shown = path.with_extension("s").display().to_string();
@@ -233,6 +245,12 @@ fn trytes_narrow_when_stored() {
     assert_eq!(exit(src), -9841);
     assert_eq!(exit("int main() { int x = 9842; return (tryte) x; }"), -9841);
     assert_eq!(exit("int main() { int x = 2; return (trit) x; }"), -1);
+    // Arguments and results are cut to their types too.
+    let src = "
+        int t(trit x) { return x; }
+        tryte r(int x) { return x; }
+        int main() { int two = 2; return t(two) * 100000 + r(9842); }";
+    assert_eq!(exit(src), -100_000 - 9841);
 }
 
 #[test]
@@ -483,4 +501,50 @@ fn struct_errors() {
         refused("struct s { int a; }; int main() { struct s v; return v + 1; }"),
         "+ does not take a struct s and an int"
     );
+}
+
+#[test]
+fn locals_live_in_registers_and_memory() {
+    // Twelve locals: eight fit the saved registers, the rest the frame;
+    // one whose address is taken stays in memory.
+    let src = "
+        void set(int *p) { *p = 5; }
+        int main() {
+            int a = 1; int b = 2; int c = 3; int d = 4; int e = 5; int f = 6;
+            int g = 7; int h = 8; int i = 9; int j = 10; int k = 11; int m = 0;
+            set(&m);
+            for (int n = 0; n < 3; n++) { int x = n; a += x; }
+            { int y = 100; b += y; }
+            tryte t = 9841;
+            t++;
+            trit u = 1;
+            u += 1;
+            return a + b + c + d + e + f + g + h + i + j + k + m * 1000 + t + u * 10000;
+        }";
+    assert_eq!(exit(src), 4 + 102 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 5000 - 9841 - 10000);
+    // A leaf keeps its parameters and locals in argument registers.
+    let src = "
+        int sum3(int a, int b, int c) { int s = a + b; s += c; return s; }
+        int main() { int x = 4; return sum3(x, x + 1, sum3(1, 1, 1)) + x; }";
+    assert_eq!(exit(src), 4 + 5 + 3 + 4);
+    let out =
+        compile("int leaf(int a) { int b = a * 2; return b; } int main() { return leaf(3); }")
+            .unwrap();
+    let leaf = out.assembly.split("leaf:").nth(1).unwrap().split("main:").next().unwrap();
+    assert!(!leaf.contains("sp"), "a leaf needs no frame:\n{leaf}");
+}
+
+#[test]
+fn reading_a_variable_waits_for_earlier_arguments() {
+    let src = "
+        int g;
+        int bump() { g = g + 10; return 1; }
+        int two(int a, int b) { return a * 100 + b; }
+        int main() {
+            int x = 1;
+            int r = two(x++, x);
+            g = 5;
+            return r * 1000 + two(bump(), g);
+        }";
+    assert_eq!(exit(src), 102 * 1000 + 115);
 }
