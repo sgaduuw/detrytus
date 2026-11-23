@@ -170,6 +170,10 @@ Running `detrytus` with no arguments lists every option.
 - [`docs/platform.md`](docs/platform.md): the emulated memory map and
   devices.
 - [`docs/debugger.md`](docs/debugger.md): the debugger's commands.
+- [`docs/abi.md`](docs/abi.md): how compiled code lays out data and
+  calls functions.
+- [`docs/trice.md`](docs/trice.md): Trice, the C-shaped language whose
+  compiler is planned here (draft; no compiler yet).
 - [`CONTEXT.md`](CONTEXT.md): the decisions behind the design and why
   they were made.
 - [`docs/rust-plan.md`](docs/rust-plan.md): how the implementation

@@ -53,6 +53,8 @@ and hides a failure.
 | `docs/assembler.md` | assembler syntax |
 | `docs/platform.md` | the emulated memory map and devices |
 | `docs/debugger.md` | the debugger's commands |
+| `docs/abi.md` | the ABI: data layout and the calling convention for compiled code |
+| `docs/trice.md` | the Trice language (its compiler, `rust/tc`, is not written yet) |
 | `docs/rust-plan.md` | how the Rust tools replaced the Python ones (history) |
 | `rust/core/src/trits.rs` | balanced-ternary arithmetic on `i64` |
 | `rust/core/src/isa.rs` | the instruction set as data: opcodes, formats, fields, CSRs, decode and encode |
