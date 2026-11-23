@@ -58,6 +58,9 @@ pub(crate) enum Unit {
     Include {
         path: String,
         consts: Vec<(String, i128)>,
+        /// The operands of its instructions, which name the functions
+        /// it may call.
+        operands: String,
         file: String,
         line: usize,
     },
@@ -107,12 +110,13 @@ impl Loader {
                     self.load(&target, &target_shown, Some((shown, *line)))?;
                 } else if rel.ends_with(".s") {
                     let text = Self::read(&target, &target_shown, Some((shown, *line)))?;
-                    let consts =
+                    let (consts, operands) =
                         equates(&text, &target_shown).map_err(|m| Error::new(shown, *line, m))?;
                     let path = relative(&self.out_dir, &absolute(&target));
                     self.units.push(Unit::Include {
                         path,
                         consts,
+                        operands,
                         file: shown.into(),
                         line: *line,
                     });
@@ -128,13 +132,20 @@ impl Loader {
 }
 
 /// The constants an assembly file's `.equ` and `.set` lines define, in
-/// order, with what its includes define. A constant whose value needs a
-/// label is left out: only the assembler knows it.
-fn equates(text: &str, shown: &str) -> Result<Vec<(String, i128)>, String> {
+/// order, with what its includes define, and the operands of its
+/// instructions. A constant whose value needs a label is left out: only
+/// the assembler knows it.
+#[allow(clippy::type_complexity)]
+fn equates(text: &str, shown: &str) -> Result<(Vec<(String, i128)>, String), String> {
     let statements = detrytus_asm::source::parse(text, Some(shown)).map_err(|e| e.to_string())?;
     let mut symbols = detrytus_asm::expr::Symbols::new();
     let mut out = Vec::new();
+    let mut operands = String::new();
     for s in statements {
+        if !s.mnemonic.starts_with('.') {
+            operands.push_str(&s.operands.join(" "));
+            operands.push('\n');
+        }
         if (s.mnemonic == ".equ" || s.mnemonic == ".set")
             && s.operands.len() == 2
             && let Ok(v) = detrytus_asm::expr::evaluate(&s.operands[1], &symbols, None)
@@ -143,7 +154,7 @@ fn equates(text: &str, shown: &str) -> Result<Vec<(String, i128)>, String> {
             out.push((s.operands[0].clone(), v));
         }
     }
-    Ok(out)
+    Ok((out, operands))
 }
 
 fn absolute(p: &Path) -> PathBuf {

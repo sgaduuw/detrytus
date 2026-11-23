@@ -309,3 +309,178 @@ fn comparing_with_minus_one_warns() {
     .unwrap();
     assert!(out.warnings.is_empty());
 }
+
+#[test]
+fn functions_nothing_calls_are_left_out() {
+    let out = compile("int unused() { return 1; } int main() { return 0; }").unwrap();
+    assert!(!out.assembly.contains("unused:"));
+    // putc is reached from main, and an asm block may name a function.
+    let out = compile(
+        "int called() { return 2; } int named() { return 3; }
+         int main() { putc(called()); asm {\n call named # not unused2\n} return 0; }
+         int unused2() { return 4; }",
+    )
+    .unwrap();
+    assert!(out.assembly.contains("called:") && out.assembly.contains("named:"));
+    assert!(!out.assembly.contains("unused2:"));
+    // They are still checked.
+    assert_eq!(refused("int unused() { return x; } int main() { return 0; }"), "unknown name x");
+}
+
+#[test]
+fn structs_follow_the_abi_layout() {
+    let src = "
+        struct example { int a; tryte b; tryte c; int d; };
+        struct bytes { tryte x; tryte y; tryte z; };
+        int main() { return sizeof(struct example) * 10 + sizeof(struct bytes); }";
+    assert_eq!(exit(src), 93);
+}
+
+#[test]
+fn struct_fields_and_pointers() {
+    let src = "
+        struct point { int x; tryte tag; int y; };
+        struct point g;
+        int area(struct point *p) { return p->x * p->y; }
+        int main() {
+            struct point p;
+            p.x = 6;
+            p.y = 7;
+            p.tag = 'k';
+            g.x = 2;
+            g.y = p.x;
+            struct point *q = &g;
+            q->tag = 1;
+            return area(&p) * 1000 + area(q) * 10 + g.tag + (p.tag == 'k' ? 100000 : 0);
+        }";
+    assert_eq!(exit(src), 100_000 + 42_000 + 120 + 1);
+}
+
+#[test]
+fn structs_nest_and_make_arrays() {
+    let src = "
+        struct inner { tryte a; int b; };
+        struct outer { tryte t; struct inner in; struct inner more[3]; };
+        struct outer o[2];
+        int main() {
+            for (int i = 0; i < 2; i++) {
+                o[i].t = i;
+                o[i].in.b = 10 * i;
+                for (int k = 0; k < 3; k++) o[i].more[k].b = 100 * i + k;
+            }
+            struct outer *p = o;
+            p++;
+            struct inner *m = &p->more[2];
+            return p->in.b + m->b * 100 + (&o[1] - &o[0]) * 100000;
+        }";
+    assert_eq!(exit(src), 10 + 10_200 + 100_000);
+}
+
+#[test]
+fn structs_are_copied_by_assignment() {
+    let src = "
+        struct small { int a; int b; };
+        struct big { int w[20]; tryte last; };
+        struct big x;
+        int main() {
+            struct small s = { 3, 4 };
+            struct small t;
+            t = s;
+            s.a = 9;
+            struct big y;
+            for (int i = 0; i < 20; i++) x.w[i] = i;
+            x.last = 5;
+            y = x;
+            x.w[19] = 0;
+            struct small u = t;
+            return u.a * 1000 + t.b * 100 + y.w[19] + y.last * 10 + s.a * 0;
+        }";
+    assert_eq!(exit(src), 3000 + 400 + 19 + 50);
+    let src = "
+        struct trytes { tryte a; tryte b; tryte c; tryte d; };
+        int main() {
+            struct trytes p = { 1, 2, 3 };
+            struct trytes q;
+            q.d = 9;
+            q = p;
+            return q.a * 1000 + q.b * 100 + q.c * 10 + q.d;
+        }";
+    assert_eq!(exit(src), 1230);
+}
+
+#[test]
+fn global_initialisers() {
+    let src = "
+        int primes[5] = { 2, 3, 5, 7 };
+        tryte word[6] = \"tern\";
+        struct entry { tryte kind; int value; tryte *name; };
+        struct entry table[2] = { { 'a', -5, \"one\" }, { 'b', 3812798742493 } };
+        int *p = &primes[0];
+        int main() {
+            putc(word[0]);
+            putc(*table[0].name);
+            return primes[3] * 1000 + primes[4] + word[3] * 0 + table[0].kind
+                 + table[0].value * 10 + (table[1].value == 3812798742493 ? 100000 : 0)
+                 + (table[1].name == 0 ? 1000000 : 0) + (word[4] == 0 ? 10000000 : 0);
+        }";
+    assert_eq!(run(src), (7000 + 'a' as i64 - 50 + 100_000 + 1_000_000 + 10_000_000, "to".into()));
+}
+
+#[test]
+fn local_initialisers() {
+    let src = "
+        struct pair { tryte k; int v; };
+        int main() {
+            int a[4] = { 1, 2 };
+            tryte s[5] = \"hey\";
+            struct pair ps[2] = { { 'x', 7 } };
+            int n = 0;
+            while (s[n] != 0) n++;
+            return a[0] * 1000 + a[1] * 100 + a[2] * 10 + a[3] + n * 10000
+                 + ps[0].v * 100000 + ps[1].v + ps[1].k;
+        }";
+    assert_eq!(exit(src), 1200 + 30_000 + 700_000);
+}
+
+#[test]
+fn calls_with_more_than_six_arguments() {
+    let src = "
+        int nine(int a, int b, int c, int d, int e, int f, tryte g, int h, tryte i) {
+            return a + 2*b + 3*c + 4*d + 5*e + 6*f + 7*g + 8*h + 9*i;
+        }
+        int id(int x) { return x; }
+        int main() {
+            int one = 1;
+            return 1000 * id(1) + nine(1, 1, 1, 1, id(1), 1, one, id(nine(0, 0, 0, 0, 0, 0, 0, 0, 1) - 8), 1);
+        }";
+    assert_eq!(exit(src), 1000 + 45);
+}
+
+#[test]
+fn struct_errors() {
+    assert_eq!(refused("struct s x; int main() { return 0; }"), "struct s is not defined");
+    assert_eq!(
+        refused("struct s { int a; }; int main() { struct s v; return v.b; }"),
+        "struct s has no field b"
+    );
+    assert_eq!(
+        refused("struct s { int a; }; int main() { struct s v; struct s *p = &v; return p.a; }"),
+        "struct s* is a pointer: use ->a"
+    );
+    assert_eq!(
+        refused("struct s { int a; }; int f(struct s v) { return 0; } int main() { return 0; }"),
+        "pass a pointer to the struct: v cannot be one yet"
+    );
+    assert_eq!(
+        refused("int a[2] = { 1, 2, 3 }; int main() { return 0; }"),
+        "3 initialisers for 2 elements"
+    );
+    assert_eq!(
+        refused("tryte s[3] = \"abc\"; int main() { return 0; }"),
+        "the string needs 4 trytes with its 0"
+    );
+    assert_eq!(
+        refused("struct s { int a; }; int main() { struct s v; return v + 1; }"),
+        "+ does not take a struct s and an int"
+    );
+}

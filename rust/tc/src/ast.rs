@@ -1,5 +1,64 @@
 //! The parsed program.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+/// A struct's layout (abi.md 1.2): its fields with their offsets from
+/// the struct's address, its size, and whether it is word-aligned.
+#[derive(Debug, Clone)]
+pub struct Layout {
+    pub fields: Vec<(String, Type, i128)>,
+    pub size: i128,
+    pub aligned: bool,
+}
+
+thread_local! {
+    /// The layouts of the program being compiled, by struct name. Types
+    /// name their struct, so that a struct can point to its own kind;
+    /// their sizes are looked up here.
+    static STRUCTS: RefCell<HashMap<String, Layout>> = RefCell::new(HashMap::new());
+}
+
+pub fn clear_structs() {
+    STRUCTS.with(|s| s.borrow_mut().clear());
+}
+
+pub fn define_struct(name: &str, layout: Layout) {
+    STRUCTS.with(|s| s.borrow_mut().insert(name.to_string(), layout));
+}
+
+/// A defined struct's layout; None while it is only named.
+pub fn layout(name: &str) -> Option<Layout> {
+    STRUCTS.with(|s| s.borrow().get(name).cloned())
+}
+
+/// Lay out fields in order by abi.md 1.2.
+pub fn lay_out(fields: Vec<(String, Type)>) -> Layout {
+    let aligned = fields.iter().any(|(_, t)| t.word_aligned());
+    let start = if aligned { -1 } else { 0 };
+    let mut cursor: i128 = start;
+    let mut out = Vec::new();
+    for (name, ty) in fields {
+        let off = if ty.word_aligned() {
+            // The first multiple of 3 whose tryte below is free.
+            let mut m = cursor + 1;
+            m += (3 - m.rem_euclid(3)) % 3;
+            cursor = m - 1 + ty.size();
+            m
+        } else {
+            let at = cursor;
+            cursor += ty.size();
+            at
+        };
+        out.push((name, ty, off));
+    }
+    let mut size = cursor - start;
+    if aligned {
+        size += (3 - size % 3) % 3;
+    }
+    Layout { fields: out, size, aligned }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
@@ -9,6 +68,8 @@ pub enum Type {
     Void,
     Ptr(Box<Type>),
     Array(Box<Type>, i128),
+    /// A struct, by name: its layout is in the registry above.
+    Struct(String),
 }
 
 impl Type {
@@ -19,6 +80,7 @@ impl Type {
             Type::Tryte | Type::Trit | Type::Bool => 1,
             Type::Void => 0,
             Type::Array(t, n) => t.size() * n,
+            Type::Struct(n) => layout(n).map_or(0, |l| l.size),
         }
     }
 
@@ -27,6 +89,7 @@ impl Type {
         match self {
             Type::Int | Type::Ptr(_) => true,
             Type::Array(t, _) => t.word_aligned(),
+            Type::Struct(n) => layout(n).is_some_and(|l| l.aligned),
             _ => false,
         }
     }
@@ -34,6 +97,20 @@ impl Type {
     /// A number in arithmetic: `int`, `tryte` or `trit`.
     pub fn numeric(&self) -> bool {
         matches!(self, Type::Int | Type::Tryte | Type::Trit)
+    }
+
+    /// An array or a struct: its value is its address.
+    pub fn aggregate(&self) -> bool {
+        matches!(self, Type::Array(..) | Type::Struct(_))
+    }
+
+    /// Complete: a struct is defined, and an array's elements are.
+    pub fn complete(&self) -> bool {
+        match self {
+            Type::Struct(n) => layout(n).is_some(),
+            Type::Array(t, _) => t.complete(),
+            _ => true,
+        }
     }
 
     pub fn is_ptr(&self) -> bool {
@@ -64,6 +141,7 @@ impl Type {
             Type::Void => "void".into(),
             Type::Ptr(t) => format!("{}*", t.name()),
             Type::Array(t, n) => format!("{}[{n}]", t.name()),
+            Type::Struct(n) => format!("struct {n}"),
         }
     }
 }
@@ -86,6 +164,10 @@ pub enum ExprKind {
     Assign(&'static str, Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
+    /// `s.f` (`arrow` false) or `p->f` (true).
+    Field(Box<Expr>, String, bool),
+    /// `{ a, b, ... }`, in an initialiser only.
+    List(Vec<Expr>),
     Index(Box<Expr>, Box<Expr>),
     Cast(Type, Box<Expr>),
     SizeofType(Type),
@@ -146,7 +228,24 @@ pub struct Func {
 #[derive(Debug, Clone)]
 pub enum Item {
     Import(String, usize),
-    Const { ty: Type, name: String, value: Expr, line: usize },
-    Global { ty: Type, name: String, array: Option<Expr>, init: Option<Expr>, line: usize },
+    Const {
+        ty: Type,
+        name: String,
+        value: Expr,
+        line: usize,
+    },
+    Global {
+        ty: Type,
+        name: String,
+        array: Option<Expr>,
+        init: Option<Expr>,
+        line: usize,
+    },
+    /// `struct S { ... };`: each field's type, name and array length.
+    Struct {
+        name: String,
+        fields: Vec<(Type, String, Option<Expr>)>,
+        line: usize,
+    },
     Func(Func),
 }

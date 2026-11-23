@@ -5,7 +5,7 @@
 //! the frame pointer `s0`, so calls can push the temporaries they must
 //! keep without moving the locals. Types are checked on the way.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 use crate::lex::{TRYTE_MAX, WORD_MAX};
@@ -35,6 +35,12 @@ struct Local {
     ty: Type,
     /// From `s0`: a scalar's or word array's centre, a tryte array's first tryte.
     off: i128,
+}
+
+/// One tryte or word of a global's initial value.
+enum Cell {
+    Tryte(i128),
+    Word(String),
 }
 
 enum Place {
@@ -86,7 +92,9 @@ pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
         loops: Vec::new(),
         ret: Type::Void,
     };
+    clear_structs();
     g.declare(units)?;
+    let used = used_functions(units);
     g.code.push(format!("# Compiled by detrytus tc from {main_file}: docs/trice.md, docs/abi.md."));
     let mut compressing = false;
     for unit in units {
@@ -98,7 +106,13 @@ pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
                     compressing = true;
                 }
                 g.file = file.clone();
+                // A function nothing calls is checked, and left out.
+                let (code, data) = (g.code.len(), g.data.len());
                 g.function(f)?;
+                if used.as_ref().is_some_and(|u| !u.contains(&f.name)) {
+                    g.code.truncate(code);
+                    g.data.truncate(data);
+                }
             }
             Unit::Item { .. } => {}
         }
@@ -216,6 +230,30 @@ impl Gen {
     fn declare_item(&mut self, item: &Item) -> R<()> {
         match item {
             Item::Import(..) => Ok(()),
+            Item::Struct { name, fields, line } => {
+                if layout(name).is_some() {
+                    return self.err(*line, format!("struct {name} is already defined"));
+                }
+                let mut laid = Vec::new();
+                for (ty, field, array) in fields {
+                    if laid.iter().any(|(n, _)| n == field) {
+                        return self
+                            .err(*line, format!("struct {name} has two fields called {field}"));
+                    }
+                    if *ty == Type::Struct(name.clone()) {
+                        return self.err(
+                            *line,
+                            format!("struct {name} cannot hold itself: use a pointer"),
+                        );
+                    }
+                    laid.push((field.clone(), self.decl_type(ty, array, *line)?));
+                }
+                if laid.is_empty() {
+                    return self.err(*line, format!("struct {name} needs a field"));
+                }
+                define_struct(name, lay_out(laid));
+                Ok(())
+            }
             Item::Const { ty, name, value, line } => {
                 self.check_name(name, *line)?;
                 if self.funcs.contains_key(name) {
@@ -253,8 +291,11 @@ impl Gen {
                 if self.consts.contains_key(&f.name) || self.globals.contains_key(&f.name) {
                     return self.err(f.line, format!("{} is already defined", f.name));
                 }
-                if f.params.len() > ARGS.len() {
-                    return self.err(f.line, "a function takes at most six arguments for now");
+                if matches!(f.ret, Type::Struct(_)) {
+                    return self.err(
+                        f.line,
+                        "a function cannot return a struct yet: fill one its caller points to",
+                    );
                 }
                 let mut params = Vec::new();
                 for (t, n) in &f.params {
@@ -263,6 +304,12 @@ impl Gen {
                     }
                     if is_register(n) {
                         return self.err(f.line, format!("{n} is a register name"));
+                    }
+                    if matches!(t, Type::Struct(_)) {
+                        return self.err(
+                            f.line,
+                            format!("pass a pointer to the struct: {n} cannot be one yet"),
+                        );
                     }
                     params.push(t.clone());
                 }
@@ -288,6 +335,9 @@ impl Gen {
         if *ty == Type::Void {
             return self.err(line, "a variable cannot be void");
         }
+        if !ty.complete() {
+            return self.err(line, format!("{} is not defined", ty.name()));
+        }
         match array {
             None => Ok(ty.clone()),
             Some(n) => {
@@ -307,37 +357,152 @@ impl Gen {
         init: Option<&Expr>,
         line: usize,
     ) -> R<String> {
-        if let Type::Array(elem, n) = ty {
-            if init.is_some() {
-                return self.err(line, "array initialisers are not supported yet");
-            }
-            return Ok(if elem.word_aligned() {
-                format!("{name}: .words {n}")
-            } else {
-                format!("{name}: .zero {}", ty.size())
+        let Some(init) = init else {
+            return Ok(match ty {
+                t if t.aggregate() && t.word_aligned() => {
+                    format!("{name}: .words {}", t.size() / 3)
+                }
+                t if t.aggregate() => format!("{name}: .zero {}", t.size()),
+                t if t.size() == 1 => format!("{name}: .tryte 0"),
+                _ => format!("{name}: .word 0"),
             });
+        };
+        let mut cells = HashMap::new();
+        self.image(ty, init, 0, &mut cells, line)?;
+        let mut values = Vec::new();
+        let directive = if ty.word_aligned() {
+            for k in 0..(ty.size() / 3).max(1) {
+                let c = 3 * k;
+                values.push(match cells.get(&c) {
+                    Some(Cell::Word(w)) => w.clone(),
+                    _ => {
+                        let t = |o: i128| match cells.get(&o) {
+                            Some(Cell::Tryte(v)) => *v,
+                            _ => 0,
+                        };
+                        (t(c - 1) + t(c) * 19_683 + t(c + 1) * 387_420_489).to_string()
+                    }
+                });
+            }
+            ".word "
+        } else {
+            for o in 0..ty.size() {
+                values.push(match cells.get(&o) {
+                    Some(Cell::Tryte(v)) => v.to_string(),
+                    _ => "0".into(),
+                });
+            }
+            ".tryte"
+        };
+        let mut out = String::new();
+        for (i, chunk) in values.chunks(12).enumerate() {
+            let label = if i == 0 { format!("{name}:") } else { String::new() };
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&format!("{label:<12}{directive} {}", chunk.join(", ")));
         }
-        let value = match init {
-            None => "0".to_string(),
-            Some(e) => match &e.kind {
-                ExprKind::Str(s) if *ty == Type::Ptr(Box::new(Type::Tryte)) => self.string(s),
-                ExprKind::Str(_) => return self.err(line, "a string initialises a tryte*"),
-                ExprKind::Bool(v) if *ty == Type::Bool => v.to_string(),
-                ExprKind::Unary("&", x) if ty.is_ptr() => match &x.kind {
-                    ExprKind::Name(g) if self.globals.contains_key(g) => g.clone(),
+        Ok(out)
+    }
+
+    /// Lay out the constant initialiser `init` of an object of type `ty`
+    /// at `off` from the object's address, one cell per tryte or word.
+    fn image(
+        &mut self,
+        ty: &Type,
+        init: &Expr,
+        off: i128,
+        cells: &mut HashMap<i128, Cell>,
+        line: usize,
+    ) -> R<()> {
+        match (ty, &init.kind) {
+            (Type::Array(elem, n), ExprKind::List(items)) => {
+                if items.len() as i128 > *n {
+                    return self
+                        .err(line, format!("{} initialisers for {} elements", items.len(), n));
+                }
+                for (i, item) in items.iter().enumerate() {
+                    self.image(elem, item, off + i as i128 * elem.size(), cells, line)?;
+                }
+            }
+            (Type::Array(elem, n), ExprKind::Str(cps)) if **elem == Type::Tryte => {
+                if cps.len() as i128 >= *n {
+                    return self.err(
+                        line,
+                        format!("the string needs {} trytes with its 0", cps.len() + 1),
+                    );
+                }
+                for (i, cp) in cps.iter().enumerate() {
+                    cells.insert(off + i as i128, Cell::Tryte(*cp));
+                }
+            }
+            (Type::Struct(name), ExprKind::List(items)) => {
+                let fields = layout(name).map(|l| l.fields).unwrap_or_default();
+                if items.len() > fields.len() {
+                    return self.err(
+                        line,
+                        format!("{} initialisers for {} fields", items.len(), fields.len()),
+                    );
+                }
+                for (item, (_, fty, foff)) in items.iter().zip(&fields) {
+                    self.image(fty, item, off + foff, cells, line)?;
+                }
+            }
+            (t, _) if t.aggregate() => {
+                return self.err(line, format!("{} is initialised with a list in braces", t.a()));
+            }
+            (_, ExprKind::List(_)) => {
+                return self
+                    .err(line, format!("{} is initialised with a value, not a list", ty.a()));
+            }
+            _ => {
+                let v = self.scalar_init(ty, init, line)?;
+                if ty.size() == 1 {
+                    let v: i128 = v.parse().unwrap_or(0);
+                    if v.abs() > ty_max(ty) {
+                        return self.err(line, format!("{v} does not fit {}", ty.a()));
+                    }
+                    cells.insert(off, Cell::Tryte(v));
+                } else {
+                    cells.insert(off, Cell::Word(v));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A scalar global's constant initialiser, as assembly.
+    fn scalar_init(&mut self, ty: &Type, e: &Expr, line: usize) -> R<String> {
+        Ok(match &e.kind {
+            ExprKind::Str(s) if *ty == Type::Ptr(Box::new(Type::Tryte)) => self.string(s),
+            ExprKind::Str(_) => {
+                return self.err(line, "a string initialises a tryte* or a tryte array");
+            }
+            ExprKind::Bool(v) if *ty == Type::Bool => v.to_string(),
+            ExprKind::Unary("&", x) if ty.is_ptr() => match &x.kind {
+                ExprKind::Name(g) if self.globals.contains_key(g) => g.clone(),
+                ExprKind::Index(a, k) => match (&a.kind, self.try_const(k)) {
+                    (ExprKind::Name(g), Some(k)) => match self.globals.get(g) {
+                        Some(Type::Array(elem, _)) => format!("{g} + {}", k * elem.size()),
+                        _ => return self.err(line, "a global's initialiser must be a constant"),
+                    },
                     _ => return self.err(line, "a global's initialiser must be a constant"),
                 },
-                _ if *ty == Type::Bool => {
-                    return self.err(line, "a bool is true, false or unknown");
-                }
-                _ if ty.is_ptr() && !is_zero_literal(e) => {
-                    return self.err(line, "a pointer starts as 0, a string or a global's address");
-                }
-                _ => self.const_eval(e)?.to_string(),
+                _ => return self.err(line, "a global's initialiser must be a constant"),
             },
-        };
-        let directive = if ty.size() == 1 { ".tryte" } else { ".word" };
-        Ok(format!("{name}: {directive} {value}"))
+            ExprKind::Name(g)
+                if ty.is_ptr() && matches!(self.globals.get(g), Some(Type::Array(..))) =>
+            {
+                g.clone()
+            }
+            _ if *ty == Type::Bool => {
+                return self.err(line, "a bool is true, false or unknown");
+            }
+            _ if ty.is_ptr() && !is_zero_literal(e) => {
+                return self.err(line, "a pointer starts as 0, a string or a global's address");
+            }
+            _ => self.const_eval(e)?.to_string(),
+        })
     }
 
     fn string(&mut self, s: &[i128]) -> String {
@@ -442,8 +607,16 @@ impl Gen {
             if self.scopes[0].contains_key(name) {
                 return self.err(f.line, format!("two parameters are called {name}"));
             }
-            let off = self.allocate(ty);
-            self.store(ty, ARGS[i], off, "s0");
+            let off = if i < ARGS.len() {
+                let off = self.allocate(ty);
+                self.store(ty, ARGS[i], off, "s0");
+                off
+            } else {
+                // The caller's words at 0(sp), 3(sp), ... on entry (abi.md
+                // 2.2), where s0 points; a tryte is the word's low tryte.
+                let centre = 3 * (i - ARGS.len()) as i128;
+                if ty.size() == 1 { centre - 1 } else { centre }
+            };
             self.scopes[0].insert(name.clone(), Local { ty: ty.clone(), off });
         }
         for s in f.body.as_ref().unwrap() {
@@ -477,11 +650,7 @@ impl Gen {
         let words = (ty.size() + 2) / 3;
         self.slots += words;
         let lowest_centre = -3 * (2 + self.slots);
-        if ty.word_aligned() || !matches!(ty, Type::Array(..)) {
-            lowest_centre
-        } else {
-            lowest_centre - 1
-        }
+        if ty.word_aligned() || !ty.aggregate() { lowest_centre } else { lowest_centre - 1 }
     }
 
     fn lookup(&self, name: &str) -> Option<Place> {
@@ -525,10 +694,13 @@ impl Gen {
                     return self.err(*line, format!("{name} is already declared here"));
                 }
                 let ty = self.decl_type(ty, array, *line)?;
-                if let Some(init) = init {
-                    if matches!(ty, Type::Array(..)) {
-                        return self.err(*line, "array initialisers are not supported yet");
-                    }
+                if let Some(init) = init
+                    && (ty.aggregate() || matches!(init.kind, ExprKind::List(_)))
+                {
+                    let off = self.allocate(&ty);
+                    self.init_local(&ty, off, init, *line)?;
+                    self.scopes.last_mut().unwrap().insert(name.clone(), Local { ty, off });
+                } else if let Some(init) = init {
                     let t = self.expr(init)?;
                     self.check_assign(&ty, &t, init)?;
                     let off = self.allocate(&ty);
@@ -831,6 +1003,7 @@ impl Gen {
         let ok = match (dst, src) {
             (d, s) if d.numeric() && s.numeric() => true,
             (Type::Bool, Type::Bool) => true,
+            (Type::Struct(a), Type::Struct(b)) => a == b,
             (Type::Ptr(a), Type::Ptr(b)) => a == b || **a == Type::Void || **b == Type::Void,
             (Type::Ptr(_), _) => is_zero_literal(e),
             _ => false,
@@ -888,9 +1061,12 @@ impl Gen {
                 }
             }
             ExprKind::Call(name, args) => self.call(name, args, line),
-            ExprKind::Index(..) => {
+            ExprKind::List(_) => {
+                self.err(line, "a list in braces only initialises an array or a struct")
+            }
+            ExprKind::Index(..) | ExprKind::Field(..) => {
                 let t = self.addr(e)?;
-                if !matches!(t, Type::Array(..)) {
+                if !t.aggregate() {
                     let r = self.top();
                     self.load(&t, r, 0, r);
                 }
@@ -917,7 +1093,10 @@ impl Gen {
         let (code, depth, strings, data) =
             (self.code.len(), self.depth, self.strings, self.data.len());
         let t = match &x.kind {
-            ExprKind::Name(_) | ExprKind::Index(..) | ExprKind::Unary("*", _) => self.addr(x),
+            ExprKind::Name(_)
+            | ExprKind::Index(..)
+            | ExprKind::Unary("*", _)
+            | ExprKind::Field(..) => self.addr(x),
             _ => self.expr(x),
         };
         self.code.truncate(code);
@@ -937,7 +1116,7 @@ impl Gen {
         let r = self.push(line)?;
         match place {
             Place::Local(Local { ty, off }) => {
-                if matches!(ty, Type::Array(..)) {
+                if ty.aggregate() {
                     self.emit(format!("addi  {r}, s0, {off}"));
                 } else {
                     self.load(&ty, r, off, "s0");
@@ -946,7 +1125,7 @@ impl Gen {
             }
             Place::Global(ty) => {
                 self.emit(format!("la    {r}, {n}"));
-                if !matches!(ty, Type::Array(..)) {
+                if !ty.aggregate() {
                     self.load(&ty, r, 0, r);
                 }
                 Ok(ty.decay())
@@ -1014,6 +1193,43 @@ impl Gen {
                 }
                 Ok(*elem)
             }
+            ExprKind::Field(base, field, arrow) => {
+                let t = self.expr(base)?;
+                let name = match (&t, arrow) {
+                    (Type::Struct(n), false) => n.clone(),
+                    (Type::Ptr(inner), true) => match &**inner {
+                        Type::Struct(n) if inner.complete() => n.clone(),
+                        Type::Struct(n) => {
+                            return self.err(line, format!("struct {n} is not defined"));
+                        }
+                        _ => {
+                            return self.err(
+                                line,
+                                format!("-> follows a pointer to a struct, not {}", t.a()),
+                            );
+                        }
+                    },
+                    (Type::Ptr(inner), false) if matches!(**inner, Type::Struct(_)) => {
+                        return self.err(line, format!("{} is a pointer: use ->{field}", t.name()));
+                    }
+                    (_, false) => {
+                        return self.err(line, format!(".{field} needs a struct, not {}", t.a()));
+                    }
+                    (_, true) => {
+                        return self
+                            .err(line, format!("-> follows a pointer to a struct, not {}", t.a()));
+                    }
+                };
+                let fields = layout(&name).map(|l| l.fields).unwrap_or_default();
+                let Some((_, fty, off)) = fields.into_iter().find(|(n, _, _)| n == field) else {
+                    return self.err(line, format!("struct {name} has no field {field}"));
+                };
+                if off != 0 {
+                    let r = self.top();
+                    self.emit(format!("addi  {r}, {r}, {off}"));
+                }
+                Ok(fty)
+            }
             _ => self.err(line, "this is not something with an address"),
         }
     }
@@ -1066,7 +1282,7 @@ impl Gen {
             "*" => {
                 let e = Expr { kind: ExprKind::Unary("*", Box::new(x.clone())), line };
                 let t = self.addr(&e)?;
-                if !matches!(t, Type::Array(..)) {
+                if !t.aggregate() {
                     let r = self.top();
                     self.load(&t, r, 0, r);
                 }
@@ -1165,10 +1381,16 @@ impl Gen {
             "+" if ta.numeric() && tb.is_ptr() => {
                 let size = pointee_size(tb);
                 let x = self.second();
-                if size == 3 {
-                    self.emit(format!("shi   {x}, {x}, 1"));
-                } else if size != 1 {
-                    return bad(self);
+                match size {
+                    0 => return bad(self),
+                    1 => {}
+                    3 => self.emit(format!("shi   {x}, {x}, 1")),
+                    _ => {
+                        let k = self.push(line)?;
+                        self.emit(format!("li    {k}, {size}"));
+                        self.emit(format!("mul   {x}, {x}, {k}"));
+                        self.pop();
+                    }
                 }
                 tb.clone()
             }
@@ -1181,9 +1403,15 @@ impl Gen {
                 self.emit(format!("sub   {x}, {x}, {y}"));
                 self.pop();
                 match pointee_size(ta) {
+                    0 => return bad(self),
                     1 => {}
                     3 => self.emit(format!("shi   {x}, {x}, -1")),
-                    _ => return bad(self),
+                    size => {
+                        let k = self.push(line)?;
+                        self.emit(format!("li    {k}, {size}"));
+                        self.emit(format!("div   {x}, {x}, {k}"));
+                        self.pop();
+                    }
                 }
                 return Ok(Type::Int);
             }
@@ -1249,7 +1477,7 @@ impl Gen {
         if op == "=" {
             if let ExprKind::Name(n) = &l.kind
                 && let Some(Place::Local(local)) = self.lookup(n)
-                && !matches!(local.ty, Type::Array(..))
+                && !local.ty.aggregate()
             {
                 let t = self.expr(r)?;
                 self.check_assign(&local.ty, &t, r)?;
@@ -1264,6 +1492,12 @@ impl Gen {
             let t = self.expr(r)?;
             self.check_assign(&tl, &t, r)?;
             let (a, v) = (self.second(), self.top());
+            if matches!(tl, Type::Struct(_)) {
+                // The value is the address of the struct to copy.
+                self.copy(&tl, a, v, line)?;
+                self.pop();
+                return Ok(tl);
+            }
             self.store(&tl, v, 0, a);
             self.emit(format!("mv    {a}, {v}"));
             self.pop();
@@ -1271,8 +1505,8 @@ impl Gen {
         }
         let base = &op[..op.len() - 1];
         let tl = self.addr(l)?;
-        if matches!(tl, Type::Array(..)) {
-            return self.err(line, "cannot assign to a whole array");
+        if tl.aggregate() {
+            return self.err(line, format!("{op} does not take {}", tl.a()));
         }
         let a = self.top();
         let v = self.push(line)?;
@@ -1289,6 +1523,131 @@ impl Gen {
         self.emit(format!("mv    {a}, {v}"));
         self.pop();
         Ok(tl)
+    }
+
+    /// Copy the struct of type `ty` at the address in `src` to the
+    /// address in `dst`, a word or a tryte at a time.
+    fn copy(&mut self, ty: &Type, dst: &str, src: &str, line: usize) -> R<()> {
+        let (unit, op_l, op_s) = if ty.word_aligned() { (3, "lw", "sw") } else { (1, "lt", "st") };
+        let n = ty.size() / unit;
+        let tmp = self.push(line)?;
+        if n <= 9 {
+            for k in 0..n {
+                self.emit(format!("{op_l}    {tmp}, {}({src})", k * unit));
+                self.emit(format!("{op_s}    {tmp}, {}({dst})", k * unit));
+            }
+        } else {
+            // A loop for a large struct, moving copies of the addresses.
+            let (d, s2, left) = (self.push(line)?, self.push(line)?, self.push(line)?);
+            self.emit(format!("mv    {d}, {dst}"));
+            self.emit(format!("mv    {s2}, {src}"));
+            self.emit(format!("li    {left}, {n}"));
+            let top = self.new_label();
+            self.label(&top);
+            self.emit(format!("{op_l}    {tmp}, 0({s2})"));
+            self.emit(format!("{op_s}    {tmp}, 0({d})"));
+            self.emit(format!("addi  {s2}, {s2}, {unit}"));
+            self.emit(format!("addi  {d}, {d}, {unit}"));
+            self.emit(format!("addi  {left}, {left}, -1"));
+            self.emit(format!("bgtz  {left}, {top}"));
+            self.pop();
+            self.pop();
+            self.pop();
+        }
+        self.pop();
+        Ok(())
+    }
+
+    /// Initialise the local of type `ty` at `off` from `s0` with `init`:
+    /// what a list leaves out becomes 0.
+    fn init_local(&mut self, ty: &Type, off: i128, init: &Expr, line: usize) -> R<()> {
+        match (ty, &init.kind) {
+            (Type::Array(elem, n), ExprKind::List(items)) => {
+                if items.len() as i128 > *n {
+                    return self
+                        .err(line, format!("{} initialisers for {} elements", items.len(), n));
+                }
+                for k in 0..*n {
+                    let at = off + k * elem.size();
+                    match items.get(k as usize) {
+                        Some(item) => self.init_local(elem, at, item, line)?,
+                        None => self.zero_fill(elem, at),
+                    }
+                }
+            }
+            (Type::Array(elem, n), ExprKind::Str(cps)) if **elem == Type::Tryte => {
+                if cps.len() as i128 >= *n {
+                    return self.err(
+                        line,
+                        format!("the string needs {} trytes with its 0", cps.len() + 1),
+                    );
+                }
+                let r = self.push(line)?;
+                for k in 0..*n {
+                    match cps.get(k as usize) {
+                        Some(cp) => {
+                            self.emit(format!("li    {r}, {cp}"));
+                            self.emit(format!("st    {r}, {}(s0)", off + k));
+                        }
+                        None => self.emit(format!("st    zero, {}(s0)", off + k)),
+                    }
+                }
+                self.pop();
+            }
+            (Type::Struct(name), ExprKind::List(items)) => {
+                let fields = layout(name).map(|l| l.fields).unwrap_or_default();
+                if items.len() > fields.len() {
+                    return self.err(
+                        line,
+                        format!("{} initialisers for {} fields", items.len(), fields.len()),
+                    );
+                }
+                for (k, (_, fty, foff)) in fields.iter().enumerate() {
+                    match items.get(k) {
+                        Some(item) => self.init_local(fty, off + foff, item, line)?,
+                        None => self.zero_fill(fty, off + foff),
+                    }
+                }
+            }
+            (Type::Struct(_), _) => {
+                let t = self.expr(init)?;
+                self.check_assign(ty, &t, init)?;
+                let dst = self.push(line)?;
+                self.emit(format!("addi  {dst}, s0, {off}"));
+                let src = self.second();
+                self.copy(ty, dst, src, line)?;
+                self.pop();
+                self.pop();
+            }
+            (t, _) if t.aggregate() => {
+                return self.err(line, format!("{} is initialised with a list in braces", t.a()));
+            }
+            (_, ExprKind::List(_)) => {
+                return self
+                    .err(line, format!("{} is initialised with a value, not a list", ty.a()));
+            }
+            _ => {
+                let t = self.expr(init)?;
+                self.check_assign(ty, &t, init)?;
+                let r = self.top();
+                self.store(ty, r, off, "s0");
+                self.pop();
+            }
+        }
+        Ok(())
+    }
+
+    /// Zero the object of type `ty` at `off` from `s0`.
+    fn zero_fill(&mut self, ty: &Type, off: i128) {
+        if ty.word_aligned() {
+            for k in 0..(ty.size() / 3).max(1) {
+                self.emit(format!("sw    zero, {}(s0)", off + 3 * k));
+            }
+        } else {
+            for k in 0..ty.size() {
+                self.emit(format!("st    zero, {}(s0)", off + k));
+            }
+        }
     }
 
     fn step(&mut self, op: &str, post: bool, target: &Expr, line: usize) -> R<Type> {
@@ -1331,7 +1690,7 @@ impl Gen {
             }
             Type::Bool => matches!(from, Type::Bool | Type::Trit),
             Type::Ptr(_) => from.is_ptr() || from == Type::Int,
-            Type::Array(..) => false,
+            Type::Array(..) | Type::Struct(_) => false,
         };
         if !ok {
             let hint = if *to == Type::Bool { ": write a comparison, as in x != 0" } else { "" };
@@ -1382,6 +1741,9 @@ impl Gen {
             }
             (sig.ret, Some(sig.params))
         };
+        if args.len() > ARGS.len() {
+            return self.long_call(name, args, &ret, params.as_deref().unwrap_or_default(), line);
+        }
         let base = self.depth;
         for (i, a) in args.iter().enumerate() {
             let t = self.expr(a)?;
@@ -1418,6 +1780,165 @@ impl Gen {
             self.emit(format!("mv    {r}, a0"));
         }
         Ok(ret)
+    }
+}
+
+/// The functions a program uses: those `main` reaches by calls, with
+/// those that `asm` blocks or imported assembly name, which may call
+/// them, and the ones they reach. None, to keep them all, when there is
+/// no `main`.
+fn used_functions(units: &[Unit]) -> Option<HashSet<String>> {
+    let mut bodies: HashMap<&str, &[Stmt]> = HashMap::new();
+    let mut roots = vec!["main".to_string()];
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    for unit in units {
+        match unit {
+            Unit::Include { operands, .. } => roots.extend(words(operands)),
+            Unit::Item { item: Item::Func(f), .. } => {
+                if let Some(body) = &f.body {
+                    bodies.insert(&f.name, body);
+                }
+            }
+            Unit::Item { .. } => {}
+        }
+    }
+    if !bodies.contains_key("main") {
+        return None;
+    }
+    let mut used = HashSet::new();
+    while let Some(name) = roots.pop() {
+        let Some(body) = bodies.get(name.as_str()) else { continue };
+        if !used.insert(name) {
+            continue;
+        }
+        for s in body.iter() {
+            stmt_calls(s, &mut |n| roots.push(n.to_string()), &words);
+        }
+    }
+    Some(used)
+}
+
+/// Report each name `s` calls, or names in an `asm` block.
+fn stmt_calls(s: &Stmt, f: &mut dyn FnMut(&str), words: &dyn Fn(&str) -> Vec<String>) {
+    let e = |x: &Expr, f: &mut dyn FnMut(&str)| expr_calls(x, f);
+    match s {
+        Stmt::Block(body) => body.iter().for_each(|s| stmt_calls(s, f, words)),
+        Stmt::Local { array, init, .. } => {
+            array.iter().chain(init).for_each(|x| e(x, f));
+        }
+        Stmt::Expr(x) => e(x, f),
+        Stmt::If(c, a, b) => {
+            e(c, f);
+            stmt_calls(a, f, words);
+            if let Some(b) = b {
+                stmt_calls(b, f, words);
+            }
+        }
+        Stmt::While(c, body) => {
+            e(c, f);
+            stmt_calls(body, f, words);
+        }
+        Stmt::For(init, c, step, body) => {
+            if let Some(init) = init {
+                stmt_calls(init, f, words);
+            }
+            c.iter().chain(step).for_each(|x| e(x, f));
+            stmt_calls(body, f, words);
+        }
+        Stmt::Return(x, _) => x.iter().for_each(|x| e(x, f)),
+        Stmt::Which { value, arms, .. } => {
+            e(value, f);
+            for (_, body, _) in arms {
+                body.iter().for_each(|s| stmt_calls(s, f, words));
+            }
+        }
+        Stmt::Asm(text, _) => {
+            for line in text.lines() {
+                let code = line.split('#').next().unwrap_or("");
+                words(code).iter().for_each(|w| f(w));
+            }
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+    }
+}
+
+fn expr_calls(e: &Expr, f: &mut dyn FnMut(&str)) {
+    match &e.kind {
+        ExprKind::Call(name, args) => {
+            f(name);
+            args.iter().for_each(|a| expr_calls(a, f));
+        }
+        ExprKind::Unary(_, x)
+        | ExprKind::Cast(_, x)
+        | ExprKind::SizeofExpr(x)
+        | ExprKind::Field(x, _, _) => expr_calls(x, f),
+        ExprKind::List(items) => items.iter().for_each(|x| expr_calls(x, f)),
+        ExprKind::Step { target, .. } => expr_calls(target, f),
+        ExprKind::Binary(_, a, b) | ExprKind::Assign(_, a, b) | ExprKind::Index(a, b) => {
+            expr_calls(a, f);
+            expr_calls(b, f);
+        }
+        ExprKind::Cond(c, a, b) => {
+            expr_calls(c, f);
+            expr_calls(a, f);
+            expr_calls(b, f);
+        }
+        ExprKind::Int(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Name(_)
+        | ExprKind::SizeofType(_) => {}
+    }
+}
+
+impl Gen {
+    /// A call with more than six arguments. Each is evaluated in order
+    /// and stored at once, so the temporaries never run out: the
+    /// seventh onward where the callee finds them, at 0(sp) and up
+    /// (abi.md 2.2), the first six above them, loaded into a0..a5
+    /// before the call.
+    fn long_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        ret: &Type,
+        params: &[Type],
+        line: usize,
+    ) -> R<Type> {
+        let base = self.depth;
+        let n = args.len() as i128;
+        let extra = n - ARGS.len() as i128;
+        let room = 3 * (base as i128 + n);
+        self.emit(format!("addi  sp, sp, {}", -room));
+        for (i, t) in TEMPS.iter().enumerate().take(base) {
+            self.emit(format!("sw    {t}, {}(sp)", 3 * (n + i as i128)));
+        }
+        let slot = |i: i128| if i < ARGS.len() as i128 { 3 * (extra + i) } else { 3 * (i - 6) };
+        for (i, a) in args.iter().enumerate() {
+            let t = self.expr(a)?;
+            self.check_assign(&params[i], &t, a)?;
+            let r = self.top();
+            self.emit(format!("sw    {r}, {}(sp)", slot(i as i128)));
+            self.pop();
+        }
+        for (i, reg) in ARGS.iter().enumerate() {
+            self.emit(format!("lw    {reg}, {}(sp)", slot(i as i128)));
+        }
+        self.emit(format!("call  {name}"));
+        for (i, t) in TEMPS.iter().enumerate().take(base) {
+            self.emit(format!("lw    {t}, {}(sp)", 3 * (n + i as i128)));
+        }
+        self.emit(format!("addi  sp, sp, {room}"));
+        let r = self.push(line)?;
+        if *ret != Type::Void {
+            self.emit(format!("mv    {r}, a0"));
+        }
+        Ok(ret.clone())
     }
 }
 

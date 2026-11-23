@@ -156,9 +156,22 @@ extern int wait2(int pid);         // defined in assembly
 ```
 
 Globals start as 0, or as their initialiser, which must be a constant
-(an integer, a string, the address of a global, or a list of them in
-braces). Locals are declared anywhere in a block and live to its end;
-an uninitialised local holds whatever its stack slot held.
+(an integer, a string, the address of a global or of an element of a
+global array, or a list of them in braces). Locals are declared
+anywhere in a block and live to its end; an uninitialised local holds
+whatever its stack slot held, and a local's initialiser may be any
+expression.
+
+```c
+int primes[5] = { 2, 3, 5, 7 };          // primes[4] is 0
+tryte word[8] = "ternary";               // a string fills a tryte array, 0 included
+struct entry table[2] = { { 1, "one" }, { 2, "two" } };
+```
+
+A list in braces initialises an array element by element or a struct
+field by field, in order, and what it leaves out is 0. A struct is
+assigned, and initialised from another, by copying it; it is passed to
+and returned from functions by pointer.
 
 `import "path";` brings in another file, found relative to the one that
 imports it, once however many times it is named:
@@ -230,7 +243,9 @@ Besides errors, the compiler warns about comparing with the literal
 
 The compiler writes one assembly file: the imports, then each function,
 then the globals, under `.compress` so the assembler bundles what it
-can. Where the code goes is the start code's business: on trylobite,
+can. A function that nothing reaches from `main` is checked and left
+out; a function an `asm` block or imported assembly names counts as
+reached. Where the code goes is the start code's business: on trylobite,
 `lib/start.s` opens the program's section at `V_USER`, says where `gp`
 points with `.gp`, and calls `main(argc, argv)` before exiting with its
 result. Each statement's code carries a comment naming its source line,
@@ -255,6 +270,5 @@ a stack slot. Code is a few times the size of hand-written assembly
 (trylobite's `bin/echo` is about 80 words against 21), which is what
 the planned IR and register allocation are for.
 
-Not in it yet, though specified above: structs, `tlut`, `tex` and
-`tins`, array initialisers, and more than six arguments. A `which` arm
-must be within `br3`'s reach of 3,280 instructions.
+Not in it yet, though specified above: `tlut`, `tex` and `tins`. A
+`which` arm must be within `br3`'s reach of 3,280 instructions.
