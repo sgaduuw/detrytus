@@ -1,0 +1,15 @@
+[package]
+name = "detrytus-tc"
+version = "0.1.0"
+description = "The Trice compiler (docs/trice.md): Trice source to detrytus assembly"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+detrytus-asm = { version = "0.1.0", path = "../asm" }
+
+[dev-dependencies]
+detrytus-core = { version = "0.1.0", path = "../core" }

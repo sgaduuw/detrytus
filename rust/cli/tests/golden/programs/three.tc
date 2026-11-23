@@ -1,0 +1,4 @@
+// The smallest Trice program: main gives 3.
+int main() {
+    return 3;
+}

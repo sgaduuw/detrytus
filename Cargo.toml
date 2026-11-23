@@ -1,5 +1,5 @@
 [workspace]
-members = ["rust/core", "rust/asm", "rust/cli", "rust/conformance"]
+members = ["rust/core", "rust/asm", "rust/tc", "rust/cli", "rust/conformance"]
 resolver = "3"
 
 [workspace.package]

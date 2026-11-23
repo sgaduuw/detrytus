@@ -15,6 +15,7 @@ version = "0.1.0"
 dependencies = [
  "detrytus-asm",
  "detrytus-core",
+ "detrytus-tc",
  "toml",
 ]
 
@@ -30,6 +31,14 @@ dependencies = [
 [[package]]
 name = "detrytus-core"
 version = "0.1.0"
+
+[[package]]
+name = "detrytus-tc"
+version = "0.1.0"
+dependencies = [
+ "detrytus-asm",
+ "detrytus-core",
+]
 
 [[package]]
 name = "equivalent"

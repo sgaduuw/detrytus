@@ -1,0 +1,62 @@
+# detrytus tc: compiling Trice (docs/trice.md).
+
+[[case]]
+name = "Trice to stdout"
+args = ["tc", "{here}/programs/three.tc"]
+status = 0
+stdout = '''
+# Compiled by detrytus tc from {here}/programs/three.tc: docs/trice.md, docs/abi.md.
+        .compress
+
+# int main(...), {here}/programs/three.tc:2
+main:
+        addi  sp, sp, -6
+        sw    ra, 3(sp)
+        sw    s0, 0(sp)
+        addi  s0, sp, 6
+# {here}/programs/three.tc:3
+        li    t0, 3
+        mv    a0, t0
+main$ret:
+        mv    sp, s0
+        lw    ra, -3(sp)
+        lw    s0, -6(sp)
+        ret
+        .nocompress
+'''
+stderr = ''
+
+[[case]]
+name = "an error names its file and line"
+args = ["tc", "{here}/programs/bad.tc"]
+status = 65
+stdout = ''
+stderr = '''
+detrytus: {here}/programs/bad.tc:3: a condition must be a bool, not an int: compare it, as in x != 0
+'''
+
+[[case]]
+name = "a comparison with -1 warns"
+args = ["tc", "{here}/programs/warn.tc", "-o", "{tmp}/warn.s"]
+status = 0
+stdout = ''
+stderr = '''
+{here}/programs/warn.tc:3: warning: -1 is an ordinary value: test the sign or compare with a named constant
+'''
+
+[[case]]
+name = "tc needs a file"
+args = ["tc"]
+status = 2
+stdout = ''
+stderr = '''
+usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
+                    [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] FILE...
+       detrytus tc FILE [-o FILE]
+detrytus: tc needs a file
+'''

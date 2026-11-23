@@ -1,7 +1,8 @@
 # Trice
 
-Version 0.1, **draft**: the language as designed, before its compiler
-exists. It will change as the compiler meets real programs.
+Version 0.1, **draft**. It will change as the compiler meets real
+programs. The first compiler (`rust/tc`) covers this page except where
+section 12 says otherwise.
 
 Trice is a small systems language for detrytus: C's statements and
 expressions over the machine's own types. Everything is signed, a
@@ -240,3 +241,20 @@ so listings and the debugger lead back to the source.
 Floats, `switch`, function pointers, struct values in calls and
 results, varargs, a preprocessor, and separate compilation. Each can be
 added without changing what is above.
+
+## 12. The first compiler
+
+`detrytus tc FILE` prints the assembly; `-o OUT.s` writes it, and
+`-o OUT.dti` assembles it into an image as well. Errors name the file
+and line; warnings go to standard error.
+
+It walks the tree and does no optimisation yet: an expression's values
+live in `t0` to `t6` (an expression that needs more than seven at once
+is refused), every function keeps a frame pointer, and every local has
+a stack slot. Code is a few times the size of hand-written assembly
+(trylobite's `bin/echo` is about 80 words against 21), which is what
+the planned IR and register allocation are for.
+
+Not in it yet, though specified above: structs, `tlut`, `tex` and
+`tins`, array initialisers, and more than six arguments. A `which` arm
+must be within `br3`'s reach of 3,280 instructions.

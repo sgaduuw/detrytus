@@ -15,8 +15,8 @@ system expects from a core. The repository holds:
 - **The ISA specification**, [`docs/isa.md`](docs/isa.md). It is the
   source of truth for what the machine does.
 - **The `detrytus` tools in Rust**: a core (`rust/core/`), an assembler
-  (`rust/asm/`) and a command line with `asm`, `run` and `debug`
-  (`rust/cli/`).
+  (`rust/asm/`), the Trice compiler (`rust/tc/`, [`docs/trice.md`](docs/trice.md))
+  and a command line with `asm`, `run`, `debug` and `tc` (`rust/cli/`).
 - **The conformance suite** ([`conformance/`](conformance/README.md)),
   machine and assembler behaviour as data, and **examples**.
 
@@ -54,7 +54,7 @@ and hides a failure.
 | `docs/platform.md` | the emulated memory map and devices |
 | `docs/debugger.md` | the debugger's commands |
 | `docs/abi.md` | the ABI: data layout and the calling convention for compiled code |
-| `docs/trice.md` | the Trice language (its compiler, `rust/tc`, is not written yet) |
+| `docs/trice.md` | the Trice language |
 | `docs/rust-plan.md` | how the Rust tools replaced the Python ones (history) |
 | `rust/core/src/trits.rs` | balanced-ternary arithmetic on `i64` |
 | `rust/core/src/isa.rs` | the instruction set as data: opcodes, formats, fields, CSRs, decode and encode |
@@ -72,7 +72,9 @@ and hides a failure.
 | `rust/core/src/machine.rs` | the platform wired together, and the harts run in rounds |
 | `rust/core/tests/` | the spec sync test |
 | `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm`; `error`, `text` and `pyrepr` keep messages and splitting as the Python assembler had them |
-| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `debug/` (engine and shell) |
+| `rust/tc/src/` | the Trice compiler: `lex`, `parse` (into `ast`), `codegen` (types are checked as code is made); `lib.rs` loads imports, reading `.equ` constants from imported assembly |
+| `rust/tc/tests/` | Trice programs compiled and run on the bare machine (`bare.s`), and refused ones |
+| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `tc.rs` (`tc`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
 | `rust/cli/tests/pace.rs` | pacing the clock over idle time, as a live console does |
 | `rust/conformance/` | the conformance runner (tests only) |
