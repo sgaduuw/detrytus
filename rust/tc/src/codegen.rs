@@ -35,7 +35,13 @@ struct Local {
     ty: Type,
     /// From `s0`: a scalar's or word array's centre, a tryte array's first tryte.
     off: i128,
+    /// The saved register that holds it instead, for a scalar whose
+    /// address is never taken.
+    reg: Option<&'static str>,
 }
+
+/// The saved registers locals may live in; `s0` is the frame pointer.
+const SAVED: [&str; 8] = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
 /// One tryte or word of a global's initial value.
 enum Cell {
@@ -69,6 +75,14 @@ struct Gen {
     depth: usize,
     loops: Vec<(String, String)>,
     ret: Type,
+    /// Saved registers free for locals, and those the function used.
+    free: Vec<&'static str>,
+    saved: Vec<&'static str>,
+    /// Names whose address the function takes: they stay in memory.
+    addressed: HashSet<String>,
+    /// Imported assembly set `.gp`: a global scalar is loaded and stored
+    /// by name, in one instruction.
+    gp: bool,
 }
 
 type R<T> = Result<T, Error>;
@@ -91,6 +105,10 @@ pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
         depth: 0,
         loops: Vec::new(),
         ret: Type::Void,
+        free: Vec::new(),
+        saved: Vec::new(),
+        addressed: HashSet::new(),
+        gp: units.iter().any(|u| matches!(u, Unit::Include { gp: true, .. })),
     };
     clear_structs();
     g.declare(units)?;
@@ -588,6 +606,11 @@ impl Gen {
     }
 
     fn store(&mut self, ty: &Type, src: &str, off: i128, base: &str) {
+        // st keeps 9 trits; a trit keeps one (a value in a register that
+        // is not a temporary was cut to its type already).
+        if *ty == Type::Trit && is_temp(src) {
+            self.emit(format!("tex   {src}, {src}, 0, 1"));
+        }
         let op = if ty.size() == 1 { "st" } else { "sw" };
         self.emit(format!("{op}    {src}, {off}({base})"));
     }
@@ -602,22 +625,49 @@ impl Gen {
         self.loops.clear();
         self.ret = f.ret.clone();
         self.scopes = vec![HashMap::new()];
+        self.saved.clear();
+        self.addressed.clear();
+        for st in f.body.as_ref().unwrap() {
+            stmt_addressed(st, &mut self.addressed);
+        }
+        // A leaf makes no calls (builtins are instructions) and has no
+        // asm: its parameters stay in their argument registers, and the
+        // free ones hold locals before any saved register does.
+        let mut leaf = f.params.len() <= ARGS.len();
+        let words = |t: &str| t.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        for st in f.body.as_ref().unwrap() {
+            stmt_calls(st, &mut |n| leaf &= BUILTIN1.contains(&n) || BUILTIN2.contains(&n), &words);
+        }
+        self.free = SAVED.iter().rev().copied().collect();
+        if leaf {
+            self.free.extend(ARGS[f.params.len()..].iter().rev());
+        }
         let outer = std::mem::take(&mut self.code);
         for (i, (ty, name)) in f.params.iter().enumerate() {
             if self.scopes[0].contains_key(name) {
                 return self.err(f.line, format!("two parameters are called {name}"));
             }
-            let off = if i < ARGS.len() {
-                let off = self.allocate(ty);
-                self.store(ty, ARGS[i], off, "s0");
-                off
+            let local = if leaf && !self.addressed.contains(name) {
+                Local { ty: ty.clone(), off: 0, reg: Some(ARGS[i]) }
+            } else if i < ARGS.len() {
+                let local = self.bind(name, ty);
+                self.store_local(&local, ARGS[i], ty);
+                local
             } else {
                 // The caller's words at 0(sp), 3(sp), ... on entry (abi.md
                 // 2.2), where s0 points; a tryte is the word's low tryte.
                 let centre = 3 * (i - ARGS.len()) as i128;
-                if ty.size() == 1 { centre - 1 } else { centre }
+                let off = if ty.size() == 1 { centre - 1 } else { centre };
+                let mem = Local { ty: ty.clone(), off, reg: None };
+                let local = self.bind(name, ty);
+                if let Some(r) = local.reg {
+                    self.load(ty, r, off, "s0");
+                    local
+                } else {
+                    mem
+                }
             };
-            self.scopes[0].insert(name.clone(), Local { ty: ty.clone(), off });
+            self.scopes[0].insert(name.clone(), local);
         }
         for s in f.body.as_ref().unwrap() {
             self.stmt(s)?;
@@ -627,16 +677,51 @@ impl Gen {
             self.code.pop();
         }
         let body = std::mem::replace(&mut self.code, outer);
-        let frame = 3 * (2 + self.slots);
+        let mut saved = self.saved.clone();
+        saved.sort();
+        let save_at = |k: usize, slots: i128| -3 * (2 + slots + k as i128 + 1);
+        let frame = 3 * (2 + self.slots + saved.len() as i128);
         self.code.push(String::new());
         self.code.push(format!("# {} {}(...), {}:{}", f.ret.name(), f.name, self.file, f.line));
         self.label(&f.name);
+        if leaf && self.slots == 0 && saved.is_empty() {
+            // Nothing to keep: no frame (abi.md 2.4).
+            self.code.extend(body);
+            self.label(&ret_label);
+            self.emit("ret");
+            return Ok(());
+        }
+        if self.slots == 0 && f.params.len() <= ARGS.len() {
+            // Nothing in memory: a frame of ra and the saved registers,
+            // reached from sp, with no frame pointer.
+            let frame = 3 * (1 + saved.len() as i128);
+            self.emit(format!("addi  sp, sp, {}", -frame));
+            self.emit(format!("sw    ra, {}(sp)", frame - 3));
+            for (k, r) in saved.iter().enumerate() {
+                self.emit(format!("sw    {r}, {}(sp)", frame - 6 - 3 * k as i128));
+            }
+            self.code.extend(body);
+            self.label(&ret_label);
+            for (k, r) in saved.iter().enumerate() {
+                self.emit(format!("lw    {r}, {}(sp)", frame - 6 - 3 * k as i128));
+            }
+            self.emit(format!("lw    ra, {}(sp)", frame - 3));
+            self.emit(format!("addi  sp, sp, {frame}"));
+            self.emit("ret");
+            return Ok(());
+        }
         self.emit(format!("addi  sp, sp, {}", -frame));
         self.emit(format!("sw    ra, {}(sp)", frame - 3));
         self.emit(format!("sw    s0, {}(sp)", frame - 6));
         self.emit(format!("addi  s0, sp, {frame}"));
+        for (k, r) in saved.iter().enumerate() {
+            self.emit(format!("sw    {r}, {}(s0)", save_at(k, self.slots)));
+        }
         self.code.extend(body);
         self.label(&ret_label);
+        for (k, r) in saved.iter().enumerate() {
+            self.emit(format!("lw    {r}, {}(s0)", save_at(k, self.slots)));
+        }
         self.emit("mv    sp, s0");
         self.emit("lw    ra, -3(sp)");
         self.emit("lw    s0, -6(sp)");
@@ -651,6 +736,61 @@ impl Gen {
         self.slots += words;
         let lowest_centre = -3 * (2 + self.slots);
         if ty.word_aligned() || !ty.aggregate() { lowest_centre } else { lowest_centre - 1 }
+    }
+
+    /// A new local's home: a saved register for a scalar whose address
+    /// is never taken, while one is free, else a frame slot.
+    fn bind(&mut self, name: &str, ty: &Type) -> Local {
+        if !ty.aggregate()
+            && !self.addressed.contains(name)
+            && let Some(r) = self.free.pop()
+        {
+            if r.starts_with('s') && !self.saved.contains(&r) {
+                self.saved.push(r);
+            }
+            return Local { ty: ty.clone(), off: 0, reg: Some(r) };
+        }
+        let off = self.allocate(ty);
+        Local { ty: ty.clone(), off, reg: None }
+    }
+
+    /// Store register `r`, holding a value of type `from`, in a local.
+    fn store_local(&mut self, local: &Local, r: &str, from: &Type) {
+        match local.reg {
+            Some(reg) => {
+                self.emit(format!("mv    {reg}, {r}"));
+                self.narrow(&local.ty, from, reg);
+            }
+            None => self.store(&local.ty, r, local.off, "s0"),
+        }
+    }
+
+    /// Cut the value in register `r`, of type `from`, to fit `to`, as a
+    /// store to memory would.
+    fn narrow(&mut self, to: &Type, from: &Type, r: &str) {
+        let len = match to {
+            Type::Tryte if from.size() == 3 => 9,
+            Type::Trit if !matches!(from, Type::Trit | Type::Bool) => 1,
+            _ => return,
+        };
+        self.emit(format!("tex   {r}, {r}, 0, {len}"));
+    }
+
+    fn open_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    /// Close a scope, freeing its locals' registers.
+    fn close_scope(&mut self) {
+        if let Some(scope) = self.scopes.pop() {
+            for l in scope.values() {
+                if let Some(r) = l.reg {
+                    self.free.push(r);
+                }
+            }
+            // Lowest first, so the output does not depend on map order.
+            self.free.sort_by(|a, b| b.cmp(a));
+        }
     }
 
     fn lookup(&self, name: &str) -> Option<Place> {
@@ -680,11 +820,11 @@ impl Gen {
         }
         match s {
             Stmt::Block(body) => {
-                self.scopes.push(HashMap::new());
+                self.open_scope();
                 for s in body {
                     self.stmt(s)?;
                 }
-                self.scopes.pop();
+                self.close_scope();
             }
             Stmt::Local { ty, name, array, init, line } => {
                 if is_register(name) {
@@ -699,24 +839,35 @@ impl Gen {
                 {
                     let off = self.allocate(&ty);
                     self.init_local(&ty, off, init, *line)?;
-                    self.scopes.last_mut().unwrap().insert(name.clone(), Local { ty, off });
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(name.clone(), Local { ty, off, reg: None });
+                } else if let Some(init) = init
+                    && self.is_simple(init)
+                    && !self.addressed.contains(name)
+                    && !self.free.is_empty()
+                {
+                    let local = self.bind(name, &ty);
+                    let reg = local.reg.unwrap();
+                    let t = self.simple_into(init, reg)?;
+                    self.check_assign(&ty, &t, init)?;
+                    self.narrow(&ty, &t, reg);
+                    self.scopes.last_mut().unwrap().insert(name.clone(), local);
                 } else if let Some(init) = init {
                     let t = self.expr(init)?;
                     self.check_assign(&ty, &t, init)?;
-                    let off = self.allocate(&ty);
+                    let local = self.bind(name, &ty);
                     let r = self.top();
-                    self.store(&ty, r, off, "s0");
+                    self.store_local(&local, r, &t);
                     self.pop();
-                    self.scopes.last_mut().unwrap().insert(name.clone(), Local { ty, off });
+                    self.scopes.last_mut().unwrap().insert(name.clone(), local);
                 } else {
-                    let off = self.allocate(&ty);
-                    self.scopes.last_mut().unwrap().insert(name.clone(), Local { ty, off });
+                    let local = self.bind(name, &ty);
+                    self.scopes.last_mut().unwrap().insert(name.clone(), local);
                 }
             }
-            Stmt::Expr(e) => {
-                self.expr(e)?;
-                self.pop();
-            }
+            Stmt::Expr(e) => self.effect(e)?,
             Stmt::If(cond, then, other) => {
                 let skip = self.new_label();
                 self.branch_false(cond, &skip)?;
@@ -742,7 +893,7 @@ impl Gen {
                 self.label(&end);
             }
             Stmt::For(init, cond, step, body) => {
-                self.scopes.push(HashMap::new());
+                self.open_scope();
                 if let Some(init) = init {
                     self.stmt(init)?;
                 }
@@ -756,12 +907,11 @@ impl Gen {
                 self.loops.pop();
                 self.label(&next);
                 if let Some(step) = step {
-                    self.expr(step)?;
-                    self.pop();
+                    self.effect(step)?;
                 }
                 self.emit(format!("j     {top}"));
                 self.label(&end);
-                self.scopes.pop();
+                self.close_scope();
             }
             Stmt::Break(line) | Stmt::Continue(line) => {
                 let Some((brk, cont)) = self.loops.last().cloned() else {
@@ -775,10 +925,16 @@ impl Gen {
                     (Some(e), Type::Void) => {
                         return self.err(e.line, format!("{} returns nothing", self.fname));
                     }
+                    (Some(e), ret) if self.is_simple(e) => {
+                        let t = self.simple_into(e, "a0")?;
+                        self.check_assign(&ret, &t, e)?;
+                        self.narrow(&ret, &t, "a0");
+                    }
                     (Some(e), ret) => {
                         let t = self.expr(e)?;
                         self.check_assign(&ret, &t, e)?;
                         self.emit("mv    a0, t0");
+                        self.narrow(&ret, &t, "a0");
                         self.pop();
                     }
                     (None, Type::Void) => {}
@@ -801,9 +957,9 @@ impl Gen {
 
     /// A statement in a scope of its own, as the body of an if or a loop.
     fn scoped(&mut self, s: &Stmt) -> R<()> {
-        self.scopes.push(HashMap::new());
+        self.open_scope();
         let r = self.stmt(s);
-        self.scopes.pop();
+        self.close_scope();
         r
     }
 
@@ -838,11 +994,11 @@ impl Gen {
                 let l = to(case);
                 self.label(&l);
             }
-            self.scopes.push(HashMap::new());
+            self.open_scope();
             for s in body {
                 self.stmt(s)?;
             }
-            self.scopes.pop();
+            self.close_scope();
             self.emit(format!("j     {end}"));
         }
         if self.code.last().is_some_and(|l| l.trim() == format!("j     {end}")) {
@@ -881,10 +1037,10 @@ impl Gen {
     fn branch_false(&mut self, e: &Expr, to: &str) -> R<()> {
         match &e.kind {
             ExprKind::Binary(op, a, b) if Self::comparison(op).is_some() => {
-                let (x, y) = self.compare_operands(op, a, b, e.line)?;
+                let (x, y, base) = self.compare_operands(op, a, b, e.line)?;
                 let br = Self::comparison(Self::inverse(op)).unwrap();
                 self.emit(format!("{br}   {x}, {y}, {to}"));
-                self.pop_operands(y);
+                self.depth = base;
             }
             ExprKind::Binary("&&", a, b) => {
                 self.branch_false(a, to)?;
@@ -900,16 +1056,14 @@ impl Gen {
             ExprKind::Bool(_) => self.emit(format!("j     {to}")),
             ExprKind::Unary("!", x) => {
                 // !x is true only when x is false.
-                self.bool_value(x)?;
-                let r = self.top();
+                let (base, r) = self.bool_operand(x)?;
                 self.emit(format!("bgez  {r}, {to}"));
-                self.pop();
+                self.depth = base;
             }
             _ => {
-                self.bool_value(e)?;
-                let r = self.top();
+                let (base, r) = self.bool_operand(e)?;
                 self.emit(format!("blez  {r}, {to}"));
-                self.pop();
+                self.depth = base;
             }
         }
         Ok(())
@@ -919,10 +1073,10 @@ impl Gen {
     fn branch_true(&mut self, e: &Expr, to: &str) -> R<()> {
         match &e.kind {
             ExprKind::Binary(op, a, b) if Self::comparison(op).is_some() => {
-                let (x, y) = self.compare_operands(op, a, b, e.line)?;
+                let (x, y, base) = self.compare_operands(op, a, b, e.line)?;
                 let br = Self::comparison(op).unwrap();
                 self.emit(format!("{br}   {x}, {y}, {to}"));
-                self.pop_operands(y);
+                self.depth = base;
             }
             ExprKind::Binary("&&", a, b) => {
                 let no = self.new_label();
@@ -937,19 +1091,29 @@ impl Gen {
             ExprKind::Bool(1) => self.emit(format!("j     {to}")),
             ExprKind::Bool(_) => {}
             ExprKind::Unary("!", x) => {
-                self.bool_value(x)?;
-                let r = self.top();
+                let (base, r) = self.bool_operand(x)?;
                 self.emit(format!("bltz  {r}, {to}"));
-                self.pop();
+                self.depth = base;
             }
             _ => {
-                self.bool_value(e)?;
-                let r = self.top();
+                let (base, r) = self.bool_operand(e)?;
                 self.emit(format!("bgtz  {r}, {to}"));
-                self.pop();
+                self.depth = base;
             }
         }
         Ok(())
+    }
+
+    /// A condition's value in a register (`operand`), checked to be a
+    /// bool, with the depth to return to.
+    fn bool_operand(&mut self, e: &Expr) -> R<(usize, &'static str)> {
+        let base = self.depth;
+        let (t, r) = self.operand(e, None)?;
+        if t != Type::Bool {
+            let hint = if t.numeric() { ": compare it, as in x != 0" } else { "" };
+            return self.err(e.line, format!("a condition must be a bool, not {}{hint}", t.a()));
+        }
+        Ok((base, r))
     }
 
     fn bool_value(&mut self, e: &Expr) -> R<()> {
@@ -961,24 +1125,24 @@ impl Gen {
         Ok(())
     }
 
-    /// Both sides of a comparison, checked: their registers, the right
-    /// one `zero` (and not pushed) when it is the constant 0.
+    /// Both sides of a comparison, checked: their registers, and the
+    /// depth to return to once they are used.
     fn compare_operands(
         &mut self,
         op: &str,
         a: &Expr,
         b: &Expr,
         line: usize,
-    ) -> R<(&'static str, &'static str)> {
+    ) -> R<(&'static str, &'static str, usize)> {
         if literal_minus_one(a) || literal_minus_one(b) {
             self.warnings.push(format!(
                 "{}:{line}: warning: -1 is an ordinary value: test the sign or compare with a named constant",
                 self.file
             ));
         }
-        let ta = self.expr(a)?;
-        let zero = ta.numeric() && self.try_const(b) == Some(0);
-        let tb = if zero { Type::Int } else { self.expr(b)? };
+        let base = self.depth;
+        let (ta, x) = self.operand(a, Some(b))?;
+        let (tb, y) = self.operand(b, None)?;
         let ok = (ta.numeric() && tb.numeric())
             || (ta == Type::Bool && tb == Type::Bool && (op == "==" || op == "!="))
             || (ta.is_ptr() && (ta == tb || is_zero_literal(b)))
@@ -986,14 +1150,145 @@ impl Gen {
         if !ok {
             return self.err(line, format!("cannot compare {} with {}", ta.a(), tb.a()));
         }
-        Ok(if zero { (self.top(), "zero") } else { (self.second(), self.top()) })
+        Ok((x, y, base))
     }
 
-    /// Drop a comparison's operands.
-    fn pop_operands(&mut self, y: &str) {
-        self.pop();
-        if y != "zero" {
-            self.pop();
+    /// The value of `e` in a register without copying it when it has
+    /// one: a register local's own, `zero` for the constant 0, else a
+    /// new temporary. A register local is copied after all when `later`,
+    /// evaluated before the value is used, may assign to it.
+    fn operand(&mut self, e: &Expr, later: Option<&Expr>) -> R<(Type, &'static str)> {
+        if let ExprKind::Name(n) = &e.kind
+            && let Some(Place::Local(Local { ty, reg: Some(reg), .. })) = self.lookup(n)
+            && !later.is_some_and(|l| writes(l, n))
+        {
+            return Ok((ty, reg));
+        }
+        if self.try_const(e) == Some(0) {
+            return Ok((Type::Int, "zero"));
+        }
+        let t = self.expr(e)?;
+        Ok((t, self.top()))
+    }
+
+    /// The register a result goes in, once the operands above `base`
+    /// are used: the first of them, or a new temporary.
+    fn result_reg(&mut self, base: usize, line: usize) -> R<&'static str> {
+        self.depth = base;
+        self.push(line)
+    }
+
+    /// Whether `e` can be put straight into a register with no
+    /// temporaries: a constant, a string or a variable.
+    fn is_simple(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) => true,
+            ExprKind::Name(n) => self.lookup(n).is_some(),
+            _ => self.try_const(e).is_some(),
+        }
+    }
+
+    /// Put the simple expression `e` (is_simple) in register `dst`.
+    fn simple_into(&mut self, e: &Expr, dst: &str) -> R<Type> {
+        if let ExprKind::Name(n) = &e.kind {
+            return Ok(match self.lookup(n) {
+                Some(Place::Local(Local { ty, reg: Some(reg), .. })) => {
+                    self.emit(format!("mv    {dst}, {reg}"));
+                    ty
+                }
+                Some(Place::Local(Local { ty, off, .. })) => {
+                    if ty.aggregate() {
+                        self.emit(format!("addi  {dst}, s0, {off}"));
+                    } else {
+                        self.load(&ty, dst, off, "s0");
+                    }
+                    ty.decay()
+                }
+                Some(Place::Global(ty)) if self.gp && !ty.aggregate() => {
+                    let op = if ty.size() == 1 { "lt" } else { "lw" };
+                    self.emit(format!("{op}    {dst}, {n}"));
+                    ty
+                }
+                Some(Place::Global(ty)) => {
+                    self.emit(format!("la    {dst}, {n}"));
+                    if !ty.aggregate() {
+                        self.load(&ty, dst, 0, dst);
+                    }
+                    ty.decay()
+                }
+                Some(Place::Const(v)) => {
+                    self.emit(format!("li    {dst}, {v}"));
+                    Type::Int
+                }
+                Some(Place::Imported(name)) => {
+                    self.emit(format!("li    {dst}, {name}"));
+                    Type::Int
+                }
+                None => return self.err(e.line, format!("unknown name {n}")),
+            });
+        }
+        Ok(match &e.kind {
+            ExprKind::Bool(v) => {
+                self.emit(format!("li    {dst}, {v}"));
+                Type::Bool
+            }
+            ExprKind::Str(cps) => {
+                let label = self.string(cps);
+                self.emit(format!("la    {dst}, {label}"));
+                Type::Ptr(Box::new(Type::Tryte))
+            }
+            _ => {
+                let v = self.const_eval(e)?;
+                self.emit(format!("li    {dst}, {v}"));
+                Type::Int
+            }
+        })
+    }
+
+    /// Evaluate `e` for its effect only, as a statement does: an
+    /// assignment or step of a register local needs no copy of its value.
+    fn effect(&mut self, e: &Expr) -> R<()> {
+        let reg_local = |g: &Self, x: &Expr| match &x.kind {
+            ExprKind::Name(n) => match g.lookup(n) {
+                Some(Place::Local(l)) if l.reg.is_some() => Some(l),
+                _ => None,
+            },
+            _ => None,
+        };
+        match &e.kind {
+            ExprKind::Step { op, target, .. } if reg_local(self, target).is_some() => {
+                let l = reg_local(self, target).unwrap();
+                let reg = l.reg.unwrap();
+                let amount = match &l.ty {
+                    t if t.numeric() => 1,
+                    Type::Ptr(p) if **p != Type::Void => p.size(),
+                    t => return self.err(e.line, format!("cannot {op} {}", t.a())),
+                };
+                let amount = if *op == "++" { amount } else { -amount };
+                self.emit(format!("addi  {reg}, {reg}, {amount}"));
+                self.narrow(&l.ty, &Type::Int, reg);
+                Ok(())
+            }
+            ExprKind::Assign("=", l, r) if reg_local(self, l).is_some() && self.is_simple(r) => {
+                let local = reg_local(self, l).unwrap();
+                let reg = local.reg.unwrap();
+                let t = self.simple_into(r, reg)?;
+                self.check_assign(&local.ty, &t, r)?;
+                self.narrow(&local.ty, &t, reg);
+                Ok(())
+            }
+            _ => {
+                self.expr(e)?;
+                // The value of an assignment or step is not wanted.
+                let copy = format!("        mv    {},", self.top());
+                if matches!(e.kind, ExprKind::Assign(..) | ExprKind::Step { .. })
+                    && self.code.last().is_some_and(|l| l.starts_with(&copy))
+                {
+                    self.code.pop();
+                }
+                self.pop();
+                Ok(())
+            }
         }
     }
 
@@ -1092,6 +1387,11 @@ impl Gen {
     fn type_of(&mut self, x: &Expr) -> R<Type> {
         let (code, depth, strings, data) =
             (self.code.len(), self.depth, self.strings, self.data.len());
+        if let ExprKind::Name(n) = &x.kind
+            && let Some(Place::Local(l)) = self.lookup(n)
+        {
+            return Ok(l.ty);
+        }
         let t = match &x.kind {
             ExprKind::Name(_)
             | ExprKind::Index(..)
@@ -1115,7 +1415,11 @@ impl Gen {
         };
         let r = self.push(line)?;
         match place {
-            Place::Local(Local { ty, off }) => {
+            Place::Local(Local { ty, reg: Some(reg), .. }) => {
+                self.emit(format!("mv    {r}, {reg}"));
+                Ok(ty)
+            }
+            Place::Local(Local { ty, off, .. }) => {
                 if ty.aggregate() {
                     self.emit(format!("addi  {r}, s0, {off}"));
                 } else {
@@ -1124,6 +1428,11 @@ impl Gen {
                 Ok(ty.decay())
             }
             Place::Global(ty) => {
+                if self.gp && !ty.aggregate() {
+                    let op = if ty.size() == 1 { "lt" } else { "lw" };
+                    self.emit(format!("{op}    {r}, {n}"));
+                    return Ok(ty);
+                }
                 self.emit(format!("la    {r}, {n}"));
                 if !ty.aggregate() {
                     self.load(&ty, r, 0, r);
@@ -1146,7 +1455,10 @@ impl Gen {
         let line = e.line;
         match &e.kind {
             ExprKind::Name(n) => match self.lookup(n) {
-                Some(Place::Local(Local { ty, off })) => {
+                Some(Place::Local(Local { reg: Some(_), .. })) => {
+                    self.err(line, format!("internal error: {n} is in a register"))
+                }
+                Some(Place::Local(Local { ty, off, .. })) => {
                     let r = self.push(line)?;
                     self.emit(format!("addi  {r}, s0, {off}"));
                     Ok(ty)
@@ -1168,7 +1480,8 @@ impl Gen {
                 }
             }
             ExprKind::Index(a, i) => {
-                let ta = self.expr(a)?;
+                let base = self.depth;
+                let (ta, rb) = self.operand(a, Some(i))?;
                 let Type::Ptr(elem) = ta else {
                     return self.err(line, format!("cannot index {}", ta.a()));
                 };
@@ -1177,19 +1490,24 @@ impl Gen {
                 }
                 let size = elem.size();
                 if let Some(k) = self.try_const(i).filter(|k| (k * size).abs() <= IMM_MAX) {
-                    let r = self.top();
-                    if k != 0 {
-                        self.emit(format!("addi  {r}, {r}, {}", k * size));
+                    if !(k == 0 && is_temp(rb)) {
+                        let d = self.result_reg(base, line)?;
+                        self.emit(format!("addi  {d}, {rb}, {}", k * size));
                     }
                 } else {
-                    let ti = self.expr(i)?;
+                    let (ti, ri) = self.operand(i, None)?;
                     if !ti.numeric() {
                         return self.err(line, format!("an index is a number, not {}", ti.a()));
                     }
-                    self.scale(size, line)?;
-                    let (x, y) = (self.second(), self.top());
-                    self.emit(format!("add   {x}, {x}, {y}"));
-                    self.pop();
+                    let scaled = if size == 1 {
+                        ri
+                    } else {
+                        let tmp = if is_temp(ri) { ri } else { self.push(line)? };
+                        self.scale_into(tmp, ri, size, line)?;
+                        tmp
+                    };
+                    let d = self.result_reg(base, line)?;
+                    self.emit(format!("add   {d}, {rb}, {scaled}"));
                 }
                 Ok(*elem)
             }
@@ -1232,6 +1550,49 @@ impl Gen {
             }
             _ => self.err(line, "this is not something with an address"),
         }
+    }
+
+    /// `dst` = `src` times an element size.
+    fn scale_into(&mut self, dst: &str, src: &str, size: i128, line: usize) -> R<()> {
+        match size {
+            1 => self.emit(format!("mv    {dst}, {src}")),
+            3 => self.emit(format!("shi   {dst}, {src}, 1")),
+            _ => {
+                let k = self.push(line)?;
+                self.emit(format!("li    {k}, {size}"));
+                self.emit(format!("mul   {dst}, {src}, {k}"));
+                self.pop();
+            }
+        }
+        Ok(())
+    }
+
+    /// Put two operand registers, from `operand` after `base`, on the
+    /// temporaries in order: the left at `base`, the right above it.
+    fn onto_stack(
+        &mut self,
+        base: usize,
+        ra: &'static str,
+        rb: &'static str,
+        line: usize,
+    ) -> R<()> {
+        let (x, y) = (TEMPS[base], TEMPS.get(base + 1).copied().unwrap_or(""));
+        match (ra == x, rb == y) {
+            (true, true) => {}
+            (true, false) => {
+                let t = self.result_reg(base + 1, line)?;
+                self.emit(format!("mv    {t}, {rb}"));
+            }
+            _ => {
+                // ra is not a temporary, so rb is at base if anything.
+                self.depth = base;
+                let t0 = self.push(line)?;
+                let t1 = self.push(line)?;
+                self.emit(format!("mv    {t1}, {rb}"));
+                self.emit(format!("mv    {t0}, {ra}"));
+            }
+        }
+        Ok(())
     }
 
     /// Multiply the top temporary by an element size.
@@ -1298,8 +1659,9 @@ impl Gen {
 
     fn binary(&mut self, op: &'static str, a: &Expr, b: &Expr, line: usize) -> R<Type> {
         if Self::comparison(op).is_some() {
-            let (x, y) = self.compare_operands(op, a, b, line)?;
-            self.materialise(op, x, y);
+            let (x, y, base) = self.compare_operands(op, a, b, line)?;
+            let d = self.result_reg(base, line)?;
+            self.materialise(op, d, x, y);
             return Ok(Type::Bool);
         }
         match op {
@@ -1330,11 +1692,59 @@ impl Gen {
                 Ok(Type::Trit)
             }
             _ => {
-                let ta = self.expr(a)?;
-                if let Some(t) = self.immediate(op, &ta, b, line)? {
-                    return Ok(t);
+                let base = self.depth;
+                let (ta, mut ra) = self.operand(a, Some(b))?;
+                if let Some(k) = self.try_const(b)
+                    && ta.numeric()
+                {
+                    let form = match op {
+                        "+" if k.abs() <= IMM_MAX => Some(("addi", k)),
+                        "-" if k.abs() <= IMM_MAX => Some(("addi", -k)),
+                        "<<" if (0..=27).contains(&k) => Some(("shi ", k)),
+                        ">>" if (0..=27).contains(&k) => Some(("shi ", -k)),
+                        _ => None,
+                    };
+                    if let Some((ins, v)) = form {
+                        let d = self.result_reg(base, line)?;
+                        self.emit(format!("{ins}  {d}, {ra}, {v}"));
+                        return Ok(Type::Int);
+                    }
                 }
-                let tb = self.expr(b)?;
+                if ta.is_ptr() && self.try_const(b).is_some() {
+                    if !is_temp(ra) {
+                        let t = self.result_reg(base, line)?;
+                        self.emit(format!("mv    {t}, {ra}"));
+                        ra = t;
+                    }
+                    if let Some(t) = self.immediate(op, &ta, b, line)? {
+                        return Ok(t);
+                    }
+                }
+                let (tb, rb) = self.operand(b, None)?;
+                let plain = ["+", "-", "*", "/", "%", "<<", ">>", "&", "|"];
+                if ta.numeric() && tb.numeric() && plain.contains(&op) {
+                    let rb = if op == ">>" {
+                        let n = if is_temp(rb) { rb } else { self.push(line)? };
+                        self.emit(format!("neg   {n}, {rb}"));
+                        n
+                    } else {
+                        rb
+                    };
+                    let ins = match op {
+                        "+" => "add",
+                        "-" => "sub",
+                        "*" => "mul",
+                        "/" => "div",
+                        "%" => "rem",
+                        "<<" | ">>" => "sh",
+                        "&" => "tmin",
+                        _ => "tmax",
+                    };
+                    let d = self.result_reg(base, line)?;
+                    self.emit(format!("{ins:<5} {d}, {ra}, {rb}"));
+                    return Ok(Type::Int);
+                }
+                self.onto_stack(base, ra, rb, line)?;
                 self.arith(op, &ta, &tb, line)
             }
         }
@@ -1447,29 +1857,26 @@ impl Gen {
 
     /// The top two temporaries compared, as a bool in the left one,
     /// with no branch (so the assembler can still bundle it).
-    fn materialise(&mut self, op: &str, x: &str, y: &str) {
+    fn materialise(&mut self, op: &str, d: &str, x: &str, y: &str) {
         match op {
             // c = cmp(x, y); x > y is sign(2c - 1), x >= y is sign(2c + 1).
             ">" | ">=" | "<" | "<=" => {
                 let (l, r) = if op.starts_with('>') { (x, y) } else { (y, x) };
-                self.emit(format!("cmp   {x}, {l}, {r}"));
-                self.emit(format!("add   {x}, {x}, {x}"));
+                self.emit(format!("cmp   {d}, {l}, {r}"));
+                self.emit(format!("add   {d}, {d}, {d}"));
                 let k = if op.ends_with('=') { -1 } else { 1 };
-                self.emit(format!("cmpi  {x}, {x}, {k}"));
+                self.emit(format!("cmpi  {d}, {d}, {k}"));
             }
             // |c| is 1 when they differ: != is sign(2|c| - 1).
             _ => {
-                self.emit(format!("cmp   {x}, {x}, {y}"));
-                self.emit(format!("tabs  {x}, {x}"));
-                self.emit(format!("add   {x}, {x}, {x}"));
-                self.emit(format!("cmpi  {x}, {x}, 1"));
+                self.emit(format!("cmp   {d}, {x}, {y}"));
+                self.emit(format!("tabs  {d}, {d}"));
+                self.emit(format!("add   {d}, {d}, {d}"));
+                self.emit(format!("cmpi  {d}, {d}, 1"));
                 if op == "==" {
-                    self.emit(format!("neg   {x}, {x}"));
+                    self.emit(format!("neg   {d}, {d}"));
                 }
             }
-        }
-        if y != "zero" {
-            self.pop();
         }
     }
 
@@ -1482,8 +1889,34 @@ impl Gen {
                 let t = self.expr(r)?;
                 self.check_assign(&local.ty, &t, r)?;
                 let v = self.top();
-                self.store(&local.ty, v, local.off, "s0");
+                self.store_local(&local, v, &t);
+                if let Some(reg) = local.reg
+                    && local.ty != t
+                {
+                    self.emit(format!("mv    {v}, {reg}"));
+                }
                 return Ok(local.ty);
+            }
+            if let Some(ty) = self.gp_global(l) {
+                let base = self.depth;
+                let (t, mut v) = self.operand(r, None)?;
+                self.check_assign(&ty, &t, r)?;
+                if ty == Type::Trit && t != Type::Trit && !is_temp(v) && v != "zero" {
+                    let d = self.result_reg(base, line)?;
+                    self.emit(format!("mv    {d}, {v}"));
+                    v = d;
+                }
+                if is_temp(v) {
+                    self.narrow(&ty, &t, v);
+                }
+                let op = if ty.size() == 1 { "st" } else { "sw" };
+                let ExprKind::Name(n) = &l.kind else { unreachable!() };
+                self.emit(format!("{op}    {v}, {n}"));
+                if !is_temp(v) {
+                    let d = self.result_reg(base, line)?;
+                    self.emit(format!("mv    {d}, {v}"));
+                }
+                return Ok(ty);
             }
             let tl = self.addr(l)?;
             if matches!(tl, Type::Array(..)) {
@@ -1504,6 +1937,40 @@ impl Gen {
             return Ok(tl);
         }
         let base = &op[..op.len() - 1];
+        if let ExprKind::Name(n) = &l.kind
+            && let Some(Place::Local(local)) = self.lookup(n)
+            && let Some(reg) = local.reg
+        {
+            let v = self.push(line)?;
+            self.emit(format!("mv    {v}, {reg}"));
+            let t = match self.immediate(base, &local.ty, r, line)? {
+                Some(t) => t,
+                None => {
+                    let tr = self.expr(r)?;
+                    self.arith(base, &local.ty, &tr, line)?
+                }
+            };
+            self.check_assign(&local.ty, &t, r)?;
+            self.narrow(&local.ty, &t, v);
+            self.emit(format!("mv    {reg}, {v}"));
+            return Ok(local.ty);
+        }
+        if let Some(ty) = self.gp_global(l) {
+            let ExprKind::Name(n) = &l.kind else { unreachable!() };
+            let (lo, so) = if ty.size() == 1 { ("lt", "st") } else { ("lw", "sw") };
+            let v = self.push(line)?;
+            self.emit(format!("{lo}    {v}, {n}"));
+            let t = match self.immediate(base, &ty, r, line)? {
+                Some(t) => t,
+                None => {
+                    let tr = self.expr(r)?;
+                    self.arith(base, &ty, &tr, line)?
+                }
+            };
+            self.check_assign(&ty, &t, r)?;
+            self.emit(format!("{so}    {v}, {n}"));
+            return Ok(ty);
+        }
         let tl = self.addr(l)?;
         if tl.aggregate() {
             return self.err(line, format!("{op} does not take {}", tl.a()));
@@ -1650,7 +2117,61 @@ impl Gen {
         }
     }
 
+    /// The type of a global scalar named by `e`, when `.gp` lets it be
+    /// loaded and stored by name.
+    fn gp_global(&self, e: &Expr) -> Option<Type> {
+        match &e.kind {
+            ExprKind::Name(n) if self.gp => match self.lookup(n) {
+                Some(Place::Global(ty)) if !ty.aggregate() => Some(ty),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn step(&mut self, op: &str, post: bool, target: &Expr, line: usize) -> R<Type> {
+        if let Some(t) = self.gp_global(target) {
+            let ExprKind::Name(n) = &target.kind else { unreachable!() };
+            let amount = match &t {
+                t if t.numeric() => 1,
+                Type::Ptr(e) if **e != Type::Void => e.size(),
+                t => return self.err(line, format!("cannot {op} {}", t.a())),
+            };
+            let amount = if op == "++" { amount } else { -amount };
+            let (lo, so) = if t.size() == 1 { ("lt", "st") } else { ("lw", "sw") };
+            let old = self.push(line)?;
+            self.emit(format!("{lo}    {old}, {n}"));
+            let new = self.push(line)?;
+            self.emit(format!("addi  {new}, {old}, {amount}"));
+            self.emit(format!("{so}    {new}, {n}"));
+            if !post {
+                self.emit(format!("mv    {old}, {new}"));
+            }
+            self.pop();
+            return Ok(t);
+        }
+        if let ExprKind::Name(n) = &target.kind
+            && let Some(Place::Local(local)) = self.lookup(n)
+            && let Some(reg) = local.reg
+        {
+            let t = local.ty;
+            let amount = match &t {
+                t if t.numeric() => 1,
+                Type::Ptr(e) if **e != Type::Void => e.size(),
+                t => return self.err(line, format!("cannot {op} {}", t.a())),
+            };
+            let amount = if op == "++" { amount } else { -amount };
+            let r = self.push(line)?;
+            if post {
+                self.emit(format!("mv    {r}, {reg}"));
+            }
+            self.emit(format!("addi  {reg}, {reg}, {amount}"));
+            self.narrow(&t, &Type::Int, reg);
+            if !post {
+                self.emit(format!("mv    {r}, {reg}"));
+            }
+            return Ok(t);
+        }
         let t = self.addr(target)?;
         let amount = match &t {
             t if t.numeric() => 1,
@@ -1745,12 +2266,38 @@ impl Gen {
             return self.long_call(name, args, &ret, params.as_deref().unwrap_or_default(), line);
         }
         let base = self.depth;
+        let check = |g: &Self, i: usize, t: &Type, a: &Expr| match &params {
+            Some(p) => g.check_assign(&p[i], t, a),
+            None if *t == Type::Void => g.err(a.line, "sys takes values"),
+            None => Ok(()),
+        };
+        // Arguments that need code go to temporaries first, in order;
+        // constants and variables go straight to their registers after.
+        // A variable read later must not change in between: a register
+        // local only by an assignment, memory by a call too.
+        let effects = args.iter().any(|a| !self.is_simple(a) && has_effects(a));
+        let mut types = vec![Type::Void; args.len()];
+        let simple: Vec<bool> = args
+            .iter()
+            .map(|a| {
+                self.is_simple(a)
+                    && match &a.kind {
+                        ExprKind::Name(n) => match self.lookup(n) {
+                            Some(Place::Const(_) | Place::Imported(_)) => true,
+                            Some(Place::Local(Local { reg: Some(_), .. })) => {
+                                !args.iter().any(|b| writes(b, n))
+                            }
+                            _ => !effects,
+                        },
+                        _ => true,
+                    }
+            })
+            .collect();
         for (i, a) in args.iter().enumerate() {
-            let t = self.expr(a)?;
-            match &params {
-                Some(p) => self.check_assign(&p[i], &t, a)?,
-                None if t == Type::Void => return self.err(a.line, "sys takes values"),
-                None => {}
+            if !simple[i] {
+                let t = self.expr(a)?;
+                check(self, i, &t, a)?;
+                types[i] = t;
             }
         }
         // Keep the temporaries an enclosing expression still needs.
@@ -1760,8 +2307,19 @@ impl Gen {
                 self.emit(format!("sw    {t}, {}(sp)", 3 * i));
             }
         }
-        for i in 0..args.len() {
-            self.emit(format!("mv    {}, {}", ARGS[i], TEMPS[base + i]));
+        let mut next = base;
+        for (i, a) in args.iter().enumerate() {
+            if simple[i] {
+                types[i] = self.simple_into(a, ARGS[i])?;
+                check(self, i, &types[i], a)?;
+            } else {
+                self.emit(format!("mv    {}, {}", ARGS[i], TEMPS[next]));
+                next += 1;
+            }
+            // A tryte or trit argument travels cut to its type (abi.md 2.2).
+            if let Some(p) = &params {
+                self.narrow(&p[i], &types[i], ARGS[i]);
+            }
         }
         if name == "sys" {
             self.emit("sys");
@@ -1923,6 +2481,7 @@ impl Gen {
             let t = self.expr(a)?;
             self.check_assign(&params[i], &t, a)?;
             let r = self.top();
+            self.narrow(&params[i], &t, r);
             self.emit(format!("sw    {r}, {}(sp)", slot(i as i128)));
             self.pop();
         }
@@ -1940,6 +2499,115 @@ impl Gen {
         }
         Ok(ret.clone())
     }
+}
+
+/// Whether evaluating `e` may assign to the variable `name`.
+fn writes(e: &Expr, name: &str) -> bool {
+    let w = |x: &Expr| writes(x, name);
+    match &e.kind {
+        ExprKind::Assign(_, l, r) => {
+            matches!(&l.kind, ExprKind::Name(n) if n == name) || w(l) || w(r)
+        }
+        ExprKind::Step { target, .. } => {
+            matches!(&target.kind, ExprKind::Name(n) if n == name) || w(target)
+        }
+        ExprKind::Unary(_, x)
+        | ExprKind::Cast(_, x)
+        | ExprKind::SizeofExpr(x)
+        | ExprKind::Field(x, _, _) => w(x),
+        ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) => w(a) || w(b),
+        ExprKind::Cond(c, a, b) => w(c) || w(a) || w(b),
+        ExprKind::Call(_, args) | ExprKind::List(args) => args.iter().any(w),
+        _ => false,
+    }
+}
+
+/// Whether evaluating `e` may change a variable: a call or an assignment.
+fn has_effects(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Assign(..) | ExprKind::Step { .. } | ExprKind::Call(..) => true,
+        ExprKind::Unary(_, x)
+        | ExprKind::Cast(_, x)
+        | ExprKind::SizeofExpr(x)
+        | ExprKind::Field(x, _, _) => has_effects(x),
+        ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) => has_effects(a) || has_effects(b),
+        ExprKind::Cond(c, a, b) => has_effects(c) || has_effects(a) || has_effects(b),
+        ExprKind::List(items) => items.iter().any(has_effects),
+        _ => false,
+    }
+}
+
+/// Collect the names whose address `s` takes with `&`.
+fn stmt_addressed(s: &Stmt, out: &mut HashSet<String>) {
+    let mut each = |x: &Expr| expr_addressed(x, out);
+    match s {
+        Stmt::Block(body) => body.iter().for_each(|s| stmt_addressed(s, out)),
+        Stmt::Local { array, init, .. } => array.iter().chain(init).for_each(&mut each),
+        Stmt::Expr(x) => each(x),
+        Stmt::If(c, a, b) => {
+            each(c);
+            stmt_addressed(a, out);
+            if let Some(b) = b {
+                stmt_addressed(b, out);
+            }
+        }
+        Stmt::While(c, body) => {
+            each(c);
+            stmt_addressed(body, out);
+        }
+        Stmt::For(init, c, step, body) => {
+            c.iter().chain(step).for_each(&mut each);
+            if let Some(init) = init {
+                stmt_addressed(init, out);
+            }
+            stmt_addressed(body, out);
+        }
+        Stmt::Return(x, _) => x.iter().for_each(each),
+        Stmt::Which { value, arms, .. } => {
+            each(value);
+            for (_, body, _) in arms {
+                body.iter().for_each(|s| stmt_addressed(s, out));
+            }
+        }
+        Stmt::Asm(..) | Stmt::Break(_) | Stmt::Continue(_) => {}
+    }
+}
+
+fn expr_addressed(e: &Expr, out: &mut HashSet<String>) {
+    match &e.kind {
+        ExprKind::Unary("&", x) => {
+            if let ExprKind::Name(n) = &x.kind {
+                out.insert(n.clone());
+            }
+            expr_addressed(x, out);
+        }
+        ExprKind::Unary(_, x)
+        | ExprKind::Cast(_, x)
+        | ExprKind::SizeofExpr(x)
+        | ExprKind::Field(x, _, _)
+        | ExprKind::Step { target: x, .. } => expr_addressed(x, out),
+        ExprKind::Binary(_, a, b) | ExprKind::Assign(_, a, b) | ExprKind::Index(a, b) => {
+            expr_addressed(a, out);
+            expr_addressed(b, out);
+        }
+        ExprKind::Cond(c, a, b) => {
+            expr_addressed(c, out);
+            expr_addressed(a, out);
+            expr_addressed(b, out);
+        }
+        ExprKind::Call(_, args) | ExprKind::List(args) => {
+            args.iter().for_each(|a| expr_addressed(a, out))
+        }
+        ExprKind::Int(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Name(_)
+        | ExprKind::SizeofType(_) => {}
+    }
+}
+
+fn is_temp(r: &str) -> bool {
+    TEMPS.contains(&r)
 }
 
 fn pointee_size(t: &Type) -> i128 {

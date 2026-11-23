@@ -61,6 +61,8 @@ pub(crate) enum Unit {
         /// The operands of its instructions, which name the functions
         /// it may call.
         operands: String,
+        /// Whether it says `.gp`: then globals are reached through `gp`.
+        gp: bool,
         file: String,
         line: usize,
     },
@@ -110,6 +112,7 @@ impl Loader {
                     self.load(&target, &target_shown, Some((shown, *line)))?;
                 } else if rel.ends_with(".s") {
                     let text = Self::read(&target, &target_shown, Some((shown, *line)))?;
+                    let gp = text.lines().any(|l| l.split_whitespace().next() == Some(".gp"));
                     let (consts, operands) =
                         equates(&text, &target_shown).map_err(|m| Error::new(shown, *line, m))?;
                     let path = relative(&self.out_dir, &absolute(&target));
@@ -117,6 +120,7 @@ impl Loader {
                         path,
                         consts,
                         operands,
+                        gp,
                         file: shown.into(),
                         line: *line,
                     });
