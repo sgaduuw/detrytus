@@ -1041,3 +1041,48 @@ the emulator runs them through the same expansion.
   live console; a run with `--input` still skips at once and stays
   deterministic. A skip shorter than 20,000 ticks is not slowed at all,
   which covers the disk: a transfer takes 1,000 ticks plus 100 a block.
+
+### 2026-11-23 · Trice, a compiled language, and an ABI
+
+The owner asked for a design for the first compiler. Standard C and
+Rust assume binary integers (the first entry above), so the first
+language is a C-shaped one built on the machine's own types:
+`docs/trice.md`, with the calling convention and data layout it
+compiles to in `docs/abi.md`. Both are specs only; the compiler comes
+next. The owner settled these choices:
+
+- **The name is Trice** (sources `.tc`, `detrytus tc`). "C3", the
+  owner's first idea, belongs to c3-lang, and "Tern" to tern-lang.
+- **A boolean has three values**: true (+), false (−) and unknown (0),
+  for "not decided" or "not done yet", as isa.md 4.2's boolean trit
+  already allows. `&&` and `||` are Kleene AND and OR (`tmin`, `tmax`).
+  Conditions must be booleans, with no "nonzero is true": under C's
+  rule a stored false (−1) would read as true. `if` and `while` branch
+  only on true, as SQL's `WHERE` treats `NULL`, and a `which` statement
+  (one `br3`) handles all three cases.
+- **Trit-wise operators replace bitwise ones**: `&` is `tmin`, `|` is
+  `tmax`, `-` is the only negation (`not` and `neg` are one
+  instruction), `<<` and `>>` shift by trits, and `<=>` gives a trit.
+  The binary operations stay builtins, for binary data.
+- **Overflow wraps**, as the ISA's `wrap`, rather than being undefined.
+- **No libc.** The compiler gives only a `sys` builtin; start code and
+  helpers are ordinary files a program imports (trylobite's `lib/`).
+  What languages share is the operating system's interface, not a C
+  library: a later Rust target starts `no_std` over a crate of system
+  call wrappers and ports `std` onto the calls directly, so a libc
+  would only pull the kernel's API toward C.
+- **The compiler is Rust, in this workspace** (`rust/tc`), not a new
+  repository: it reuses `rust/asm` to read `.equ` constants from
+  imported assembly (so `include/layout.s` stays the one place for
+  trylobite's numbers) and to assemble, and trylobite's
+  `tools/install-detrytus` installs it with no new pin. It knows the
+  ISA and the ABI but no system call.
+- **One assembly file per program** until there is a linker. The ABI
+  keeps Rust in view: `a0`/`a1` two-word results (slices), builtins
+  named after instructions so a `core::arch` module can mirror them,
+  and an object format and linker to come, which Rust needs too. Rust
+  here will always be binary Rust (a byte per tryte, `i64` in two
+  words), so Trice stays the native language.
+
+The first milestone is trylobite's `bin/echo` rewritten in Trice,
+passing its tests unchanged; then `bin/wc`.
