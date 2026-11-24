@@ -149,7 +149,6 @@ stdout = """
 # Compiled by detrytus tc from {here}/programs/link/main.tc: docs/trice.md, docs/abi.md.
         .global main
         .compress
-        .part
 
 # int main(...), {here}/programs/link/main.tc:4
 main:
@@ -196,4 +195,30 @@ left out, unused
 globals
             12  main  ({here}/programs/link/main.tc)
             27  twice  ({here}/programs/link/sum.tc)
+"""
+
+[[case]]
+args = ["tc", "-c", "{here}/programs/link/helper.tc"]
+name = "a program compiled on its own exports only main"
+status = 0
+stderr = ""
+stdout = """
+# Compiled by detrytus tc from {here}/programs/link/helper.tc: docs/trice.md, docs/abi.md.
+        .global main
+        .compress
+
+# int main(...), {here}/programs/link/helper.tc:7
+main:
+        addi  sp, sp, -3
+        sw    ra, 0(sp)
+# {here}/programs/link/helper.tc:7
+        li    a0, 10
+        call  twice
+        li    t0, 22
+# {here}/programs/link/helper.tc:5
+        add   a0, a0, t0
+        lw    ra, 0(sp)
+        addi  sp, sp, 3
+        ret
+        .nocompress
 """

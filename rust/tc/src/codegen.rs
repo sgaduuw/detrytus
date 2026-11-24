@@ -121,10 +121,18 @@ pub(crate) fn generate(units: &[Unit], main_file: &str, alone: bool) -> R<Output
     };
     clear_structs();
     g.declare(units)?;
-    // Compiling one file, any function may be called from another.
-    let used = if alone { None } else { used_functions(units) };
+    // A file compiled alone is a library, whose functions and globals
+    // other objects use, unless it defines main: then it is a program,
+    // whose start code (in the same object) is all that calls into it.
+    let library = alone
+        && !units.iter().any(|u| {
+            matches!(u, Unit::Item { item: Item::Func(f), own: true, .. }
+                if f.name == "main" && f.body.is_some())
+        });
+    // Compiling a library, any function may be called from another file.
+    let used = if library { None } else { used_functions(units) };
     g.call_sites = call_sites(units, used.as_ref());
-    if alone {
+    if library {
         // Other objects may call any of them too: none has one caller.
         for u in units {
             if let Unit::Item { item: Item::Func(f), own: true, .. } = u {
@@ -133,7 +141,7 @@ pub(crate) fn generate(units: &[Unit], main_file: &str, alone: bool) -> R<Output
         }
     }
     g.code.push(format!("# Compiled by detrytus tc from {main_file}: docs/trice.md, docs/abi.md."));
-    if alone {
+    if library {
         // What this file defines, for the other objects.
         let names: Vec<&str> = units
             .iter()
@@ -148,12 +156,19 @@ pub(crate) fn generate(units: &[Unit], main_file: &str, alone: bool) -> R<Output
         if !names.is_empty() {
             g.code.push(format!("        .global {}", names.join(", ")));
         }
+    } else if alone {
+        // A program's start code may be an object of its own.
+        g.code.push("        .global main".into());
     }
     let mut compressing = false;
     let mut ranges = Vec::new();
     for unit in units {
         match unit {
             Unit::Include { path, own: true, .. } => {
+                if alone {
+                    // Assembly a file imports is a part of its own too.
+                    g.code.push("        .part".into());
+                }
                 g.code.push(format!("        .include \"{path}\""))
             }
             Unit::Item { file, item: Item::Func(f), own: true } if f.body.is_some() => {
@@ -164,7 +179,7 @@ pub(crate) fn generate(units: &[Unit], main_file: &str, alone: bool) -> R<Output
                 g.file = file.clone();
                 // A function nothing calls is checked, and left out.
                 let (code, data) = (g.code.len(), g.data.len());
-                if alone {
+                if library {
                     // A part of its own, which the linker leaves out
                     // when no other object uses it.
                     g.code.push("        .part".into());
@@ -190,7 +205,7 @@ pub(crate) fn generate(units: &[Unit], main_file: &str, alone: bool) -> R<Output
     let mut assembly = g.code.join("\n");
     assembly.push('\n');
     for line in &g.data {
-        if alone {
+        if library {
             assembly.push_str("        .part\n");
         }
         assembly.push_str(line);
