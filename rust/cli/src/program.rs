@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 
+use detrytus_asm::link::Input;
 use detrytus_asm::object::Object;
 use detrytus_asm::{Image, assemble, assemble_object};
 use detrytus_core::image;
@@ -81,6 +82,18 @@ pub fn load_one(path: &str) -> Result<Loaded, Fail> {
 /// A file as an object: an object file read, or a source assembled (or
 /// a Trice file compiled, `tc -c`) as one, with its listing.
 pub fn load_object(path: &str) -> Result<(Object, Option<Image>), Fail> {
+    match load_input(path)? {
+        Input::Object(o) => Ok((o, None)),
+        Input::Source { text, file } => {
+            let (o, image) = assemble_object(&text, Some(&file)).map_err(asm_error)?;
+            Ok((o, Some(image)))
+        }
+    }
+}
+
+/// A file to link: an object file read, or a source (a Trice file
+/// compiled, `tc -c`) for the linker to assemble.
+pub fn load_input(path: &str) -> Result<Input, Fail> {
     if path.ends_with(".tc") {
         // Compiled as if to the .s beside it, so its .include paths and
         // messages read the same.
@@ -93,8 +106,7 @@ pub fn load_object(path: &str) -> Result<(Object, Option<Image>), Fail> {
             eprintln!("{w}");
         }
         let shown = format!("{}.s", path.trim_end_matches(".tc"));
-        let (o, image) = assemble_object(&out.assembly, Some(&shown)).map_err(asm_error)?;
-        return Ok((o, Some(image)));
+        return Ok(Input::Source { text: out.assembly, file: shown });
     }
     match read(path)? {
         Contents::Image(_) => Err(Fail::new(
@@ -102,19 +114,20 @@ pub fn load_object(path: &str) -> Result<(Object, Option<Image>), Fail> {
             BAD_INPUT,
         )),
         Contents::Text(text, shown) if is_object(&text) => {
-            let o = Object::parse(&text, &shown).map_err(|e| Fail::new(e, BAD_INPUT))?;
-            Ok((o, None))
+            Object::parse(&text, &shown).map(Input::Object).map_err(|e| Fail::new(e, BAD_INPUT))
         }
-        Contents::Text(text, shown) => {
-            let (o, image) = assemble_object(&text, Some(&shown)).map_err(asm_error)?;
-            Ok((o, Some(image)))
-        }
+        Contents::Text(text, shown) => Ok(Input::Source { text, file: shown }),
     }
 }
 
 /// Link objects, each with the name its messages use.
 pub fn link(objects: &[(String, Object)]) -> Result<detrytus_asm::link::Linked, Fail> {
     detrytus_asm::link::link(objects).map_err(|e| Fail::new(e, BAD_INPUT))
+}
+
+/// Link objects and sources, relaxing the sources (docs/linker.md).
+pub fn link_inputs(inputs: &[(String, Input)]) -> Result<detrytus_asm::link::Linked, Fail> {
+    detrytus_asm::link::link_inputs(inputs).map_err(|e| Fail::new(e, BAD_INPUT))
 }
 
 fn asm_error(e: detrytus_asm::AsmError) -> Fail {

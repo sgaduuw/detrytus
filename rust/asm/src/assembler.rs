@@ -125,6 +125,8 @@ struct Assembler {
     slotted: BTreeSet<usize>,
     /// Assembling an object (docs/linker.md): what the linker finishes.
     object: Option<Objects>,
+    /// Relaxing: where a previous link put each base this object names.
+    hints: Option<HashMap<String, Value>>,
 }
 
 /// What assembling an object keeps besides the image.
@@ -644,14 +646,25 @@ impl Assembler {
     fn emit_bundle(&mut self, stmts: &[Statement], i: usize) -> PassResult<()> {
         let a = &stmts[i];
         let b = a.partner.map(|j| &stmts[j]);
-        let slot_a = self.slot(a)?;
-        let slot_b = match b {
+        let (slot_a, pending_a) = self.slot(a)?;
+        let (slot_b, pending_b) = match b {
             Some(b) => self.slot(b).map_err(|e| match e {
                 PassError::Operand(e) => PassError::Located(b.error(e.message())),
                 located => located,
             })?,
-            None => compressed::NOP,
+            None => (compressed::NOP, Vec::new()),
         };
+        // What the linker finishes in a slot, counting from the bundle.
+        let in_slot = |pending: Vec<Pending>, b: bool| -> Vec<Pending> {
+            pending
+                .into_iter()
+                .map(|p| Pending { kind: p.kind.in_slot(b).expect("checked by slot"), ..p })
+                .collect()
+        };
+        self.keep(a, in_slot(pending_a, false));
+        if let Some(b) = b {
+            self.keep(b, in_slot(pending_b, true));
+        }
         let word = compressed::bundle(slot_a, slot_b);
         for (offset, tryte) in [-1, 0, 1].into_iter().zip(split_word(word)) {
             self.put(a.addr + offset, tryte, a)?;
@@ -677,16 +690,24 @@ impl Assembler {
     /// The slot an instruction encodes to: its full instruction, encoded
     /// with the bundle's address as pc, must fit a form, and for a `c.`
     /// instruction the one it names.
-    fn slot(&self, s: &Statement) -> PassResult<i64> {
+    /// What the linker must finish in it comes back too: when relaxing,
+    /// an immediate or a branch offset, tried with the hints' values.
+    fn slot(&self, s: &Statement) -> PassResult<(i64, Vec<Pending>)> {
         let base = s.addr - low3(s.addr);
         if !slots::is_slot(&s.mnemonic) {
-            let ops = self.ops(&s.section);
+            let mut ops = self.ops(&s.section);
+            ops.hints = self.hints.as_ref();
             let word = self.words_at(&ops, s, base)?[0];
-            unlinked(&ops, s)?;
+            let pending = ops.pending.take();
+            if ops.hints.is_none() || pending.iter().any(|p| p.kind.in_slot(false).is_none()) {
+                ops.pending.replace(pending.clone());
+                unlinked(&ops, s)?;
+            }
             let d = isa::decode(word).expect("an encoded instruction decodes");
-            return compressed::compress(&d).ok_or_else(|| {
-                OperandError::Message(format!("{} does not fit a slot", s.mnemonic)).into()
-            });
+            let slot = compressed::compress(&d).ok_or_else(|| {
+                OperandError::Message(format!("{} does not fit a slot", s.mnemonic))
+            })?;
+            return Ok((slot, pending));
         }
         let ops = self.ops(&s.section);
         let (name, texts) = slots::full(&s.mnemonic, &s.operands)?;
@@ -700,10 +721,11 @@ impl Assembler {
         let word = ops.encode_instruction(op, "", &texts, base, extra)?;
         unlinked(&ops, s)?;
         let d = isa::decode(word).expect("an encoded instruction decodes");
-        compressed::compress(&d).ok_or_else(|| {
+        let slot = compressed::compress(&d).ok_or_else(|| {
             let full = crate::disasm::disassemble(word, Some(base as i64));
-            OperandError::Message(format!("{full} does not fit {}", s.mnemonic)).into()
-        })
+            OperandError::Message(format!("{full} does not fit {}", s.mnemonic))
+        })?;
+        Ok((slot, Vec::new()))
     }
 
     fn emit_trytes(&mut self, s: &Statement) -> PassResult<()> {
@@ -854,7 +876,7 @@ fn compressible(stmts: &[Statement]) -> BTreeSet<usize> {
 /// layout repeats, each time without the ones that did not fit, until
 /// every pair fits. The set only shrinks, so this ends.
 pub fn assemble(source: &str, file: Option<&str>) -> Result<Image, AsmError> {
-    let (asm, _) = run(source, file, false)?;
+    let (asm, _) = run(source, file, false, None)?;
     let mut image = asm.image;
     image.symbols = asm.symbols.into_iter().collect();
     Ok(image)
@@ -864,7 +886,36 @@ pub fn assemble(source: &str, file: Option<&str>) -> Result<Image, AsmError> {
 /// with its listing. A section without an address is the linker's to
 /// place, and a name the source does not define is external.
 pub fn assemble_object(source: &str, file: Option<&str>) -> Result<(Object, Image), AsmError> {
-    let (mut asm, stmts) = run(source, file, true)?;
+    object_from(source, file, None)
+}
+
+/// What relaxing (docs/linker.md) tells the assembler: where a previous
+/// link put each base the object names (its own sections, `[NAME]`, and
+/// other objects' globals), and the instructions, by (file, line), not
+/// to put in a slot after all because the link found they did not fit.
+#[derive(Debug, Clone, Default)]
+pub struct Relax {
+    pub hints: HashMap<String, Value>,
+    pub excluded: HashSet<(Option<String>, usize)>,
+}
+
+/// Assemble an object as assemble_object does, but let automatic pairing
+/// put an instruction the linker finishes in a slot when, with the
+/// hints' values, it fits one. The linker checks it still fits.
+pub fn assemble_object_relaxed(
+    source: &str,
+    file: Option<&str>,
+    relax: &Relax,
+) -> Result<(Object, Image), AsmError> {
+    object_from(source, file, Some(relax))
+}
+
+fn object_from(
+    source: &str,
+    file: Option<&str>,
+    relax: Option<&Relax>,
+) -> Result<(Object, Image), AsmError> {
+    let (mut asm, stmts) = run(source, file, true, relax)?;
     let mut o = asm.object.take().expect("assembled as an object");
     // Each section ends where layout left it.
     asm.sections.insert(asm.section.clone(), (asm.loc, asm.shift));
@@ -941,13 +992,22 @@ fn run(
     source: &str,
     file: Option<&str>,
     object: bool,
+    relax: Option<&Relax>,
 ) -> Result<(Assembler, Vec<Statement>), AsmError> {
     let mut parsed = parse(source, file)?;
     crate::gp::rewrite(&mut parsed)?;
     let objects = object.then(|| Objects::new(defined_names(&parsed)));
     let mut slotted = compressible(&parsed);
+    if let Some(relax) = relax {
+        slotted.retain(|&i| !relax.excluded.contains(&(parsed[i].file.clone(), parsed[i].line)));
+    }
+    let hints = relax.map(|r| r.hints.clone());
     let (mut asm, stmts) = loop {
-        let mut asm = Assembler { slotted: slotted.clone(), ..Assembler::new(objects.clone()) };
+        let mut asm = Assembler {
+            slotted: slotted.clone(),
+            hints: hints.clone(),
+            ..Assembler::new(objects.clone())
+        };
         let mut stmts = parsed.clone();
         asm.layout(&mut stmts)?;
         let unfit = asm.unfit(&stmts);

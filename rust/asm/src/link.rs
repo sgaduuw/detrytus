@@ -14,8 +14,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use detrytus_core::isa;
 use detrytus_core::trits::{TRYTE_TRITS, WORD_TRITS, field, half, low, pow3, split_high};
+use detrytus_core::{compressed, isa};
 
 use crate::assembler::Image;
 use crate::expr::Value;
@@ -54,6 +54,20 @@ pub struct Linked {
     /// The parts left out because nothing uses them: (object, the first
     /// name defined in the part, or the part's own name).
     pub dropped: Vec<(String, String)>,
+    /// Where each object's kept sections went, by index: `[NAME]` -> base.
+    pub bases: Vec<HashMap<String, Value>>,
+    /// Instructions in slots that no longer fit one with the value the
+    /// linker put in: (object index, its relocation). link() refuses
+    /// them; relaxing assembles again without them.
+    pub unfit: Vec<(usize, Reloc)>,
+}
+
+/// Something to link: an object, or a source the linker assembles
+/// itself, so that it can relax it.
+#[derive(Debug, Clone)]
+pub enum Input {
+    Object(Object),
+    Source { text: String, file: String },
 }
 
 /// The section a part belongs to: `text:3` is part of `text`.
@@ -109,7 +123,72 @@ fn next_centre(loc: Value, unit: Value) -> Value {
 
 /// Link objects, each with the name its messages use.
 pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
-    let mut linked = Linked::default();
+    let linked = link_unchecked(objects)?;
+    if let Some((_, r)) = linked.unfit.first() {
+        return Err(format!("{}: the instruction in slot no longer fits one", r.place()));
+    }
+    Ok(linked)
+}
+
+/// Link objects and sources, relaxing the sources (docs/linker.md):
+/// each is assembled as an object and linked; then assembled again with
+/// where that link put things, so automatic pairing can put in a slot an
+/// instruction the linker finishes, and linked again. An instruction
+/// whose slot the link finds it no longer fits is kept out of slots and
+/// the sources assembled again, until every slot fits. Objects given
+/// ready-made are linked as they are.
+pub fn link_inputs(inputs: &[(String, Input)]) -> Result<Linked, String> {
+    use crate::assembler::{Relax, assemble_object, assemble_object_relaxed};
+    let build = |relax: Option<&[Relax]>| -> Result<Vec<(String, Object)>, String> {
+        inputs
+            .iter()
+            .enumerate()
+            .map(|(k, (shown, input))| {
+                let o = match (input, relax) {
+                    (Input::Object(o), _) => o.clone(),
+                    (Input::Source { text, file }, None) => {
+                        assemble_object(text, Some(file)).map_err(|e| e.to_string())?.0
+                    }
+                    (Input::Source { text, file }, Some(r)) => {
+                        assemble_object_relaxed(text, Some(file), &r[k])
+                            .map_err(|e| e.to_string())?
+                            .0
+                    }
+                };
+                Ok((shown.clone(), o))
+            })
+            .collect()
+    };
+    let mut linked = link(&build(None)?)?;
+    if !inputs.iter().any(|(_, i)| matches!(i, Input::Source { .. })) {
+        return Ok(linked);
+    }
+    let mut relax: Vec<Relax> = vec![Relax::default(); inputs.len()];
+    // Each round either succeeds or keeps one more instruction out of
+    // slots, so this ends; a success with new addresses tries again, in
+    // case they let more in, while the program keeps shrinking.
+    loop {
+        for (k, r) in relax.iter_mut().enumerate() {
+            r.hints = linked.bases[k].clone();
+            r.hints.extend(linked.globals.iter().map(|(n, (v, _))| (n.clone(), *v)));
+        }
+        let again = link_unchecked(&build(Some(&relax))?)?;
+        if again.unfit.is_empty() {
+            if again.image.trytes.len() >= linked.image.trytes.len() {
+                return Ok(linked);
+            }
+            linked = again;
+            continue;
+        }
+        for (k, r) in again.unfit {
+            relax[k].excluded.insert((r.file, r.line));
+        }
+    }
+}
+
+/// Link objects, noting instead of refusing slots that no longer fit.
+pub fn link_unchecked(objects: &[(String, Object)]) -> Result<Linked, String> {
+    let mut linked = Linked { bases: vec![HashMap::new(); objects.len()], ..Default::default() };
     let kept = used_parts(objects);
     // The first name defined in each part, for the map.
     let label = |k: usize, part: &str| -> Option<String> {
@@ -191,6 +270,10 @@ pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
         linked.sections.push(out);
     }
 
+    for (&(k, name), &(base, _)) in &bases {
+        linked.bases[k].insert(format!("[{name}]"), base);
+    }
+
     // Global symbols.
     for (k, (shown, o)) in objects.iter().enumerate() {
         for sym in o.symbols.iter().filter(|s| s.global) {
@@ -239,7 +322,9 @@ pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
                 };
                 let value = r.addend + resolve(&r.plus)? - resolve(&r.minus)?;
                 let at = base + r.addr;
-                apply(&mut linked.image.trytes, r, value, at, shift)?;
+                if !apply(&mut linked.image.trytes, r, value, at, shift)? {
+                    linked.unfit.push((k, r.clone()));
+                }
             }
         }
     }
@@ -320,6 +405,14 @@ fn set_field(
 ) -> Result<(), String> {
     let place = r.place();
     let word = read(trytes, at, shift).ok_or_else(|| format!("{place}: no word at {at}"))?;
+    let word = with_field(word, r, at, name, value)?;
+    write(trytes, at, shift, word);
+    Ok(())
+}
+
+/// The instruction word with value in its named field.
+fn with_field(word: i64, r: &Reloc, at: Value, name: &str, value: Value) -> Result<i64, String> {
+    let place = r.place();
     let op = isa::decode(word).map_err(|_| format!("{place}: no instruction at {at}"))?.op;
     let &(_, lo, width) = isa::format_fields(op.format)
         .iter()
@@ -330,11 +423,62 @@ fn set_field(
         return Err(format!("{place}: {value} does not fit {}'s {width}-trit {name}", op.name));
     }
     let old = field(word, lo, width);
-    write(trytes, at, shift, word + (value as i64 - old) * pow3(lo));
-    Ok(())
+    Ok(word + (value as i64 - old) * pow3(lo))
 }
 
+/// A word offset from at to value, for a branch field.
+fn word_offset(r: &Reloc, value: Value, at: Value) -> Result<Value, String> {
+    let delta = value - at;
+    if delta % 3 != 0 {
+        return Err(format!("{}: branch target {value} is not word aligned", r.place()));
+    }
+    Ok(delta / 3)
+}
+
+/// Put value in the full instruction of a bundle's slot, and encode it
+/// in the slot again: false when it no longer fits one.
+fn set_slot(
+    trytes: &mut BTreeMap<i64, i64>,
+    r: &Reloc,
+    at: Value,
+    shift: Value,
+    b: bool,
+    name: &str,
+    value: Value,
+) -> Result<bool, String> {
+    let place = r.place();
+    let word = read(trytes, at, shift).ok_or_else(|| format!("{place}: no word at {at}"))?;
+    let [a, bb] = compressed::slots(word);
+    let slot = if b { bb } else { a };
+    let full = compressed::expand(slot).ok_or_else(|| format!("{place}: no slot at {at}"))?;
+    // A value beyond the full instruction's field cannot fit a slot.
+    let Ok(full) = with_field(full, r, at, name, value) else { return Ok(false) };
+    let d = isa::decode(full).map_err(|_| format!("{place}: no instruction at {at}"))?;
+    let Some(slot) = compressed::compress(&d) else { return Ok(false) };
+    let word = if b { compressed::bundle(a, slot) } else { compressed::bundle(slot, bb) };
+    write(trytes, at, shift, word);
+    Ok(true)
+}
+
+/// Write a relocation: false when it is in a slot it no longer fits.
 fn apply(
+    trytes: &mut BTreeMap<i64, i64>,
+    r: &Reloc,
+    value: Value,
+    at: Value,
+    shift: Value,
+) -> Result<bool, String> {
+    match r.kind {
+        RelocKind::SlotImm(b) => set_slot(trytes, r, at, shift, b, "imm", value),
+        RelocKind::SlotBranch(b, name) => {
+            let offset = word_offset(r, value, at)?;
+            set_slot(trytes, r, at, shift, b, name, offset)
+        }
+        _ => apply_word(trytes, r, value, at, shift).map(|()| true),
+    }
+}
+
+fn apply_word(
     trytes: &mut BTreeMap<i64, i64>,
     r: &Reloc,
     value: Value,
@@ -351,11 +495,8 @@ fn apply(
         }
         RelocKind::Imm => set_field(trytes, r, at, shift, "imm", value),
         RelocKind::Branch(name) => {
-            let delta = value - at;
-            if delta % 3 != 0 {
-                return Err(format!("{}: branch target {value} is not word aligned", r.place()));
-            }
-            set_field(trytes, r, at, shift, name, delta / 3)
+            let offset = word_offset(r, value, at)?;
+            set_field(trytes, r, at, shift, name, offset)
         }
         RelocKind::Pair | RelocKind::PcPair => {
             let v = if r.kind == RelocKind::PcPair { value - at } else { value };
@@ -363,5 +504,48 @@ fn apply(
             set_field(trytes, r, at, shift, "imm", hi)?;
             set_field(trytes, r, at + 3, shift, "imm", lo)
         }
+        RelocKind::SlotImm(_) | RelocKind::SlotBranch(..) => unreachable!("handled by apply"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assembler::{Relax, assemble_object, assemble_object_relaxed};
+
+    const MAIN: &str = "        .compress\n        call  f\n        addi  a0, a0, 1\n";
+    // f lies farther than a slot's jal reaches: 3,280 words.
+    const FAR: &str = "        .zero 20000\n        .global f\nf:      ret\n";
+
+    #[test]
+    fn a_slot_that_no_longer_fits_is_found() {
+        // Told that f is near, the assembler puts the call in a slot.
+        let relax = Relax { hints: [("f".to_string(), 30)].into(), ..Default::default() };
+        let (main, _) = assemble_object_relaxed(MAIN, Some("main.s"), &relax).unwrap();
+        let kinds: Vec<_> = main.sections[0].relocs.iter().map(|r| r.kind).collect();
+        assert_eq!(kinds, [RelocKind::SlotBranch(false, "imm")]);
+        let (far, _) = assemble_object(FAR, Some("far.s")).unwrap();
+        let objects = [("main.s".to_string(), main), ("far.s".to_string(), far)];
+        let linked = link_unchecked(&objects).unwrap();
+        assert_eq!(linked.unfit.len(), 1);
+        assert_eq!(linked.unfit[0].1.line, 2);
+        let e = link(&objects).unwrap_err();
+        assert_eq!(e, "main.s:2: the instruction in slot no longer fits one");
+    }
+
+    #[test]
+    fn relaxing_keeps_what_does_not_fit_out_of_slots() {
+        let source = |text: &str, file: &str| Input::Source {
+            text: text.to_string(),
+            file: file.to_string(),
+        };
+        let inputs = [
+            ("main.s".to_string(), source(MAIN, "main.s")),
+            ("far.s".to_string(), source(FAR, "far.s")),
+        ];
+        let linked = link_inputs(&inputs).unwrap();
+        assert!(linked.unfit.is_empty());
+        // The call stays a whole word: f is at 6 + 20000 + 1.
+        assert_eq!(linked.globals["f"].0, 20007);
     }
 }

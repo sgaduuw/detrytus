@@ -44,6 +44,12 @@ pub enum RelocKind {
     /// `auipc` + `addi` (`la`): the value less the `auipc`'s address,
     /// split over the two.
     PcPair,
+    /// The `imm` field of the full instruction in slot B (true) or A of
+    /// the bundle: put there, and the slot encoded again.
+    SlotImm(bool),
+    /// A word offset field of the full instruction in a slot, counting
+    /// from the bundle's address.
+    SlotBranch(bool, &'static str),
 }
 
 const BRANCH_FIELDS: [&str; 4] = ["off", "offn", "offp", "imm"];
@@ -56,12 +62,38 @@ impl fmt::Display for RelocKind {
             RelocKind::Branch(field) => write!(f, "branch.{field}"),
             RelocKind::Pair => write!(f, "pair"),
             RelocKind::PcPair => write!(f, "pcpair"),
+            RelocKind::SlotImm(b) => write!(f, "slot.{}.imm", slot_name(*b)),
+            RelocKind::SlotBranch(b, field) => {
+                write!(f, "slot.{}.branch.{field}", slot_name(*b))
+            }
         }
     }
 }
 
+fn slot_name(b: bool) -> &'static str {
+    if b { "b" } else { "a" }
+}
+
 impl RelocKind {
+    /// The kind for the same value in slot B (true) or A of a bundle.
+    pub fn in_slot(self, b: bool) -> Option<Self> {
+        match self {
+            RelocKind::Imm => Some(RelocKind::SlotImm(b)),
+            RelocKind::Branch(field) => Some(RelocKind::SlotBranch(b, field)),
+            _ => None,
+        }
+    }
+
     fn parse(text: &str) -> Option<Self> {
+        if let Some(rest) = text.strip_prefix("slot.") {
+            let (which, inner) = rest.split_once('.')?;
+            let b = match which {
+                "a" => false,
+                "b" => true,
+                _ => return None,
+            };
+            return RelocKind::parse(inner)?.in_slot(b);
+        }
         Some(match text {
             "word" => RelocKind::Word,
             "imm" => RelocKind::Imm,
@@ -355,15 +387,26 @@ mod tests {
                     align: 2,
                     end: 19700,
                     trytes: BTreeMap::new(),
-                    relocs: vec![Reloc {
-                        addr: 19683,
-                        kind: RelocKind::Word,
-                        addend: -2,
-                        plus: Some("ext".into()),
-                        minus: Some("gp".into()),
-                        line: 9,
-                        file: None,
-                    }],
+                    relocs: vec![
+                        Reloc {
+                            addr: 19683,
+                            kind: RelocKind::Word,
+                            addend: -2,
+                            plus: Some("ext".into()),
+                            minus: Some("gp".into()),
+                            line: 9,
+                            file: None,
+                        },
+                        Reloc {
+                            addr: 19686,
+                            kind: RelocKind::SlotBranch(true, "imm"),
+                            addend: 0,
+                            plus: Some("f".into()),
+                            minus: None,
+                            line: 10,
+                            file: None,
+                        },
+                    ],
                 },
             ],
             symbols: vec![

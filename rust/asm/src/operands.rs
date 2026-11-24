@@ -77,11 +77,21 @@ pub struct Operands<'a> {
     /// The base of the section being assembled, when the linker places it.
     pub base: Option<&'a str>,
     pub pending: RefCell<Vec<Pending>>,
+    /// Where the linker put things last time, when relaxing
+    /// (docs/linker.md): an immediate or branch offset left for the
+    /// linker is filled in from these, so it can be tried in a slot.
+    pub hints: Option<&'a std::collections::HashMap<String, Value>>,
 }
 
 impl<'a> Operands<'a> {
     pub fn new(symbols: &'a Symbols) -> Self {
-        Operands { symbols, reloc: None, base: None, pending: RefCell::new(Vec::new()) }
+        Operands {
+            symbols,
+            reloc: None,
+            base: None,
+            pending: RefCell::new(Vec::new()),
+            hints: None,
+        }
     }
 
     /// A value that must be known now, such as a CSR number or a count.
@@ -120,8 +130,22 @@ impl<'a> Operands<'a> {
                 repr(text)
             ));
         }
-        self.pending.borrow_mut().push(Pending { at, kind, value });
-        Ok(0)
+        self.pending.borrow_mut().push(Pending { at, kind, value: value.clone() });
+        Ok(self.hinted(text, &value)?.unwrap_or(0))
+    }
+
+    /// value as the hints have it, when relaxing.
+    fn hinted(&self, text: &str, value: &Linear) -> Result<Option<Value>, OperandError> {
+        let Some(hints) = self.hints else { return Ok(None) };
+        let (plus, minus) = value.split().expect("checked by defer");
+        let at = |base: Option<&str>| -> Result<Value, OperandError> {
+            let Some(base) = base else { return Ok(0) };
+            match hints.get(base) {
+                Some(&v) => Ok(v),
+                None => fail(format!("{} is not placed yet", repr(text))),
+            }
+        };
+        Ok(Some(value.constant + at(plus)? - at(minus)?))
     }
 
     /// An immediate field: known now, or left for the linker.
@@ -164,7 +188,14 @@ impl<'a> Operands<'a> {
         let target = self.linear(text, pc)?;
         let delta = target.add_scaled(&self.here(pc), -1).and_then(|d| d.as_constant());
         let Some(delta) = delta else {
-            return self.defer(text, pc, RelocKind::Branch(field), target);
+            let v = self.defer(text, pc, RelocKind::Branch(field), target)?;
+            if self.hints.is_none() {
+                return Ok(v);
+            }
+            if (v - pc) % 3 != 0 {
+                return fail(format!("branch target {v} is not word aligned"));
+            }
+            return Ok((v - pc) / 3);
         };
         let target = target.constant;
         if delta % 3 != 0 {

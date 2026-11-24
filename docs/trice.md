@@ -363,9 +363,11 @@ Compiled on its own, a file differs from a whole program in four ways:
   and a library's code follows it.
 
 A global the file reaches through `gp` (section 10) is one instruction
-whichever object holds it, but the linker finishes its offset, so that
-instruction is never put in a compressed bundle (linker.md). So are
-calls into a library and calls between a library's functions, which
-are in different parts, and a library's small functions are not copied
-into the program. Linked programs are a little larger than whole ones
-for those reasons.
+whichever object holds it, but the linker finishes its offset, as it
+does calls into a library and between a library's functions, which are
+in different parts. In an object those instructions stay out of
+compressed bundles; `detrytus link` given the `.tc` files relaxes
+them, putting into bundles those whose final values fit (linker.md,
+Relaxing). A library's small functions are not copied into the
+program, so a linked program can still be a little larger than a
+whole one.
