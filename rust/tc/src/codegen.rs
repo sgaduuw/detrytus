@@ -762,7 +762,7 @@ impl Gen {
         self.label(&f.name);
         let done = alloc::finish(alloc::Func {
             name: &f.name,
-            returns: f.ret != Type::Void,
+            results: usize::from(f.ret != Type::Void),
             slots: self.slots,
             stack_params,
             body,

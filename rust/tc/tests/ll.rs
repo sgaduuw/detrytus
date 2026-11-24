@@ -1,0 +1,107 @@
+//! `detrytus ll`: Rust programs (tests/ll/*.rs), as rustc's LLVM IR
+//! (tests/ll/*.ll, rebuilt by tests/ll/regenerate.sh), translated, run
+//! on the bare machine with tests/ll/bare.s, and checked; and IR the
+//! translator must refuse.
+
+use std::path::Path;
+
+use detrytus_core::{Machine, Outcome};
+
+fn run(name: &str) -> (i64, String) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ll");
+    let ll = dir.join(format!("{name}.ll"));
+    let bare = dir.join("bare.s").display().to_string();
+    let out = detrytus_tc::ll::translate(&[&ll], &[bare])
+        .unwrap_or_else(|e| panic!("does not translate: {e}"));
+    let shown = dir.join(format!("{name}.s")).display().to_string();
+    let image = detrytus_asm::assemble(&out.assembly, Some(&shown))
+        .unwrap_or_else(|e| panic!("does not assemble: {e}\n{}", out.assembly));
+    let mut machine = Machine::with_harts(10, 1, 1);
+    for (addr, tryte) in image.trytes {
+        machine.bus.poke(addr, tryte);
+    }
+    match machine.run(5_000_000) {
+        Outcome::Exit { code, .. } => (code, machine.bus.console.text()),
+        other => panic!("{other:?}\n{}", out.assembly),
+    }
+}
+
+#[test]
+fn integer_arithmetic_matches_rustc() {
+    assert_eq!(run("arith"), (0, String::new()));
+}
+
+#[test]
+fn memory_slices_and_control_flow() {
+    let (code, text) = run("memory");
+    assert_eq!(text, "arg: [hi there  9]\n 9  ereht ih \ntwo -2468 6765\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn trait_objects_and_function_pointers() {
+    assert_eq!(run("dyn"), (0, "square rect square \n".into()));
+}
+
+fn refused(body: &str) -> String {
+    let src = format!("define i32 @main(i32 %argc, ptr %argv) {{\nstart:\n{body}\n}}\n");
+    match detrytus_tc::ll::translate_text(&src, &[]) {
+        Ok(out) => panic!("translated, but should not have:\n{}", out.assembly),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+fn what_is_not_supported_yet_is_refused_by_name() {
+    assert_eq!(
+        refused("  %x = zext i32 %argc to i64\n  %y = trunc i64 %x to i32\n  ret i32 %y"),
+        "input.ll:3: @main: 64-bit integers are not supported yet"
+    );
+    assert_eq!(
+        refused("  %x = sitofp i32 %argc to float\n  ret i32 0"),
+        "input.ll:3: @main: the sitofp instruction is not supported"
+    );
+    assert_eq!(
+        refused("  %x = atomicrmw add ptr %argv, i32 1 seq_cst\n  ret i32 0"),
+        "input.ll:3: @main: the atomicrmw instruction is not supported"
+    );
+}
+
+#[test]
+fn a_program_needs_main() {
+    let e = detrytus_tc::ll::translate_text("define void @start() {\n  ret void\n}\n", &[]);
+    assert_eq!(e.unwrap_err().to_string(), "input.ll: no function main");
+}
+
+#[test]
+fn private_names_of_two_modules_stay_apart() {
+    // Both modules have an @alloc_0; each function must see its own.
+    let dir = std::env::temp_dir().join(format!("detrytus-ll-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.ll");
+    let b = dir.join("b.ll");
+    std::fs::write(
+        &a,
+        "@alloc_0 = private constant [1 x i8] c\"A\"\n\
+         define i32 @main(i32 %argc, ptr %argv) {\n\
+         \x20 %x = load i8, ptr @alloc_0\n\
+         \x20 %y = call i32 @other()\n\
+         \x20 %z = zext i8 %x to i32\n\
+         \x20 %r = add i32 %y, %z\n\
+         \x20 ret i32 %r\n}\n\
+         declare i32 @other()\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &b,
+        "@alloc_0 = private constant [1 x i8] c\"\\01\"\n\
+         define i32 @other() {\n\
+         \x20 %x = load i8, ptr @alloc_0\n\
+         \x20 %z = zext i8 %x to i32\n\
+         \x20 ret i32 %z\n}\n",
+    )
+    .unwrap();
+    let out = detrytus_tc::ll::translate(&[&a, &b], &[]).unwrap();
+    assert!(out.assembly.contains("alloc_0:\n        .tryte 65"), "{}", out.assembly);
+    assert!(out.assembly.contains("alloc_0.m1:\n        .tryte 1"), "{}", out.assembly);
+}

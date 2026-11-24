@@ -1310,3 +1310,39 @@ bundled. Choices:
   their whole builds. What is left is library functions not copied
   into their callers.
 
+
+### 2026-11-24 · Rust through LLVM IR
+
+The owner wants Rust programs on detrytus. A first step runs a
+`no_std` Rust program on the bare machine and on trylobite
+(`docs/rust.md`). Choices:
+
+- **Translate rustc's LLVM IR, not write a backend.** rustc compiles
+  for a built-in 32-bit target and writes textual IR for the program
+  and for core; `detrytus ll` reads it, keeps what `main` reaches and
+  lowers it to the virtual-register IR Trice's back end already
+  allocates. Rejected: a rustc codegen backend, which needs nightly
+  compiler internals and breaks with each nightly; WebAssembly, which
+  is stable but loses SSA form and needs a base added to every memory
+  access; translating RISC-V machine code, which loses the types, so
+  every operation would wrap; and a real LLVM backend for detrytus,
+  far too large. The IR's text format can change with LLVM versions;
+  the reader skips what it does not use, which keeps it tolerant.
+- **Stable Rust.** `-Zbuild-std` (to get core's IR) and
+  `-Cpanic=immediate-abort` (so that panics do not pull in
+  formatting) are unstable, and `RUSTC_BOOTSTRAP=1` allows them on a
+  stable toolchain. That keeps the build to `rustup target add` and
+  `rust-src` rather than a pinned nightly.
+- **Binary semantics, faithfully.** A byte is a tryte holding 0..255
+  and an N-bit integer is held as its unsigned value, wrapped with
+  `band` after anything that could leave the range; the binary
+  operations of isa.md 7.6 do bitwise work. Keeping a `u32` in one
+  word in memory instead of four trytes would be smaller and faster,
+  but LLVM freely reads integers as bytes and bytes as integers, so
+  that is left until it can be shown safe.
+- **Whole program, as one assembly file.** A pointer in static data is
+  four trytes computed from a label with `/` and `%`, which only the
+  assembler can work out; the linker's relocations are linear. So the
+  output is a whole program rather than an object.
+- **Not yet:** integers over 32 bits (and so `core::fmt`), floats,
+  atomics, more than six argument words. Each is refused by name.
