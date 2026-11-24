@@ -182,7 +182,9 @@ imports it, once however many times it is named:
   program uses `include/layout.s` without copying a number, and how
   OS-specific start code arrives.
 
-A program is compiled whole: the files it imports are its library.
+A program is compiled whole: the files it imports are its library. Or
+each file is compiled on its own into an object, and the objects are
+linked (section 13).
 
 ## 7. Statements
 
@@ -266,14 +268,15 @@ so listings and the debugger lead back to the source.
 ## 11. Not yet
 
 Floats, `switch`, function pointers, struct values in calls and
-results, varargs, a preprocessor, and separate compilation. Each can be
+results, varargs and a preprocessor. Each can be
 added without changing what is above.
 
 ## 12. The first compiler
 
 `detrytus tc FILE` prints the assembly; `-o OUT.s` writes it, and
-`-o OUT.dti` assembles it into an image as well. Errors name the file
-and line; warnings go to standard error.
+`-o OUT.dti` assembles it into an image as well. With `-c` it compiles
+one file on its own (section 13). Errors name the file and line;
+warnings go to standard error.
 
 Code generation walks the tree, with every value in a virtual
 register of its own; locals whose address is never taken are virtual
@@ -322,3 +325,37 @@ the start code, layers of small library functions, and the saves a
 function owes its caller.
 
 A `which` arm must be within `br3`'s reach of 3,280 instructions.
+
+## 13. Compiling files separately
+
+`detrytus tc -c FILE.tc` compiles one file on its own, for the linker
+([`linker.md`](linker.md)): `-o FILE.dto` writes an object, `-o
+FILE.s` the assembly. `detrytus link` takes `.tc` files too and
+compiles each that way, so a program and its library build as
+
+```sh
+detrytus link bin/echo.tc lib/io.tc -o echo.dti
+```
+
+Compiled on its own, a file differs from a whole program in three ways:
+
+- **What it imports from other `.tc` files is only declared.** Their
+  functions, globals, constants and structs can be used, but their code
+  and data belong to their own objects. Their own imports count only
+  for their constants: an assembly file is included only by the file
+  that imports it directly.
+- **Every function and global it defines is `.global`**, so other
+  objects can use it, and none is left out for being unused, since
+  another file may call it. A small function is still copied into its
+  callers in the file, and kept for the others.
+- **Its code is in the section the assembly puts it in**: after a start
+  file's `.section`, where that leaves off, and otherwise in `text`,
+  which the linker places after the sections before it. On trylobite,
+  a program's file imports `lib/start.s`, which places it at `V_USER`,
+  and a library's code follows it.
+
+A global the file reaches through `gp` (section 10) is one instruction
+whichever object holds it, but the linker finishes its offset, so that
+instruction is never put in a compressed bundle (linker.md). Linked
+programs are larger than whole ones for that reason, and because
+nothing unused is left out of a library.

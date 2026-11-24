@@ -41,13 +41,14 @@ args = ["tc"]
 status = 2
 stdout = ''
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: tc needs a file
 '''

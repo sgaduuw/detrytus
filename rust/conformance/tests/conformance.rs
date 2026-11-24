@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use detrytus_asm::{AsmError, assemble};
+use detrytus_asm::{AsmError, assemble, assemble_object};
 use detrytus_core::block::MemoryDisk;
 use detrytus_core::bus::Access;
 use detrytus_core::image;
@@ -36,10 +36,12 @@ fn case_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// What a case runs: assembly text, or files to assemble or load.
+/// What a case runs: assembly text, files to assemble or load, or
+/// texts to assemble as objects and link.
 enum Program {
     Text(String),
     Sources(Vec<PathBuf>),
+    Objects(Vec<String>),
 }
 
 struct Case {
@@ -66,9 +68,10 @@ fn text_of(raw: &Table, defaults: &Table, key: &str) -> String {
     setting(raw, defaults, key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-const CASE_KEYS: [&str; 13] = [
+const CASE_KEYS: [&str; 14] = [
     "name",
     "program",
+    "objects",
     "prelude",
     "postlude",
     "source",
@@ -81,7 +84,8 @@ const CASE_KEYS: [&str; 13] = [
     "harts",
     "hotplug",
 ];
-const OUTCOMES: [&str; 4] = ["exit_code", "step_limit", "unhandled_cause", "asm_error"];
+const OUTCOMES: [&str; 5] =
+    ["exit_code", "step_limit", "unhandled_cause", "asm_error", "link_error"];
 const CHECKS: [&str; 7] =
     ["console", "registers", "csrs", "ring", "words", "trytes", "unhandled_hart"];
 
@@ -119,6 +123,8 @@ fn check_format(path: &str, data: &Table) -> Result<(), String> {
         let expect = raw.get("expect").and_then(Value::as_table).unwrap_or(&empty);
         if expect.contains_key("asm_error") {
             unknown_keys(&format!("{where_} [expect]"), expect, &["asm_error", "asm_error_line"])?;
+        } else if expect.contains_key("link_error") {
+            unknown_keys(&format!("{where_} [expect]"), expect, &["link_error"])?;
         } else {
             let allowed: Vec<&str> = OUTCOMES.iter().chain(&CHECKS).copied().collect();
             unknown_keys(&format!("{where_} [expect]"), expect, &allowed)?;
@@ -126,12 +132,12 @@ fn check_format(path: &str, data: &Table) -> Result<(), String> {
         if OUTCOMES.iter().filter(|o| expect.contains_key(**o)).count() != 1 {
             return Err(format!("{where_}: give exactly one of {OUTCOMES:?}"));
         }
-        let given = ["program", "source", "sources"]
+        let given = ["program", "source", "sources", "objects"]
             .iter()
             .filter(|k| setting(raw, defaults, k).is_some())
             .count();
         if given != 1 {
-            return Err(format!("{where_}: give exactly one of program, source, sources"));
+            return Err(format!("{where_}: give exactly one of program, source, sources, objects"));
         }
         if expect.contains_key("unhandled_hart") && !expect.contains_key("unhandled_cause") {
             return Err(format!("{where_}: unhandled_hart needs unhandled_cause"));
@@ -189,6 +195,9 @@ fn load(file: &Path) -> Vec<Case> {
                 ];
                 let parts: Vec<String> = parts.into_iter().filter(|p| !p.is_empty()).collect();
                 Program::Text(parts.join("\n"))
+            } else if let Some(objects) = setting("objects") {
+                let texts = objects.as_array().unwrap().iter();
+                Program::Objects(texts.map(|v| v.as_str().unwrap().to_string()).collect())
             } else {
                 let names: Vec<&str> = match setting("source") {
                     Some(v) => vec![v.as_str().unwrap()],
@@ -222,34 +231,54 @@ fn load(file: &Path) -> Vec<Case> {
         .collect()
 }
 
-/// The case's trytes, or why it did not build: an assembly error, or
-/// another problem (a missing file, overlapping images).
-fn build(case: &Case) -> Result<Vec<(i64, i64)>, Result<AsmError, String>> {
+/// Why a case did not build.
+enum Failed {
+    Asm(AsmError),
+    Link(String),
+    /// Another problem: a missing file, overlapping images.
+    Other(String),
+}
+
+/// The case's trytes, or why it did not build.
+fn build(case: &Case) -> Result<Vec<(i64, i64)>, Failed> {
     match &case.program {
+        // Named after the case and their place in its list.
+        Program::Objects(texts) => {
+            let mut objects = Vec::new();
+            for (k, text) in texts.iter().enumerate() {
+                let file = case.id.split("::").next().unwrap_or_default();
+                let name = format!("{file}.toml [{}] #{}", case.name, k + 1);
+                let (object, _) = assemble_object(text, Some(&name)).map_err(Failed::Asm)?;
+                objects.push((format!("#{}", k + 1), object));
+            }
+            let linked = detrytus_asm::link::link(&objects).map_err(Failed::Link)?;
+            Ok(linked.image.trytes.into_iter().collect())
+        }
         // Named after the case, beside its file, as the Python runner does.
         Program::Text(text) => {
             let name = format!("{} [{}]", case.file.display(), case.name);
-            let image = assemble(text, Some(&name)).map_err(Ok)?;
+            let image = assemble(text, Some(&name)).map_err(Failed::Asm)?;
             Ok(image.trytes.into_iter().collect())
         }
         Program::Sources(paths) => {
             let mut trytes = Vec::new();
             let mut used = HashSet::new();
             for path in paths {
-                let data = fs::read(path).map_err(|e| Err(format!("{}: {e}", path.display())))?;
+                let data = fs::read(path)
+                    .map_err(|e| Failed::Other(format!("{}: {e}", path.display())))?;
                 let these: Vec<(i64, i64)> = if data.starts_with(b"DTI\x01") {
-                    let segments = image::parse(&data).map_err(Err)?;
+                    let segments = image::parse(&data).map_err(Failed::Other)?;
                     segments
                         .iter()
                         .flat_map(|s| (s.start..).zip(s.trytes.iter().copied()))
                         .collect()
                 } else {
-                    let text = String::from_utf8(data).map_err(|e| Err(e.to_string()))?;
+                    let text = String::from_utf8(data).map_err(|e| Failed::Other(e.to_string()))?;
                     let shown = path.display().to_string();
-                    assemble(&text, Some(&shown)).map_err(Ok)?.trytes.into_iter().collect()
+                    assemble(&text, Some(&shown)).map_err(Failed::Asm)?.trytes.into_iter().collect()
                 };
                 if let Some((addr, _)) = these.iter().find(|(a, _)| !used.insert(*a)) {
-                    return Err(Err(format!("images overlap at address {addr}")));
+                    return Err(Failed::Other(format!("images overlap at address {addr}")));
                 }
                 trytes.extend(these);
             }
@@ -324,9 +353,19 @@ fn run(case: &Case) -> Vec<String> {
         Ok(_) if e.contains_key("asm_error") => {
             return vec![format!("assembled, but expected asm_error {:?}", e["asm_error"])];
         }
+        Ok(_) if e.contains_key("link_error") => {
+            return vec![format!("linked, but expected link_error {:?}", e["link_error"])];
+        }
         Ok(trytes) => trytes,
-        Err(Ok(error)) => return assembly_failures(e, &error),
-        Err(Err(problem)) => return vec![problem],
+        Err(Failed::Asm(error)) => return assembly_failures(e, &error),
+        Err(Failed::Link(problem)) => {
+            return match e.get("link_error").and_then(Value::as_str) {
+                Some(want) if want == problem => vec![],
+                Some(want) => vec![format!("link_error: wanted {want:?}, got {problem:?}")],
+                None => vec![format!("linking failed: {problem}")],
+            };
+        }
+        Err(Failed::Other(problem)) => return vec![problem],
     };
     let mut machine = Machine::with_harts(case.ram_pages, 1, case.harts);
     for &(time, change) in &case.hotplug {

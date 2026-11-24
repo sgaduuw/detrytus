@@ -1,0 +1,179 @@
+# Objects and the linker (docs/linker.md): an object listed, written,
+# linked into an image or a map, run and debugged, Trice files compiled
+# on their own (tc -c), and the errors.
+
+[[case]]
+args = ["asm", "-c", "{here}/programs/link/main.s"]
+name = "asm -c lists an object with section offsets"
+status = 0
+stderr = ""
+stdout = '''
+                     0  000000000000000000000+0++0+  auipc a0, 0                   start:  la    a0, greeting
+                     3  000000000000000000+00+0++-+  addi a0, a0, 0                start:  la    a0, greeting
+                     6  0000000000000000000--000-0-  jal ra, 6                     call  puts
+                     9  0000000000000000000+-+0++0+  auipc t0, 0                   la    t0, answer
+                    12  0000000000000000+-++-+0++-+  addi t0, t0, 0                la    t0, answer
+                    15  0000000000000000+-+00+000-+  lw a0, 0(t0)                  lw    a0, 0(t0)
+                    18  0000000000000000000--000-0-  jal ra, 18                    call  halt
+                    -1                                                             greeting: .string "linked\n"
+'''
+
+[[case]]
+args = ["asm", "-c", "{here}/programs/link/lib.s", "-o", "{tmp}/lib.dto"]
+file = "{tmp}/lib.dto"
+file_hex = "6465747279747573206f626a65637420310a73656374696f6e207465787420312031370a646174612074657874202d3120313937382030202d392037313638203139353520323635203731363820393036352038342036353531202d312030202d3131202d3420302035343637203433353820323735370a73656374696f6e2064617461203120320a646174612064617461202d31203432203020300a73796d626f6c206c6f63616c20636f6e7374616e7420434f4e534f4c455f4f5554202d31393638330a73796d626f6c206c6f63616c20636f6e7374616e7420504f5745525f4f4646202d33393336360a73796d626f6c20676c6f62616c206c6162656c2070757473203020696e20746578740a73796d626f6c206c6f63616c206c6162656c202e4c312e30203320696e20746578740a73796d626f6c206c6f63616c206c6162656c202e4c322e3020313220696e20746578740a73796d626f6c20676c6f62616c206c6162656c2068616c7420313520696e20746578740a73796d626f6c20676c6f62616c206c6162656c20616e73776572203020696e20646174610a"
+name = "asm -c writes an object"
+status = 0
+stderr = ""
+stdout = ""
+
+[[case]]
+args = ["link", "{tmp}/main.dto", "{here}/programs/link/lib.s"]
+name = "link prints where everything went"
+setup = [["asm", "-c", "{here}/programs/link/main.s", "-o", "{tmp}/main.dto"]]
+status = 0
+stderr = ""
+stdout = """
+section text
+            -1 .. 20            {tmp}/main.dto
+            20 .. 38            {here}/programs/link/lib.s
+section data
+            38 .. 46            {tmp}/main.dto
+            47 .. 50            {here}/programs/link/lib.s
+globals
+            48  answer  ({here}/programs/link/lib.s)
+            36  halt  ({here}/programs/link/lib.s)
+            21  puts  ({here}/programs/link/lib.s)
+             0  start  ({tmp}/main.dto)
+"""
+
+[[case]]
+args = ["run", "{tmp}/p.dti"]
+name = "a linked image runs"
+setup = [["link", "{here}/programs/link/main.s", "{here}/programs/link/lib.s", "-o", "{tmp}/p.dti"]]
+status = 42
+stderr = ""
+stdout = """
+linked
+"""
+
+[[case]]
+args = ["run", "{tmp}/main.dto", "{tmp}/lib.dto"]
+name = "run links the objects it is given"
+setup = [["asm", "-c", "{here}/programs/link/main.s", "-o", "{tmp}/main.dto"], ["asm", "-c", "{here}/programs/link/lib.s", "-o", "{tmp}/lib.dto"]]
+status = 42
+stderr = ""
+stdout = """
+linked
+"""
+
+[[case]]
+args = ["debug", "{tmp}/main.dto", "{tmp}/lib.dto", "-x", "{tmp}/script.txt", "--batch"]
+name = "the debugger names linked addresses"
+script = """
+p halt
+p answer
+x answer 1
+"""
+setup = [["asm", "-c", "{here}/programs/link/main.s", "-o", "{tmp}/main.dto"], ["asm", "-c", "{here}/programs/link/lib.s", "-o", "{tmp}/lib.dto"]]
+status = 0
+stderr = ""
+stdout = """
+36  0t00000000000000000000000++00
+48  0t0000000000000000000000+--+0
+             48 <answer>               42  0t0000000000000000000000+---0
+"""
+
+[[case]]
+args = ["link", "{here}/programs/link/main.s"]
+name = "an undefined symbol names the line that uses it"
+status = 65
+stderr = """
+detrytus: {here}/programs/link/main.s:4: undefined symbol 'puts'
+"""
+stdout = ""
+
+[[case]]
+args = ["link", "{tmp}/hello.dti"]
+name = "an image cannot be linked"
+setup = [["asm", "{root}/examples/hello.s", "-o", "{tmp}/hello.dti"]]
+status = 65
+stderr = """
+detrytus: {tmp}/hello.dti: an image cannot be linked, only objects and sources
+"""
+stdout = ""
+
+[[case]]
+args = ["asm", "{tmp}/lib.dto", "-o", "{tmp}/lib.dti"]
+name = "an object is not an image"
+setup = [["asm", "-c", "{here}/programs/link/lib.s", "-o", "{tmp}/lib.dto"]]
+status = 65
+stderr = """
+detrytus: {tmp}/lib.dto: an object: link it into an image with detrytus link
+"""
+stdout = ""
+
+[[case]]
+args = ["tc", "-c", "{here}/programs/link/sum.tc"]
+name = "tc -c compiles one file and makes its names global"
+status = 0
+stderr = ""
+stdout = """
+# Compiled by detrytus tc from {here}/programs/link/sum.tc: docs/trice.md, docs/abi.md.
+        .global twice, thrice
+        .compress
+
+# int twice(...), {here}/programs/link/sum.tc:2
+twice:
+# {here}/programs/link/sum.tc:2
+        add   a0, a0, a0
+        ret
+
+# int thrice(...), {here}/programs/link/sum.tc:3
+thrice:
+# {here}/programs/link/sum.tc:3
+        add   t0, a0, a0
+        add   a0, a0, t0
+        ret
+        .nocompress
+"""
+
+[[case]]
+args = ["tc", "-c", "{here}/programs/link/main.tc"]
+name = "an imported Trice file is only declared"
+status = 0
+stderr = ""
+stdout = """
+# Compiled by detrytus tc from {here}/programs/link/main.tc: docs/trice.md, docs/abi.md.
+        .global main
+        .compress
+
+# int main(...), {here}/programs/link/main.tc:4
+main:
+        addi  sp, sp, -3
+        sw    ra, 0(sp)
+# {here}/programs/link/main.tc:4
+        li    a0, 21
+        call  twice
+        lw    ra, 0(sp)
+        addi  sp, sp, 3
+        ret
+        .nocompress
+"""
+
+[[case]]
+args = ["run", "{tmp}/p.dti"]
+name = "link compiles Trice files on their own"
+setup = [["link", "{here}/programs/link/start.s", "{here}/programs/link/main.tc", "{here}/programs/link/sum.tc", "-o", "{tmp}/p.dti"]]
+status = 42
+stderr = ""
+stdout = ""
+
+[[case]]
+args = ["tc", "-c", "{here}/programs/link/sum.tc", "-o", "{tmp}/sum.dto"]
+file = "{tmp}/sum.dto"
+file_hex = "6465747279747573206f626a65637420310a73656374696f6e2074657874203120380a646174612074657874202d3120363932352036383133202d39373220383236332039203020363932352036383637202d3937320a73796d626f6c20676c6f62616c206c6162656c207477696365203020696e20746578740a73796d626f6c20676c6f62616c206c6162656c20746872696365203320696e20746578740a"
+name = "tc -c writes an object"
+status = 0
+stderr = ""
+stdout = ""

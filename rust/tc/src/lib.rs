@@ -1,6 +1,7 @@
 //! The Trice compiler (docs/trice.md): a whole program of Trice source,
 //! with the files it imports, into one detrytus assembly file that
-//! follows docs/abi.md.
+//! follows docs/abi.md; or one file of it, for an object the linker
+//! puts together with the others (docs/linker.md).
 //!
 //! The compiler knows the ISA and the ABI but no operating system:
 //! start code and system-call numbers arrive through imported assembly.
@@ -50,10 +51,9 @@ pub struct Output {
 
 /// One piece of the program, in the order the source gives it.
 pub(crate) enum Unit {
-    Item {
-        file: String,
-        item: Item,
-    },
+    /// `own` is false for an item of a file imported into a file
+    /// compiled on its own: declared, but compiled in that file's object.
+    Item { file: String, item: Item, own: bool },
     /// An imported assembly file: its path as the output names it in
     /// `.include`, and the constants its `.equ`s define.
     Include {
@@ -66,6 +66,9 @@ pub(crate) enum Unit {
         gp: bool,
         file: String,
         line: usize,
+        /// Included in the output; false for one a file imported into a
+        /// file compiled on its own imports: only its constants count.
+        own: bool,
     },
 }
 
@@ -73,15 +76,29 @@ pub(crate) enum Unit {
 /// directory the assembly will be assembled from, which `.include`
 /// paths are made relative to.
 pub fn compile(path: &Path, out_dir: &Path) -> Result<Output, Error> {
-    let mut loader = Loader { seen: HashSet::new(), units: Vec::new(), out_dir: absolute(out_dir) };
-    loader.load(path, &path.display().to_string(), None)?;
-    codegen::generate(&loader.units, &path.display().to_string())
+    build(path, out_dir, false)
+}
+
+/// Compile the file at `path` on its own, for an object: the `.tc`
+/// files it imports are only declared, every function and global it
+/// defines is made `.global`, and none is left out for being unused.
+pub fn compile_unit(path: &Path, out_dir: &Path) -> Result<Output, Error> {
+    build(path, out_dir, true)
+}
+
+fn build(path: &Path, out_dir: &Path, unit: bool) -> Result<Output, Error> {
+    let mut loader =
+        Loader { seen: HashSet::new(), units: Vec::new(), out_dir: absolute(out_dir), unit };
+    loader.load(path, &path.display().to_string(), None, true)?;
+    codegen::generate(&loader.units, &path.display().to_string(), unit)
 }
 
 struct Loader {
     seen: HashSet<PathBuf>,
     units: Vec<Unit>,
     out_dir: PathBuf,
+    /// Compiling one file on its own.
+    unit: bool,
 }
 
 impl Loader {
@@ -95,7 +112,13 @@ impl Loader {
         })
     }
 
-    fn load(&mut self, path: &Path, shown: &str, from: Option<(&str, usize)>) -> Result<(), Error> {
+    fn load(
+        &mut self,
+        path: &Path,
+        shown: &str,
+        from: Option<(&str, usize)>,
+        own: bool,
+    ) -> Result<(), Error> {
         let src = Self::read(path, shown, from)?;
         self.seen.insert(absolute(path));
         let toks = lex::tokens(&src, shown)?;
@@ -110,7 +133,9 @@ impl Loader {
                 }
                 if rel.ends_with(".tc") {
                     self.seen.remove(&absolute(&target));
-                    self.load(&target, &target_shown, Some((shown, *line)))?;
+                    // Compiling one file, what it imports is another's.
+                    let own = own && !self.unit;
+                    self.load(&target, &target_shown, Some((shown, *line)), own)?;
                 } else if rel.ends_with(".s") {
                     let text = Self::read(&target, &target_shown, Some((shown, *line)))?;
                     let gp = text.lines().any(|l| l.split_whitespace().next() == Some(".gp"));
@@ -124,13 +149,14 @@ impl Loader {
                         gp,
                         file: shown.into(),
                         line: *line,
+                        own,
                     });
                 } else {
                     return Err(Error::new(shown, *line, "import a .tc or a .s file".into()));
                 }
                 continue;
             }
-            self.units.push(Unit::Item { file: shown.to_string(), item });
+            self.units.push(Unit::Item { file: shown.to_string(), item, own });
         }
         Ok(())
     }

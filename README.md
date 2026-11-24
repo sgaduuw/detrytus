@@ -162,6 +162,11 @@ compressed table is judged against real code.
 `detrytus tc FILE.tc -o FILE.dti` compiles a program in Trice, the
 machine's first compiled language ([`docs/trice.md`](docs/trice.md)).
 
+`detrytus asm -c FILE.s -o FILE.dto` assembles a file into an object,
+and `detrytus link` puts objects together into an image, so a program
+can be built from separately assembled files that share their global
+names ([`docs/linker.md`](docs/linker.md)).
+
 Running `detrytus` with no arguments lists every option.
 
 ## Documentation
@@ -170,6 +175,8 @@ Running `detrytus` with no arguments lists every option.
   truth for what the machine does.
 - [`docs/assembler.md`](docs/assembler.md): source syntax, directives
   (`.compress`, `.gp`, `.assert` and the rest) and pseudo-instructions.
+- [`docs/linker.md`](docs/linker.md): objects, the object format and
+  the linker.
 - [`docs/platform.md`](docs/platform.md): the emulated memory map and
   devices.
 - [`docs/debugger.md`](docs/debugger.md): the debugger's commands.
@@ -193,8 +200,8 @@ Running `detrytus` with no arguments lists every option.
 | Path | Job |
 |------|-----|
 | `rust/core/` | the machine: trits, the instruction set, the hart, privilege, paging, the bus and devices, images; no dependencies |
-| `rust/asm/` | the assembler and disassembler |
-| `rust/cli/` | the `detrytus` command: `asm`, `run` and `debug` |
+| `rust/asm/` | the assembler, disassembler and linker |
+| `rust/cli/` | the `detrytus` command: `asm`, `link`, `run`, `debug` and `tc` |
 | `rust/conformance/` | runs the conformance suite on the assembler and core |
 | `conformance/` | the conformance suite, as data |
 | `docs/` | the specification and the tools' manuals |

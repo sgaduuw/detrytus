@@ -1,10 +1,13 @@
 //! Operand text to instruction fields, and the encoding of one
 //! instruction. Ported from the original Python tools.
 
+use std::cell::RefCell;
+
 use detrytus_core::isa::{self, Format, Op};
 use detrytus_core::trits::{WORD_TRITS, half, pow3};
 
-use crate::expr::{ExprError, Symbols, Value, evaluate};
+use crate::expr::{ExprError, Linear, Relocatable, Symbols, Value, evaluate_linear};
+use crate::object::RelocKind;
 use crate::pyrepr::repr;
 use crate::text::strip;
 
@@ -57,14 +60,77 @@ impl Fields {
     }
 }
 
+/// A value the linker must finish, noted while encoding: the address
+/// of the word it goes in, where in that word, and the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    pub at: Value,
+    pub kind: RelocKind,
+    pub value: Linear,
+}
+
 /// Reads operand text against the symbol table.
 pub struct Operands<'a> {
     pub symbols: &'a Symbols,
+    /// Assembling an object: what the linker will place.
+    pub reloc: Option<&'a Relocatable>,
+    /// The base of the section being assembled, when the linker places it.
+    pub base: Option<&'a str>,
+    pub pending: RefCell<Vec<Pending>>,
 }
 
-impl Operands<'_> {
+impl<'a> Operands<'a> {
+    pub fn new(symbols: &'a Symbols) -> Self {
+        Operands { symbols, reloc: None, base: None, pending: RefCell::new(Vec::new()) }
+    }
+
+    /// A value that must be known now, such as a CSR number or a count.
     pub fn value(&self, text: &str, here: Value) -> Result<Value, OperandError> {
-        Ok(evaluate(text, self.symbols, Some(here))?)
+        let v = self.linear(text, here)?;
+        v.as_constant().ok_or_else(|| {
+            OperandError::Message(format!(
+                "{} is not known until the program is linked",
+                repr(text)
+            ))
+        })
+    }
+
+    /// A value the linker may finish.
+    pub fn linear(&self, text: &str, here: Value) -> Result<Linear, OperandError> {
+        Ok(evaluate_linear(text, self.symbols, self.reloc, Some(self.here(here)))?)
+    }
+
+    /// here as an address in the current section.
+    pub fn here(&self, here: Value) -> Linear {
+        Linear::based(here, self.base)
+    }
+
+    /// Leave value for the linker to put at `at`. 0 goes in the word
+    /// meanwhile.
+    pub fn defer(
+        &self,
+        text: &str,
+        at: Value,
+        kind: RelocKind,
+        value: Linear,
+    ) -> Result<Value, OperandError> {
+        if value.split().is_none() {
+            return fail(format!(
+                "{} is more than the linker can finish: it adds one address and subtracts one",
+                repr(text)
+            ));
+        }
+        self.pending.borrow_mut().push(Pending { at, kind, value });
+        Ok(0)
+    }
+
+    /// An immediate field: known now, or left for the linker.
+    fn immediate(&self, text: &str, pc: Value) -> Result<Value, OperandError> {
+        let v = self.linear(text, pc)?;
+        match v.as_constant() {
+            Some(c) => Ok(c),
+            None => self.defer(text, pc, RelocKind::Imm, v),
+        }
     }
 
     pub fn reg(text: &str) -> Result<Value, OperandError> {
@@ -83,14 +149,24 @@ impl Operands<'_> {
         }
         let open = text.rfind('(').unwrap();
         let imm_text = strip(&text[..open]);
-        let imm = if imm_text.is_empty() { 0 } else { self.value(imm_text, here)? };
+        let imm = if imm_text.is_empty() { 0 } else { self.immediate(imm_text, here)? };
         Ok((imm, Self::reg(&text[open + 1..text.len() - 1])?))
     }
 
-    /// A branch target as a word offset from pc.
-    pub fn offset(&self, text: &str, pc: Value) -> Result<Value, OperandError> {
-        let target = self.value(text, pc)?;
-        let delta = target - pc;
+    /// A branch target as a word offset from pc, in `field`. A target in
+    /// another section, or outside the object, is the linker's.
+    pub fn offset(
+        &self,
+        text: &str,
+        pc: Value,
+        field: &'static str,
+    ) -> Result<Value, OperandError> {
+        let target = self.linear(text, pc)?;
+        let delta = target.add_scaled(&self.here(pc), -1).and_then(|d| d.as_constant());
+        let Some(delta) = delta else {
+            return self.defer(text, pc, RelocKind::Branch(field), target);
+        };
+        let target = target.constant;
         if delta % 3 != 0 {
             return fail(format!("branch target {target} is not word aligned"));
         }
@@ -151,7 +227,7 @@ impl Operands<'_> {
             "s" => f.set("rs1", Self::reg(text)?),
             "t" => f.set("rs2", Self::reg(text)?),
             "u" => f.set("rs3", Self::reg(text)?),
-            "i" => f.set("imm", self.value(text, pc)?),
+            "i" => f.set("imm", self.immediate(text, pc)?),
             "m" => {
                 let (imm, rs1) = self.mem(text, pc)?;
                 f.set("imm", imm);
@@ -165,10 +241,11 @@ impl Operands<'_> {
                 }
             }
             "L" => {
-                f.set(if op.format == Format::B { "off" } else { "imm" }, self.offset(text, pc)?)
+                let field = if op.format == Format::B { "off" } else { "imm" };
+                f.set(field, self.offset(text, pc, field)?)
             }
-            "N" => f.set("offn", self.offset(text, pc)?),
-            "P" => f.set("offp", self.offset(text, pc)?),
+            "N" => f.set("offn", self.offset(text, pc, "offn")?),
+            "P" => f.set("offp", self.offset(text, pc, "offp")?),
             "x" => {
                 let tables: Vec<(String, Value)> =
                     isa::tables().iter().map(|(n, v)| (n.to_string(), *v as Value)).collect();

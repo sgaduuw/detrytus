@@ -94,7 +94,7 @@ struct Gen {
 
 type R<T> = Result<T, Error>;
 
-pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
+pub(crate) fn generate(units: &[Unit], main_file: &str, unit: bool) -> R<Output> {
     let mut g = Gen {
         file: main_file.to_string(),
         consts: HashMap::new(),
@@ -117,19 +117,46 @@ pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
         inlined: 0,
         call_sites: HashMap::new(),
         addressed: HashSet::new(),
-        gp: units.iter().any(|u| matches!(u, Unit::Include { gp: true, .. })),
+        gp: units.iter().any(|u| matches!(u, Unit::Include { gp: true, own: true, .. })),
     };
     clear_structs();
     g.declare(units)?;
-    let used = used_functions(units);
+    // Compiling one file, any function may be called from another.
+    let used = if unit { None } else { used_functions(units) };
     g.call_sites = call_sites(units, used.as_ref());
+    if unit {
+        // Other objects may call any of them too: none has one caller.
+        for u in units {
+            if let Unit::Item { item: Item::Func(f), own: true, .. } = u {
+                *g.call_sites.entry(f.name.clone()).or_insert(0) += 2;
+            }
+        }
+    }
     g.code.push(format!("# Compiled by detrytus tc from {main_file}: docs/trice.md, docs/abi.md."));
+    if unit {
+        // What this file defines, for the other objects.
+        let names: Vec<&str> = units
+            .iter()
+            .filter_map(|u| match u {
+                Unit::Item { item: Item::Func(f), own: true, .. } if f.body.is_some() => {
+                    Some(f.name.as_str())
+                }
+                Unit::Item { item: Item::Global { name, .. }, own: true, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+        if !names.is_empty() {
+            g.code.push(format!("        .global {}", names.join(", ")));
+        }
+    }
     let mut compressing = false;
     let mut ranges = Vec::new();
     for unit in units {
         match unit {
-            Unit::Include { path, .. } => g.code.push(format!("        .include \"{path}\"")),
-            Unit::Item { file, item: Item::Func(f) } if f.body.is_some() => {
+            Unit::Include { path, own: true, .. } => {
+                g.code.push(format!("        .include \"{path}\""))
+            }
+            Unit::Item { file, item: Item::Func(f), own: true } if f.body.is_some() => {
                 if !compressing {
                     g.code.push("        .compress".into());
                     compressing = true;
@@ -145,7 +172,7 @@ pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
                     ranges.push((f.name.clone(), code, g.code.len()));
                 }
             }
-            Unit::Item { .. } => {}
+            Unit::Item { .. } | Unit::Include { .. } => {}
         }
     }
     if !compressing {
@@ -253,16 +280,18 @@ impl Gen {
                         self.imported.insert(name.clone(), *value);
                     }
                 }
-                Unit::Item { file, item } => {
+                Unit::Item { file, item, own } => {
                     self.file = file.clone();
-                    self.declare_item(item)?;
+                    self.declare_item(item, *own)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn declare_item(&mut self, item: &Item) -> R<()> {
+    /// Declare an item; a global not `own` is another object's, so its
+    /// data is not emitted here.
+    fn declare_item(&mut self, item: &Item, own: bool) -> R<()> {
         match item {
             Item::Import(..) => Ok(()),
             Item::Struct { name, fields, line } => {
@@ -312,7 +341,9 @@ impl Gen {
                 }
                 let ty = self.decl_type(ty, array, *line)?;
                 let data = self.global_data(name, &ty, init.as_ref(), *line)?;
-                self.data.push(data);
+                if own {
+                    self.data.push(data);
+                }
                 self.globals.insert(name.clone(), ty);
                 Ok(())
             }
@@ -2416,20 +2447,20 @@ fn call_sites(units: &[Unit], used: Option<&HashSet<String>>) -> HashMap<String,
     let mut sites = HashMap::new();
     for unit in units {
         match unit {
-            Unit::Item { item: Item::Func(f), .. } => {
-                if used.is_some_and(|u| !u.contains(&f.name)) {
+            Unit::Item { item: Item::Func(f), own, .. } => {
+                if !own || used.is_some_and(|u| !u.contains(&f.name)) {
                     continue;
                 }
                 for s in f.body.iter().flatten() {
                     stmt_calls(s, &mut |n| *sites.entry(n.to_string()).or_insert(0) += 1, &words);
                 }
             }
-            Unit::Include { operands, .. } => {
+            Unit::Include { operands, own: true, .. } => {
                 for w in words(operands) {
                     *sites.entry(w).or_insert(0) += 2;
                 }
             }
-            Unit::Item { .. } => {}
+            Unit::Item { .. } | Unit::Include { .. } => {}
         }
     }
     sites

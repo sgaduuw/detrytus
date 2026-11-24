@@ -43,6 +43,8 @@ pub struct Statement {
     pub partner: Option<usize>,
     /// Set when `.gp` made this an offset from gp (gp.rs).
     pub gp: Option<crate::gp::Reach>,
+    /// The section it was laid out in.
+    pub section: String,
 }
 
 impl Statement {
@@ -67,6 +69,7 @@ impl Statement {
             shift: 0,
             partner: None,
             gp: None,
+            section: String::new(),
         }
     }
 

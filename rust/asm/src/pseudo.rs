@@ -4,7 +4,8 @@
 use detrytus_core::isa;
 use detrytus_core::trits::{WORD_MAX, half, low, pow3, split_high};
 
-use crate::expr::{ExprError, Symbols, Value, evaluate};
+use crate::expr::{ExprError, Value};
+use crate::object::RelocKind;
 use crate::operands::{Fields, OperandError, Operands, fail};
 
 /// (machine mnemonic, operand texts, fields set directly)
@@ -56,7 +57,7 @@ fn arity(name: &str, texts: &[String], n: usize) -> Result<(), OperandError> {
 }
 
 /// value = hi·3⁸ + lo with lo balanced: no carry fix-up needed.
-fn split_constant(value: Value) -> (Value, Value) {
+pub(crate) fn split_constant(value: Value) -> (Value, Value) {
     let m = pow3(LOW_TRITS) as Value;
     let h = (m - 1) / 2;
     let lo = (value + h).rem_euclid(m) - h;
@@ -116,7 +117,13 @@ pub fn expand(
         "la" => {
             arity("la", texts, 2)?;
             let rd = &texts[0];
-            let (hi, lo) = split_constant(ops.value(&texts[1], pc)? - pc);
+            let target = ops.linear(&texts[1], pc)?;
+            let distance = target.add_scaled(&ops.here(pc), -1).and_then(|d| d.as_constant());
+            let distance = match distance {
+                Some(d) => d,
+                None => ops.defer(&texts[1], pc, RelocKind::PcPair, target)?,
+            };
+            let (hi, lo) = split_constant(distance);
             Ok(vec![
                 ("auipc", vec![rd.clone(), hi.to_string()], Fields::default()),
                 ("addi", vec![rd.clone(), rd.clone(), lo.to_string()], Fields::default()),
@@ -145,7 +152,12 @@ fn li(
 ) -> Result<Vec<Expansion>, OperandError> {
     arity("li", texts, 2)?;
     let rd = &texts[0];
-    let value = ops.value(&texts[1], pc)?;
+    let value = ops.linear(&texts[1], pc)?;
+    let value = match value.as_constant() {
+        Some(v) => v,
+        // size() gave it two words.
+        None => ops.defer(&texts[1], pc, RelocKind::Pair, value)?,
+    };
     if value.abs() > WORD_MAX as Value {
         return fail(format!("{value} does not fit a word"));
     }
@@ -164,15 +176,19 @@ fn li(
 }
 
 /// Words a pseudo needs, decided in pass one and kept in pass two.
-pub fn size(name: &str, texts: &[String], symbols: &Symbols) -> Result<i128, ExprError> {
+pub fn size(name: &str, texts: &[String], ops: &Operands) -> Result<i128, ExprError> {
     if name == "la" {
         return Ok(2);
     }
     if name == "li" && texts.len() == 2 {
-        return match evaluate(&texts[1], symbols, None) {
+        let value = crate::expr::evaluate_linear(&texts[1], ops.symbols, ops.reloc, None);
+        return match value {
             Err(ExprError::Undefined(_)) => Ok(2), // not known yet: the long form
             Err(e) => Err(e),
-            Ok(v) => Ok(if v.abs() <= SHORT_IMMEDIATE { 1 } else { 2 }),
+            Ok(v) => Ok(match v.as_constant() {
+                Some(v) if v.abs() <= SHORT_IMMEDIATE => 1,
+                _ => 2, // too large, or the linker's
+            }),
         };
     }
     Ok(1)

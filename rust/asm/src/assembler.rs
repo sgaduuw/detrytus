@@ -5,14 +5,15 @@
 //! whose size depends on a value (li) decides its size in pass one,
 //! taking the long form when the value is not yet known.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use detrytus_core::trits::{TRYTE_MAX, TRYTE_TRITS, low, split_high};
 use detrytus_core::{compressed, isa};
 
 use crate::error::AsmError;
-use crate::expr::{ExprError, Symbols, Value, evaluate};
-use crate::operands::{Fields, OperandError, Operands};
+use crate::expr::{ExprError, Linear, Relocatable, Symbols, Value, evaluate_linear};
+use crate::object::{Object, Reloc, RelocKind, Section, Symbol};
+use crate::operands::{Fields, OperandError, Operands, Pending};
 use crate::source::{Kind, Statement, parse};
 use crate::{pseudo, slots};
 
@@ -122,11 +123,61 @@ struct Assembler {
     /// Instructions under `.compress` that may go in a slot: those whose
     /// full instruction did not fail to fit one in an earlier layout.
     slotted: BTreeSet<usize>,
+    /// Assembling an object (docs/linker.md): what the linker finishes.
+    object: Option<Objects>,
+}
+
+/// What assembling an object keeps besides the image.
+#[derive(Default, Clone)]
+struct Objects {
+    reloc: Relocatable,
+    /// The sections the linker places, each with its base's name.
+    floating: HashMap<String, String>,
+    /// Every section, in the order they first appear.
+    order: Vec<String>,
+    align: HashMap<String, u32>,
+    /// Each section's trytes, by run address.
+    trytes: HashMap<String, BTreeMap<i64, i64>>,
+    relocs: HashMap<String, Vec<Reloc>>,
+    /// Symbols in the order they were defined.
+    defined: Vec<String>,
+    /// The `.global` names, with the statement that declared each.
+    globals: Vec<(String, usize)>,
+}
+
+impl Objects {
+    fn new(defined: HashSet<String>) -> Self {
+        let reloc = Relocatable { defined, ..Default::default() };
+        let mut o = Objects { reloc, ..Default::default() };
+        o.float("text");
+        o
+    }
+
+    fn float(&mut self, section: &str) {
+        self.floating.insert(section.to_string(), format!("[{section}]"));
+        self.align.insert(section.to_string(), 1);
+        self.order.push(section.to_string());
+    }
 }
 
 impl Assembler {
-    fn new() -> Self {
-        Assembler { loc: -1, section: "text".into(), ..Default::default() }
+    fn new(object: Option<Objects>) -> Self {
+        Assembler { loc: -1, section: "text".into(), object, ..Default::default() }
+    }
+
+    /// Operands for a statement in section.
+    fn ops(&self, section: &str) -> Operands<'_> {
+        let mut ops = Operands::new(&self.symbols);
+        if let Some(o) = &self.object {
+            ops.reloc = Some(&o.reloc);
+            ops.base = o.floating.get(section).map(String::as_str);
+        }
+        ops
+    }
+
+    /// Whether the linker places the current section.
+    fn floating(&self) -> bool {
+        self.object.as_ref().is_some_and(|o| o.floating.contains_key(&self.section))
     }
 
     // --- pass one: layout ----------------------------------------------------
@@ -168,12 +219,46 @@ impl Assembler {
                 stmts[i].kind = Kind::None;
                 let s = &stmts[i];
                 let [name, value] = expect::<2>(s)?;
-                let v = self.constant(&value)?;
-                self.define(&name, v, s)?;
+                let v = self.relocatable(&value)?;
+                self.define(&name, v.constant, s)?;
+                if let Some(o) = &mut self.object
+                    && !v.terms.is_empty()
+                {
+                    // A name for an address the linker places, or for an
+                    // external symbol plus a constant.
+                    match v.split() {
+                        Some((Some(base), None)) => {
+                            o.reloc.bases.insert(name, base.to_string());
+                        }
+                        _ => {
+                            let q = crate::pyrepr::repr(&value);
+                            return Err(s
+                                .error(format!("{q} is not one address plus a constant"))
+                                .into());
+                        }
+                    }
+                }
+            }
+            ".global" => {
+                stmts[i].kind = Kind::None;
+                let s = &stmts[i];
+                if s.operands.is_empty() {
+                    return Err(s.error(".global takes one or more names").into());
+                }
+                if let Some(o) = &mut self.object {
+                    for name in &s.operands {
+                        o.globals.push((crate::text::strip(name).to_string(), i));
+                    }
+                }
             }
             ".org" => {
                 stmts[i].kind = Kind::None;
                 let s = &stmts[i];
+                if self.floating() {
+                    return Err(s
+                        .error(".org in a section the linker places: give the section an address")
+                        .into());
+                }
                 let [target] = expect::<1>(s)?;
                 let target = self.constant(&target)?;
                 if low3(target) != 0 {
@@ -194,6 +279,11 @@ impl Assembler {
                     return Err(s.error(message).into());
                 }
                 self.loc = next_centre(self.loc, 3i128.pow(power as u32)) - 1;
+                let section = self.section.clone();
+                if let Some(o) = &mut self.object {
+                    let align = o.align.entry(section).or_insert(0);
+                    *align = (*align).max(power as u32);
+                }
             }
             ".section" => {
                 stmts[i].kind = Kind::None;
@@ -221,6 +311,11 @@ impl Assembler {
                 self.define(label, addr, s)?;
                 self.image.labels.insert(label.clone(), addr);
                 self.image.label_order.push(label.clone());
+                if let Some(o) = &mut self.object
+                    && let Some(base) = o.floating.get(&self.section)
+                {
+                    o.reloc.bases.insert(label.clone(), base.clone());
+                }
             }
         }
         Ok(())
@@ -231,11 +326,22 @@ impl Assembler {
             return Err(s.error(format!("symbol {} defined twice", crate::pyrepr::repr(name))));
         }
         self.symbols.insert(name.to_string(), value);
+        if let Some(o) = &mut self.object {
+            o.defined.push(name.to_string());
+        }
         Ok(())
     }
 
+    fn relocatable(&self, text: &str) -> Result<Linear, ExprError> {
+        evaluate_linear(text, &self.symbols, self.object.as_ref().map(|o| &o.reloc), None)
+    }
+
     fn constant(&self, text: &str) -> Result<Value, ExprError> {
-        evaluate(text, &self.symbols, None)
+        let v = self.relocatable(text)?;
+        v.as_constant().ok_or_else(|| {
+            let q = crate::pyrepr::repr(text);
+            ExprError::Other(format!("{q} is not known until the program is linked"))
+        })
     }
 
     /// Switch sections. A section is placed once, on first use, and
@@ -255,7 +361,15 @@ impl Assembler {
                 let q = crate::pyrepr::repr(&name);
                 return Err(s.error(format!("section {q} is already placed")).into());
             }
-            self.place(s)?
+            let placed = self.place(s)?;
+            if let Some(o) = &mut self.object {
+                o.order.push(name.clone());
+            }
+            placed
+        } else if !known && self.object.is_some() {
+            // In an object, the linker places it.
+            self.object.as_mut().unwrap().float(&name);
+            (-1, 0)
         } else if !known {
             let q = crate::pyrepr::repr(&name);
             return Err(s
@@ -295,6 +409,7 @@ impl Assembler {
         let size = self.tryte_count(&stmts[i])?;
         let s = &mut stmts[i];
         s.kind = Kind::Tryte;
+        s.section = self.section.clone();
         s.shift = self.shift;
         s.addr = self.loc;
         s.size = size;
@@ -315,6 +430,7 @@ impl Assembler {
                 let (addr, shift) = (stmts[a].addr + 1, self.shift);
                 stmts[a].partner = Some(i);
                 let s = &mut stmts[i];
+                s.section = self.section.clone();
                 (s.kind, s.shift, s.size, s.addr) = (Kind::SlotB, shift, 0, addr);
                 return Ok(());
             }
@@ -326,6 +442,7 @@ impl Assembler {
         }
         let addr = next_centre(self.loc, 3);
         let s = &mut stmts[i];
+        s.section = self.section.clone();
         (s.kind, s.shift, s.size, s.addr) = (Kind::Word, self.shift, size, addr);
         self.bind(stmts, addr)?;
         self.loc = addr + 3 * size - 1;
@@ -344,7 +461,7 @@ impl Assembler {
                 n
             }
             m if slots::is_slot(m) => 1,
-            m => pseudo::size(split_suffix(m).0, &s.operands, &self.symbols)?,
+            m => pseudo::size(split_suffix(m).0, &s.operands, &self.ops(&self.section))?,
         })
     }
 
@@ -396,6 +513,17 @@ impl Assembler {
 
     /// Place a tryte at its load address: addr (a run address) + shift.
     fn put(&mut self, addr: Value, tryte: i64, s: &Statement) -> PassResult<()> {
+        if let Some(o) = &mut self.object {
+            // An object keeps each section apart, by run address: the
+            // linker checks where they land.
+            let key = i64::try_from(addr)
+                .map_err(|_| s.error(format!("address {addr} is out of range")))?;
+            let trytes = o.trytes.entry(s.section.clone()).or_default();
+            if trytes.insert(key, tryte).is_some() {
+                return Err(s.error(format!("address {addr} assembled twice")).into());
+            }
+            return Ok(());
+        }
         let addr = addr + s.shift;
         let key =
             i64::try_from(addr).map_err(|_| s.error(format!("address {addr} is out of range")))?;
@@ -421,14 +549,36 @@ impl Assembler {
         let [condition, message] =
             expect::<2>(s).map_err(|_| s.error(".assert takes a condition and a \"message\""))?;
         let message = quoted(s, &message)?;
-        if crate::expr::evaluate_check(&condition, &self.symbols)? == 0 {
+        let reloc = self.object.as_ref().map(|o| &o.reloc);
+        if crate::expr::evaluate_check(&condition, &self.symbols, reloc)? == 0 {
             return Err(s.error(message).into());
         }
         Ok(())
     }
 
+    /// Keep what the linker must finish in s's words.
+    fn keep(&mut self, s: &Statement, pending: Vec<Pending>) {
+        let Some(o) = &mut self.object else { return };
+        for p in pending {
+            let (plus, minus) = p.value.split().expect("deferred values split");
+            o.relocs.entry(s.section.clone()).or_default().push(Reloc {
+                addr: p.at,
+                kind: p.kind,
+                addend: p.value.constant,
+                plus: plus.map(str::to_string),
+                minus: minus.map(str::to_string),
+                line: s.line,
+                file: s.file.clone(),
+            });
+        }
+    }
+
     fn emit_words(&mut self, s: &Statement) -> PassResult<()> {
-        let words = self.words(s)?;
+        let ops = self.ops(&s.section);
+        let words = self.words_at(&ops, s, s.addr);
+        let pending = ops.pending.into_inner();
+        let words = words?;
+        self.keep(s, pending);
         if words.len() as i128 != s.size {
             let message = format!(
                 "internal error: {} sized {} in pass one but {} in pass two",
@@ -498,13 +648,15 @@ impl Assembler {
     fn slot(&self, s: &Statement) -> PassResult<i64> {
         let base = s.addr - low3(s.addr);
         if !slots::is_slot(&s.mnemonic) {
-            let word = self.words_at(s, base)?[0];
+            let ops = self.ops(&s.section);
+            let word = self.words_at(&ops, s, base)?[0];
+            unlinked(&ops, s)?;
             let d = isa::decode(word).expect("an encoded instruction decodes");
             return compressed::compress(&d).ok_or_else(|| {
                 OperandError::Message(format!("{} does not fit a slot", s.mnemonic)).into()
             });
         }
-        let ops = Operands { symbols: &self.symbols };
+        let ops = self.ops(&s.section);
         let (name, texts) = slots::full(&s.mnemonic, &s.operands)?;
         let mut expansions = if pseudo::is_pseudo(name) {
             pseudo::expand(&ops, name, &texts, base, 1)?
@@ -514,6 +666,7 @@ impl Assembler {
         let (op, texts, extra) = expansions.pop().expect("one word");
         let op = isa::by_name(op).expect("a c. form names a real instruction");
         let word = ops.encode_instruction(op, "", &texts, base, extra)?;
+        unlinked(&ops, s)?;
         let d = isa::decode(word).expect("an encoded instruction decodes");
         compressed::compress(&d).ok_or_else(|| {
             let full = crate::disasm::disassemble(word, Some(base as i64));
@@ -525,7 +678,7 @@ impl Assembler {
         let values: Vec<Value> = match s.mnemonic.as_str() {
             ".zero" => vec![0; s.size.max(0) as usize],
             ".tryte" => {
-                let ops = Operands { symbols: &self.symbols };
+                let ops = self.ops(&s.section);
                 s.operands.iter().map(|op| ops.value(op, s.addr)).collect::<Result<_, _>>()?
             }
             _ => {
@@ -555,21 +708,22 @@ impl Assembler {
         Ok(())
     }
 
-    fn words(&self, s: &Statement) -> PassResult<Vec<i64>> {
-        self.words_at(s, s.addr)
-    }
-
     /// The words of a statement assembled at pc, which differs from its
     /// address only in slot B, where offsets count from the bundle.
-    fn words_at(&self, s: &Statement, pc: Value) -> PassResult<Vec<i64>> {
-        let ops = Operands { symbols: &self.symbols };
+    /// What the linker must finish is left in ops.
+    fn words_at(&self, ops: &Operands, s: &Statement, pc: Value) -> PassResult<Vec<i64>> {
         if s.mnemonic == ".word" {
             return s
                 .operands
                 .iter()
-                .map(|op| {
+                .enumerate()
+                .map(|(i, op)| {
                     // A word is stored as given; the trytes take its low 27 trits.
-                    let v = ops.value(op, pc)?;
+                    let v = ops.linear(op, pc)?;
+                    let v = match v.as_constant() {
+                        Some(v) => v,
+                        None => ops.defer(op, pc + 3 * i as i128, RelocKind::Word, v)?,
+                    };
                     Ok(((v + HALF_WORD_MOD).rem_euclid(WORD_MOD) - HALF_WORD_MOD) as i64)
                 })
                 .collect();
@@ -578,11 +732,11 @@ impl Assembler {
             return Ok(vec![0; s.size as usize]);
         }
         if let Some(reach) = &s.gp {
-            reach.check(&ops, pc)?;
+            reach.check(ops, pc)?;
         }
         let (name, suffix) = split_suffix(&s.mnemonic);
         let expansions = if pseudo::is_pseudo(name) {
-            pseudo::expand(&ops, name, &s.operands, pc, s.size.max(1))?
+            pseudo::expand(ops, name, &s.operands, pc, s.size.max(1))?
         } else if let Some(op) = isa::by_name(name) {
             vec![(op.name, s.operands.clone(), Fields::default())]
         } else {
@@ -668,11 +822,100 @@ fn compressible(stmts: &[Statement]) -> BTreeSet<usize> {
 /// layout repeats, each time without the ones that did not fit, until
 /// every pair fits. The set only shrinks, so this ends.
 pub fn assemble(source: &str, file: Option<&str>) -> Result<Image, AsmError> {
+    let (asm, _) = run(source, file, false)?;
+    let mut image = asm.image;
+    image.symbols = asm.symbols.into_iter().collect();
+    Ok(image)
+}
+
+/// Assemble source text into an object for the linker (docs/linker.md),
+/// with its listing. A section without an address is the linker's to
+/// place, and a name the source does not define is external.
+pub fn assemble_object(source: &str, file: Option<&str>) -> Result<(Object, Image), AsmError> {
+    let (mut asm, stmts) = run(source, file, true)?;
+    let mut o = asm.object.take().expect("assembled as an object");
+    // Each section ends where layout left it.
+    asm.sections.insert(asm.section.clone(), (asm.loc, asm.shift));
+    let section_of =
+        |name: &str| o.reloc.bases.get(name).and_then(|b| b.strip_prefix('[')?.strip_suffix(']'));
+    let mut globals = HashSet::new();
+    for (name, i) in &o.globals {
+        let s = &stmts[*i];
+        if !asm.symbols.contains_key(name) {
+            let q = crate::pyrepr::repr(name);
+            return Err(s.error(format!("{q} is declared .global but never defined")));
+        }
+        if o.reloc.bases.contains_key(name) && section_of(name).is_none() {
+            let q = crate::pyrepr::repr(name);
+            return Err(s.error(format!("{q} names an external symbol and cannot be global")));
+        }
+        globals.insert(name.clone());
+    }
+    let mut symbols = Vec::new();
+    for name in &o.defined {
+        // A name for an external symbol plus a constant stays local to
+        // the source: the linker resolves its uses.
+        if o.reloc.bases.contains_key(name) && section_of(name).is_none() {
+            continue;
+        }
+        symbols.push(Symbol {
+            name: name.clone(),
+            global: globals.contains(name),
+            label: asm.image.labels.contains_key(name),
+            value: asm.symbols[name],
+            section: section_of(name).map(str::to_string),
+        });
+    }
+    // A section with nothing in it, and nothing that names it, is left out.
+    let named: HashSet<String> = symbols
+        .iter()
+        .filter_map(|s| s.section.clone())
+        .chain(
+            o.relocs
+                .values()
+                .flatten()
+                .flat_map(|r| [r.plus.clone(), r.minus.clone()])
+                .flatten()
+                .filter_map(|b| Some(b.strip_prefix('[')?.strip_suffix(']')?.to_string())),
+        )
+        .collect();
+    let mut sections = Vec::new();
+    for name in &o.order {
+        let trytes = o.trytes.remove(name).unwrap_or_default();
+        let relocs = o.relocs.remove(name).unwrap_or_default();
+        if trytes.is_empty() && relocs.is_empty() && !named.contains(name) {
+            continue;
+        }
+        let (end, shift) = asm.sections[name];
+        sections.push(Section {
+            name: name.clone(),
+            placed: (!o.floating.contains_key(name)).then_some(shift),
+            align: o.align.get(name).copied().unwrap_or(1),
+            end,
+            trytes,
+            relocs,
+        });
+    }
+    let mut image = asm.image;
+    image.symbols = asm.symbols.into_iter().collect();
+    Ok((Object { sections, symbols }, image))
+}
+
+/// Instructions under `.compress` start out allowed into slots. Whether
+/// one fits depends on where layout put it (a short branch's reach), so
+/// layout repeats, each time without the ones that did not fit, until
+/// every pair fits. The set only shrinks, so this ends.
+fn run(
+    source: &str,
+    file: Option<&str>,
+    object: bool,
+) -> Result<(Assembler, Vec<Statement>), AsmError> {
     let mut parsed = parse(source, file)?;
     crate::gp::rewrite(&mut parsed)?;
+    let objects = object.then(|| Objects::new(defined_names(&parsed)));
     let mut slotted = compressible(&parsed);
-    let (asm, stmts) = loop {
-        let mut asm = Assembler { slotted: slotted.clone(), ..Assembler::new() };
+    let (mut asm, stmts) = loop {
+        let mut asm = Assembler { slotted: slotted.clone(), ..Assembler::new(objects.clone()) };
         let mut stmts = parsed.clone();
         asm.layout(&mut stmts)?;
         let unfit = asm.unfit(&stmts);
@@ -683,14 +926,36 @@ pub fn assemble(source: &str, file: Option<&str>) -> Result<Image, AsmError> {
             slotted.remove(&i);
         }
     };
-    let mut asm = asm;
     asm.emit(&stmts)?;
-    let mut image = asm.image;
-    image.symbols = asm.symbols.into_iter().collect();
-    for entry in image.listing.iter_mut().filter(|e| e.text.is_empty()) {
+    for entry in asm.image.listing.iter_mut().filter(|e| e.text.is_empty()) {
         if let Some(word) = entry.word {
             entry.text = crate::disasm::disassemble(word, Some(entry.addr as i64));
         }
     }
-    Ok(image)
+    Ok((asm, stmts))
+}
+
+/// Every name the source defines, as a label or a constant: any other
+/// name is external.
+fn defined_names(stmts: &[Statement]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for s in stmts {
+        names.extend(s.labels.iter().cloned());
+        if matches!(s.mnemonic.as_str(), ".equ" | ".set")
+            && let Some(name) = s.operands.first()
+        {
+            names.insert(crate::text::strip(name).to_string());
+        }
+    }
+    names
+}
+
+/// Refuse a slot to an instruction the linker has to finish: its reach
+/// is not known until then.
+fn unlinked(ops: &Operands, s: &Statement) -> PassResult<()> {
+    if ops.pending.borrow().is_empty() {
+        return Ok(());
+    }
+    let message = format!("{} is finished by the linker, so it cannot go in a slot", s.mnemonic);
+    Err(OperandError::Message(message).into())
 }

@@ -784,14 +784,15 @@ args = ["run", "--harts", "730", "{here}/programs/harts.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --harts takes 1 to 729
 '''
 
@@ -801,14 +802,15 @@ args = ["run", "--unplug", "5:0", "{here}/programs/harts.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: hart 0 cannot be removed
 '''
 
@@ -818,14 +820,15 @@ args = ["run", "--plug", "5", "{here}/programs/harts.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --plug needs TIME:HART
 '''
 
@@ -897,14 +900,15 @@ args = ["run", "--input", "-", "-"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: stdin can be a FILE or the --input, not both
 '''
 
@@ -914,14 +918,15 @@ args = ["run", "{root}/examples/echo.s", "--input"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --input needs a file
 '''
 
@@ -959,14 +964,15 @@ args = ["run", "--disk-blocks", "2", "{here}/programs/disk.s"]
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --disk-blocks needs --disk
 '''
 
@@ -976,14 +982,15 @@ args = ["run", "--disk", "{tmp}/disk.img", "--disk-blocks", "0", "{here}/program
 status = 2
 stdout = ""
 stderr = '''
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --disk-blocks takes 1 or more
 '''
 
@@ -1103,13 +1110,14 @@ args = ["run", "--input", "-", "--live", "{here}/programs/live.s"]
 status = 2
 stdout = ""
 stderr = """
-usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --input and --live both give the console its input
 """
