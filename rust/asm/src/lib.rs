@@ -8,6 +8,8 @@ pub mod disasm;
 pub mod error;
 pub mod expr;
 pub mod gp;
+pub mod link;
+pub mod object;
 pub mod operands;
 pub mod pseudo;
 pub mod pyrepr;
@@ -15,5 +17,5 @@ pub mod slots;
 pub mod source;
 pub mod text;
 
-pub use assembler::{Image, Listing, assemble};
+pub use assembler::{Image, Listing, assemble, assemble_object};
 pub use error::AsmError;

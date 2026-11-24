@@ -1,4 +1,4 @@
-//! The `detrytus` command: `asm`, `run`, `debug` and `tc`.
+//! The `detrytus` command: `asm`, `link`, `run`, `debug` and `tc`.
 //!
 //! Its output, messages and exit statuses are those of the Python
 //! command it replaced (docs/rust-plan.md), held there by the recorded
@@ -15,6 +15,7 @@ use detrytus_core::{Hotplug, Machine, Outcome};
 
 mod debug;
 mod disk;
+mod link;
 mod live;
 mod mix;
 mod program;
@@ -24,7 +25,8 @@ use disk::DiskSpec;
 
 use program::{Loaded, load, load_one, strerror};
 
-const USAGE: &str = "usage: detrytus asm FILE [-o FILE] [--listing] [--mix]
+const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
@@ -236,7 +238,8 @@ fn format_trits(word: i64) -> String {
 }
 
 fn cmd_asm(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
-    let (mut file, mut output, mut listing, mut mix) = (None, None, false, false);
+    let (mut file, mut output, mut listing, mut mix, mut object) =
+        (None, None, false, false, false);
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -245,6 +248,7 @@ fn cmd_asm(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
             }
             "--listing" => listing = true,
             "--mix" => mix = true,
+            "-c" => object = true,
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -253,11 +257,32 @@ fn cmd_asm(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
         }
     }
     let file = file.ok_or_else(|| usage("asm needs a file"))?;
-    let loaded = load_one(&file)?;
+    let loaded = if object {
+        let (o, image) = program::load_object(&file)?;
+        let Some(image) = image else {
+            return Err(Fail::new(format!("{file}: already an object"), BAD_INPUT));
+        };
+        if let Some(out) = &output {
+            std::fs::write(out, o.to_text())
+                .map_err(|e| Fail::new(format!("{out}: {}", strerror(&e)), NO_INPUT))?;
+            if !listing && !mix {
+                return Ok(0);
+            }
+            output = None;
+        }
+        Loaded::Source(image)
+    } else {
+        load_one(&file)?
+    };
     if let Some(out) = &output {
         let bytes = match &loaded {
             Loaded::Source(image) => image.to_bytes(),
             Loaded::Image(data) => data.clone(),
+            Loaded::Object(_) => {
+                let message =
+                    format!("{file}: an object: link it into an image with detrytus link");
+                return Err(Fail::new(message, BAD_INPUT));
+            }
         };
         std::fs::write(out, bytes)
             .map_err(|e| Fail::new(format!("{out}: {}", strerror(&e)), NO_INPUT))?;
@@ -486,6 +511,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let result = match args.next().as_deref() {
         Some("asm") => cmd_asm(args),
+        Some("link") => link::cmd_link(args),
         Some("run") => parse_run(args).and_then(run),
         Some("debug") => cmd_debug(args),
         Some("tc") => tc::cmd_tc(args),

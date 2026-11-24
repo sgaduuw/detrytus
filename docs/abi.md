@@ -128,11 +128,13 @@ slot B of a bundle (isa.md 6.1), so a function returns with `jalr zero,
 
 ## 3. Symbols
 
-There is no linker yet: a program is assembled from one source, and all
-its names share one symbol table (assembler.md, Includes). A compiler
+A program assembled from one source shares one symbol table among all
+its names (assembler.md, Includes); one linked from objects shares its
+global names (linker.md). A compiler
 emits a function or global under its source name, so listings and the
 debugger show it, and names the labels it invents with a `$`, which
 assembly names may contain but source identifiers may not.
 
-When separate compilation arrives it brings a relocatable object format
-and a linker, which a Rust backend needs as well.
+A name another object uses is made `.global`. The object format and
+the linker are in [`linker.md`](linker.md); a Rust backend will use
+them as well.

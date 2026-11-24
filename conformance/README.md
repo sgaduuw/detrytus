@@ -25,6 +25,7 @@ checks each file's format, assembles each case and runs it on the core.
 | `harts/` | several harts: starting and stopping, mailboxes, group sends, `wfi`, the shared clock, hot-plug |
 | `devices/` | the interrupt controller, console input states and the block device |
 | `asm/` | the assembler: layout, local labels, sections, and its errors |
+| `link/` | objects and the linker: relocations, placing sections, and the errors of both |
 | `examples/` | the programs in `examples/`, run as shipped |
 
 `paging/` also holds shared assembly: `tables.s` (constants and base
@@ -60,6 +61,7 @@ expect.registers = { a1 = 7, a2 = -3 }
 | `program` | assembly source, inline |
 | `source` | a file to assemble, relative to the case file |
 | `sources` | several files (sources or `.dti` images) loaded together |
+| `objects` | several inline sources, each assembled as an object ([`docs/linker.md`](../docs/linker.md)), linked in order |
 | `prelude`, `postlude` | text put before and after `program` |
 | `ram_pages` | RAM size in pages; default 729 |
 | `max_steps` | step limit; default 100000 |
@@ -69,12 +71,14 @@ expect.registers = { a1 = 7, a2 = -3 }
 | `harts` | harts present at reset, numbered outward from 0; default 1 |
 | `hotplug` | a list of `{ time = T, add = H }` or `{ time = T, remove = H }` |
 
-Exactly one of `program`, `source` and `sources`. Any key but `name`
+Exactly one of `program`, `source`, `sources` and `objects`. Any key but `name`
 may also be given in `[defaults]`, and a case's own value wins. An
 inline program is assembled as if it were a file in the case file's
 directory, so `.include` paths start there, and errors name the case:
 `cpu/integer.toml [add]:3`. Lines count from the start of the
-assembled text, prelude included.
+assembled text, prelude included. Objects are named by their place in
+the list as well, `link/link.toml [calls] #2`, and the linker calls
+them `#1`, `#2` and so on.
 
 The machine is the platform of [`docs/platform.md`](../docs/platform.md),
 with its entropy source seeded with 1. The image is loaded and hart 0
@@ -90,6 +94,7 @@ Under `expect`. Exactly one outcome:
 | `step_limit = true` | still be running after `max_steps` steps |
 | `unhandled_cause` | stop on a trap with this cause, its bank's `tvec` being 0, on hart `unhandled_hart` (default 0) |
 | `asm_error` | fail to assemble, with exactly this message |
+| `link_error` | fail to link, with exactly this message (the linker's messages carry no source line) |
 
 `asm_error` is the message alone, without the file, line and source line
 an assembler prints around it; `asm_error_line` may give the line it

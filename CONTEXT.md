@@ -1188,3 +1188,42 @@ passing its tests unchanged; then `bin/wc`.
 - **Pointers may be devices.** Only loads of globals by name are
   reused; a load through a pointer is always made, so polling a
   device's register works.
+
+### 2026-11-24 · Objects and a linker
+
+Separate compilation arrived for what a Rust backend will need, and so
+that Trice programs can stop compiling their whole library each time
+(`docs/linker.md`). The owner approved the work; these choices were
+proposed with it:
+
+- **Objects are text.** One line per section, run of trytes,
+  relocation and symbol, under a versioned header. A program is a few
+  thousand trytes, so size does not matter yet, and text can be read,
+  compared and recorded in tests without a tool. A packed form like
+  `.dti`'s can follow if it ever does.
+- **The assembler makes objects itself** (`asm -c`), rather than
+  objects carrying source for the linker to assemble later. Values are
+  evaluated as a constant plus whole multiples of bases (sections the
+  linker places, external names), and anything with a base left over
+  becomes a relocation. Without `-c` the bases never appear, so whole
+  sources assemble exactly as before.
+- **Five relocation kinds** (a word, an `imm` field, a branch or jump
+  offset, and the `lui` and `auipc` pairs) cover every place the
+  assembler puts a value, and a relocation adds one base and subtracts
+  one, which covers pc-relative values and offsets from `gp` across
+  objects. A pair is one relocation, not two: `li` and `la` always emit
+  both words together, and the balanced split needs no carry.
+- **Placement stays explicit.** The 2026-11-18 entry kept addresses out
+  of layout; a linker can let sections follow one another, since sizes
+  are settled by then, but an address is still given once, in a source:
+  the object that gives a section an address places it, the others'
+  parts follow, and an unplaced section follows the one before. No
+  linker scripts and no addresses on the command line. trylobite's
+  `lib/start.s` already places every program at `V_USER`.
+- **No relaxation.** An instruction the linker finishes is never put
+  in a compressed bundle, since its reach is unknown when the bundles
+  are chosen. A linker that shrinks code after placing it could win
+  those slots back; it is not worth its complexity before there are
+  linked programs to measure.
+- **Undefined names are external**, as in other assemblers, so a typo
+  surfaces at link time, at the line that used it.

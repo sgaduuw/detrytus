@@ -1,0 +1,297 @@
+# Objects and the linker (docs/linker.md): each case's `objects` are
+# assembled as objects and linked in order. The first object's text
+# starts at 0, where the machine starts.
+
+[defaults]
+max_steps = 10000
+
+[[case]]
+name = "calls, addresses and words across objects"
+# main reaches lib's function (a jal), its own data in another section
+# (an auipc pair), lib's table (a lui pair) and a word lib holds of one
+# of main's labels.
+objects = [
+'''
+        .global start
+start:  call  get             # a0 = 40, from main's data
+        la    t0, table
+        lw    t1, 3(t0)       # table's second word: 2
+        add   a0, a0, t1
+        li    t2, table
+        lw    t3, 6(t2)       # the third: start, which is 0
+        add   a0, a0, t3
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .section data
+count:  .word 40
+        .global count
+''',
+'''
+        .global get, table
+get:    la    t0, count
+        lw    a0, 0(t0)
+        ret
+        .section data
+table:  .word 1, 2, start
+''',
+]
+expect.exit_code = 42
+
+[[case]]
+name = "a branch to another object"
+objects = [
+'''
+        li    a0, 0
+        beq   a0, zero, done
+        li    a0, 5
+''',
+'''
+        .global done
+done:   addi  a0, a0, 7
+        li    t6, -39366
+        sw    a0, 0(t6)
+''',
+]
+expect.exit_code = 7
+
+[[case]]
+name = "objects' parts of a section follow the part given an address"
+# The second object places section data at 300; the first and third
+# objects' parts follow it, in the order the objects come. The second
+# object's part ends at tryte 304, so the first's word centres on 306
+# and the third's on 309.
+objects = [
+'''
+        li    a0, first
+        li    a1, third
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .section data
+first:  .word 1
+''',
+'''
+        .section data, 300
+placed: .word 1, 2
+''',
+'''
+        .section data
+third:  .word 3
+        .global third
+''',
+]
+expect.exit_code = 306
+expect.registers = { a1 = 309 }
+
+[[case]]
+name = "a section nobody places follows the one before"
+# text ends at tryte 8 (three words from 0); data follows, its base the
+# next multiple of 27 because it asks for .align 3.
+objects = [
+'''
+        li    a0, buffer
+        li    t6, -39366
+        sw    a0, 0(t6)
+        .section data
+        .align 3
+buffer: .word 0
+''',
+]
+expect.exit_code = 27
+
+[[case]]
+name = "a global pointer reaches another object's data"
+# gp holds a constant, as trylobite's spawnw sets it; the offset from
+# it to value is finished by the linker.
+objects = [
+'''
+        .gp   100
+        li    gp, 100
+        lw    a0, value
+        li    t6, -39366
+        sw    a0, 0(t6)
+''',
+'''
+        .section data
+value:  .word 13
+        .global value
+''',
+]
+expect.exit_code = 13
+
+[[case]]
+name = "an instruction the linker finishes is never bundled"
+# Under .compress the two li fit a bundle; the call to another object
+# stays a whole word, so from start to end is two words.
+objects = [
+'''
+        .compress
+start:  li    a0, 1
+        li    a1, 2
+        call  bump
+end:    li    a0, end - start
+        li    t6, -39366
+        sw    a0, 0(t6)
+''',
+'''
+        .global bump
+bump:   ret
+''',
+]
+expect.exit_code = 6
+
+[[case]]
+name = "a constant can be global"
+objects = [
+'''
+        li    a0, ANSWER
+        li    t6, -39366
+        sw    a0, 0(t6)
+''',
+'''
+        .equ  ANSWER, 42
+        .global ANSWER
+''',
+]
+expect.exit_code = 42
+
+[[case]]
+name = "whole-program assembly ignores .global"
+program = '''
+        .global start
+start:  li    a0, 4
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 4
+
+# --- what the linker refuses ------------------------------------------------
+
+[[case]]
+name = "an undefined symbol"
+objects = [
+'''
+        call  nowhere
+''',
+]
+expect.link_error = "link/link.toml [an undefined symbol] #1:1: undefined symbol 'nowhere'"
+
+[[case]]
+name = "a global defined twice"
+objects = [
+'''
+        .global x
+x:      nop
+''',
+'''
+        .global x
+x:      nop
+''',
+]
+expect.link_error = "symbol x is defined in both #1 and #2"
+
+[[case]]
+name = "a section placed twice"
+objects = [
+'''
+        .section data, 300
+        .word 1
+''',
+'''
+        .section data, 600
+        .word 2
+''',
+]
+expect.link_error = "section data is placed by both #1 and #2"
+
+[[case]]
+name = "sections that overlap"
+# The second object puts its data on the first's text.
+objects = [
+'''
+        nop
+        nop
+''',
+'''
+        .section data, 3
+        .word 1
+''',
+]
+expect.link_error = "#2: section data lands on address 2, which is already taken"
+
+[[case]]
+name = "a distance from gp beyond the offset's reach"
+objects = [
+'''
+        .gp   0
+        lw    a0, far
+''',
+'''
+        .section far, 43046721
+far:    .word 1
+        .global far
+''',
+]
+expect.link_error = "link/link.toml [a distance from gp beyond the offset's reach] #1:2: 43046721 does not fit lw's 16-trit imm"
+
+# --- what assembling an object refuses --------------------------------------
+
+[[case]]
+name = ".org where the linker places the section"
+objects = ['''
+        .org  30
+        nop
+''']
+expect.asm_error = ".org in a section the linker places: give the section an address"
+
+[[case]]
+name = "a .global never defined"
+objects = ['''
+        .global missing
+        nop
+''']
+expect.asm_error = "'missing' is declared .global but never defined"
+
+[[case]]
+name = "a hand-written bundle cannot wait for the linker"
+objects = ['''
+        c.j   elsewhere
+''']
+expect.asm_error = "c.j is finished by the linker, so it cannot go in a slot"
+
+[[case]]
+name = "more than one address and a constant"
+objects = ['''
+        .word ext * 2
+''']
+expect.asm_error = "'ext * 2' is more than the linker can finish: it adds one address and subtracts one"
+
+[[case]]
+name = "a check that depends on the linker"
+objects = ['''
+        .assert ext + 1, "no"
+''']
+expect.asm_error = "'ext + 1' depends on where the linker puts things"
+
+[[case]]
+name = "addresses the linker places do not compare"
+objects = ['''
+        .assert ext == 3, "no"
+''']
+expect.asm_error = "cannot compare an address the linker places in 'ext == 3'"
+
+[[case]]
+name = "an address in a tryte"
+objects = ['''
+        .tryte ext
+''']
+expect.asm_error = "'ext' is not known until the program is linked"
+
+[[case]]
+name = "addresses in two sections do not subtract"
+objects = ['''
+a:      nop
+        .section data
+b:      .word a - b
+        .equ  gap, b - a
+''']
+expect.asm_error = "'b - a' is not one address plus a constant"

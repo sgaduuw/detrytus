@@ -5,8 +5,12 @@
 //! Number forms: decimal (42), balanced ternary (0t+0-), hexadecimal
 //! (0x2a) and character literals ('a'). '.' is the current address.
 //! Values are i128, so nothing an assembler meets overflows.
+//!
+//! Assembling an object (docs/linker.md), some values are not known
+//! until the linker places sections and finds external symbols. Those
+//! are [`Linear`]: a constant plus whole multiples of named bases.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::pyrepr::repr;
 use crate::text::is_space;
@@ -27,6 +31,81 @@ impl ExprError {
             ExprError::Undefined(m) | ExprError::Other(m) => m,
         }
     }
+}
+
+/// A value the linker finishes: `constant` plus each base times its
+/// coefficient. A base is a section of the object being assembled,
+/// written `[name]`, or an external symbol by its name. A value with no
+/// terms is an ordinary constant.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Linear {
+    pub constant: Value,
+    /// (base, coefficient), sorted by base, no coefficient 0.
+    pub terms: Vec<(String, Value)>,
+}
+
+impl Linear {
+    pub fn constant(v: Value) -> Self {
+        Linear { constant: v, terms: Vec::new() }
+    }
+
+    /// v plus one of base.
+    pub fn based(v: Value, base: Option<&str>) -> Self {
+        let terms = base.map(|b| vec![(b.to_string(), 1)]).unwrap_or_default();
+        Linear { constant: v, terms }
+    }
+
+    pub fn as_constant(&self) -> Option<Value> {
+        self.terms.is_empty().then_some(self.constant)
+    }
+
+    /// self + k·other, or None on overflow.
+    pub fn add_scaled(&self, other: &Linear, k: Value) -> Option<Linear> {
+        let constant = self.constant.checked_add(other.constant.checked_mul(k)?)?;
+        let mut terms = self.terms.clone();
+        for (base, c) in &other.terms {
+            let c = c.checked_mul(k)?;
+            match terms.iter_mut().find(|(b, _)| b == base) {
+                Some(slot) => slot.1 = slot.1.checked_add(c)?,
+                None => terms.push((base.clone(), c)),
+            }
+        }
+        terms.retain(|(_, c)| *c != 0);
+        terms.sort();
+        Some(Linear { constant, terms })
+    }
+
+    fn scale(&self, k: Value) -> Option<Linear> {
+        Linear::default().add_scaled(self, k)
+    }
+
+    /// The bases added and subtracted, when the linker can do it: at most
+    /// one of each, each once.
+    pub fn split(&self) -> Option<(Option<&str>, Option<&str>)> {
+        let (mut plus, mut minus) = (None, None);
+        for (base, c) in &self.terms {
+            let slot = match c {
+                1 => &mut plus,
+                -1 => &mut minus,
+                _ => return None,
+            };
+            if slot.is_some() {
+                return None;
+            }
+            *slot = Some(base.as_str());
+        }
+        Some((plus, minus))
+    }
+}
+
+/// What assembling an object adds to the symbol table: which symbols
+/// lie in a section the linker places (their values are offsets from
+/// it), and which names the file defines, so that any other is
+/// external rather than not defined yet.
+#[derive(Debug, Default, Clone)]
+pub struct Relocatable {
+    pub bases: HashMap<String, String>,
+    pub defined: HashSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,7 +238,8 @@ struct Parser<'a> {
     toks: Vec<Token>,
     pos: usize,
     symbols: &'a Symbols,
-    here: Option<Value>,
+    reloc: Option<&'a Relocatable>,
+    here: Option<Linear>,
     /// Whether `defined(NAME)` may be used: only where every symbol is
     /// known, so its answer cannot depend on where it is asked.
     defined: bool,
@@ -185,7 +265,7 @@ impl Parser<'_> {
         ExprError::Other(format!("value too large in {}", repr(self.text)))
     }
 
-    fn parse(&mut self) -> Result<Value, ExprError> {
+    fn parse(&mut self) -> Result<Linear, ExprError> {
         if self.toks.is_empty() {
             return Err(ExprError::Other("empty expression".into()));
         }
@@ -196,9 +276,20 @@ impl Parser<'_> {
         Ok(v)
     }
 
+    /// The constant an operation needs: a value the linker still has to
+    /// finish cannot be multiplied by another, divided or compared.
+    fn known(&self, v: &Linear, what: &str) -> Result<Value, ExprError> {
+        v.as_constant().ok_or_else(|| {
+            ExprError::Other(format!(
+                "cannot {what} an address the linker places in {}",
+                repr(self.text)
+            ))
+        })
+    }
+
     /// One comparison at most, below every arithmetic operator: 1 when
     /// it holds, 0 when not.
-    fn comparison(&mut self) -> Result<Value, ExprError> {
+    fn comparison(&mut self) -> Result<Linear, ExprError> {
         let v = self.sum()?;
         let Some(Token::Cmp(cmp)) = self.toks.get(self.pos).cloned() else { return Ok(v) };
         self.take()?;
@@ -207,51 +298,60 @@ impl Parser<'_> {
             let message = format!("comparisons do not chain in {}", repr(self.text));
             return Err(ExprError::Other(message));
         }
+        // Two addresses in the same section compare by their distance.
+        let diff = v.add_scaled(&rhs, -1).ok_or_else(|| self.overflow())?;
+        let d = self.known(&diff, "compare")?;
         let holds = match cmp {
-            "==" => v == rhs,
-            "!=" => v != rhs,
-            "<" => v < rhs,
-            "<=" => v <= rhs,
-            ">" => v > rhs,
-            _ => v >= rhs,
+            "==" => d == 0,
+            "!=" => d != 0,
+            "<" => d < 0,
+            "<=" => d <= 0,
+            ">" => d > 0,
+            _ => d >= 0,
         };
-        Ok(holds as Value)
+        Ok(Linear::constant(holds as Value))
     }
 
-    fn sum(&mut self) -> Result<Value, ExprError> {
+    fn sum(&mut self) -> Result<Linear, ExprError> {
         let mut v = self.product()?;
         while let Some(op) = self.peek_op("+-") {
             self.take()?;
             let rhs = self.product()?;
-            let r = if op == '+' { v.checked_add(rhs) } else { v.checked_sub(rhs) };
-            v = r.ok_or_else(|| self.overflow())?;
+            let k = if op == '+' { 1 } else { -1 };
+            v = v.add_scaled(&rhs, k).ok_or_else(|| self.overflow())?;
         }
         Ok(v)
     }
 
-    fn product(&mut self) -> Result<Value, ExprError> {
+    fn product(&mut self) -> Result<Linear, ExprError> {
         let mut v = self.atom()?;
         while let Some(op) = self.peek_op("*/%") {
             self.take()?;
             let rhs = self.atom()?;
             if op == '*' {
-                v = v.checked_mul(rhs).ok_or_else(|| self.overflow())?;
+                v = match (v.as_constant(), rhs.as_constant()) {
+                    (Some(k), _) => rhs.scale(k),
+                    (_, Some(k)) => v.scale(k),
+                    _ => return Err(self.known(&rhs, "multiply").unwrap_err()),
+                }
+                .ok_or_else(|| self.overflow())?;
                 continue;
             }
-            if rhs == 0 {
+            let (a, b) = (self.known(&v, "divide")?, self.known(&rhs, "divide")?);
+            if b == 0 {
                 return Err(ExprError::Other(format!("division by zero in {}", repr(self.text))));
             }
-            let q = v / rhs; // Rust divides toward zero, as the Python helper does
-            v = if op == '/' { q } else { v - q * rhs };
+            let q = a / b; // Rust divides toward zero, as the Python helper does
+            v = Linear::constant(if op == '/' { q } else { a - q * b });
         }
         Ok(v)
     }
 
-    fn atom(&mut self) -> Result<Value, ExprError> {
+    fn atom(&mut self) -> Result<Linear, ExprError> {
         match self.take()? {
-            Token::Number(v) => Ok(v),
+            Token::Number(v) => Ok(Linear::constant(v)),
             Token::Name(name) if name == "defined" && self.peek_op("(").is_some() => {
-                self.defined_call()
+                self.defined_call().map(Linear::constant)
             }
             Token::Name(name) => self.symbol(&name),
             Token::Op('(') => {
@@ -264,7 +364,7 @@ impl Parser<'_> {
             }
             Token::Op(c) if c == '+' || c == '-' => {
                 let v = self.atom()?;
-                Ok(if c == '-' { -v } else { v })
+                if c == '-' { v.scale(-1).ok_or_else(|| self.overflow()) } else { Ok(v) }
             }
             Token::Op(c) => Err(ExprError::Other(format!(
                 "unexpected {} in {}",
@@ -294,29 +394,57 @@ impl Parser<'_> {
         Ok(self.symbols.contains_key(&name) as Value)
     }
 
-    fn symbol(&self, name: &str) -> Result<Value, ExprError> {
+    fn symbol(&self, name: &str) -> Result<Linear, ExprError> {
         if name == "." {
-            return self.here.ok_or_else(|| ExprError::Undefined("'.' has no address here".into()));
+            return self
+                .here
+                .clone()
+                .ok_or_else(|| ExprError::Undefined("'.' has no address here".into()));
         }
-        self.symbols
-            .get(name)
-            .copied()
-            .ok_or_else(|| ExprError::Undefined(format!("undefined symbol {}", repr(name))))
+        if let Some(&v) = self.symbols.get(name) {
+            let base = self.reloc.and_then(|r| r.bases.get(name));
+            return Ok(Linear::based(v, base.map(String::as_str)));
+        }
+        match self.reloc {
+            // A name the object does not define is the linker's to find.
+            Some(r) if !r.defined.contains(name) => Ok(Linear::based(0, Some(name))),
+            _ => Err(ExprError::Undefined(format!("undefined symbol {}", repr(name)))),
+        }
     }
 }
 
 /// The value of text, with '.' standing for here when it is known.
 pub fn evaluate(text: &str, symbols: &Symbols, here: Option<Value>) -> Result<Value, ExprError> {
+    let here = here.map(Linear::constant);
+    Ok(evaluate_linear(text, symbols, None, here)?.constant)
+}
+
+/// The value of text in an object being assembled: symbols in a section
+/// the linker places, and names the object does not define, give terms.
+/// With no `reloc`, the result is always a constant.
+pub fn evaluate_linear(
+    text: &str,
+    symbols: &Symbols,
+    reloc: Option<&Relocatable>,
+    here: Option<Linear>,
+) -> Result<Linear, ExprError> {
     let toks = tokens(text)?;
-    Parser { text, toks, pos: 0, symbols, here, defined: false }.parse()
+    Parser { text, toks, pos: 0, symbols, reloc, here, defined: false }.parse()
 }
 
 /// The value of an `.assert` condition: as `evaluate`, with every
 /// symbol known, so `defined(NAME)` may be asked. A check has no
 /// address of its own, so '.' is not defined in one.
-pub fn evaluate_check(text: &str, symbols: &Symbols) -> Result<Value, ExprError> {
+pub fn evaluate_check(
+    text: &str,
+    symbols: &Symbols,
+    reloc: Option<&Relocatable>,
+) -> Result<Value, ExprError> {
     let toks = tokens(text)?;
-    Parser { text, toks, pos: 0, symbols, here: None, defined: true }.parse()
+    let v = Parser { text, toks, pos: 0, symbols, reloc, here: None, defined: true }.parse()?;
+    v.as_constant().ok_or_else(|| {
+        ExprError::Other(format!("{} depends on where the linker puts things", repr(text)))
+    })
 }
 
 #[cfg(test)]
@@ -385,7 +513,7 @@ mod tests {
     #[test]
     fn defined_asks_whether_a_symbol_exists_but_only_in_a_check() {
         let symbols: Symbols = [("x".to_string(), 10)].into_iter().collect();
-        let check = |t: &str| evaluate_check(t, &symbols);
+        let check = |t: &str| evaluate_check(t, &symbols, None);
         assert_eq!(check("defined(x)"), Ok(1));
         assert_eq!(check("defined(y) == 0"), Ok(1));
         assert_eq!(check("defined(x) * x"), Ok(10));

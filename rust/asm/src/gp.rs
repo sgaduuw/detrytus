@@ -31,7 +31,9 @@ pub struct Reach {
 impl Reach {
     /// Refuse a symbol farther from gp than an I-format offset reaches.
     pub fn check(&self, ops: &Operands, here: Value) -> Result<(), OperandError> {
-        let distance = ops.value(&self.symbol, here)? - ops.value(&self.gp, here)?;
+        let distance = ops.linear(&self.symbol, here)?.add_scaled(&ops.linear(&self.gp, here)?, -1);
+        // A distance the linker finishes, it checks.
+        let Some(distance) = distance.and_then(|d| d.as_constant()) else { return Ok(()) };
         if distance.abs() > half(16) as Value {
             return fail(format!(
                 "{} is {distance} trytes from gp ({}), beyond the 16 trits an offset holds",

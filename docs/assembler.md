@@ -1,7 +1,9 @@
 # detrytus assembler
 
 `detrytus asm FILE` prints a listing, or with `-o OUT.dti` writes an
-image; `detrytus run FILE...` assembles and runs. The instruction set is in [`isa.md`](isa.md); this page covers the
+image; `detrytus run FILE...` assembles and runs. With `-c`, `asm`
+assembles an object for the linker instead ([`linker.md`](linker.md)).
+The instruction set is in [`isa.md`](isa.md); this page covers the
 source syntax.
 
 ## Lines
@@ -63,6 +65,7 @@ reset address.
 | `.assert E, "MESSAGE"` | stop with MESSAGE as the error if E is 0 |
 | `.compress` / `.nocompress` | turn automatic bundling on and off from here (below); off at the start |
 | `.gp E` / `.nogp` | in this section, from here: `gp` holds E, or nothing known (below) |
+| `.global NAME, ...` | in an object, make these names visible to other objects ([`linker.md`](linker.md)); ignored otherwise |
 
 `.assert` is checked once every symbol is known, so it may use labels
 defined after it. If assembly stops earlier, on a line that needs a
@@ -162,6 +165,9 @@ table rather than resolved to the wrong one.
 
 The format packs five trits into each byte; the layout is described at
 the top of `rust/core/src/image.rs`.
+
+Images share no symbols. For files that do, assemble them as objects
+and link them ([`linker.md`](linker.md)).
 
 ## Operand forms
 
