@@ -161,6 +161,9 @@ compressed table is judged against real code.
 
 `detrytus tc FILE.tc -o FILE.dti` compiles a program in Trice, the
 machine's first compiled language ([`docs/trice.md`](docs/trice.md)).
+`detrytus ll` translates the LLVM IR rustc writes, so `no_std` Rust
+programs run too, with binary integers carried on the ternary machine
+([`docs/rust.md`](docs/rust.md)).
 
 `detrytus asm -c FILE.s -o FILE.dto` assembles a file into an object,
 and `detrytus link` puts objects together into an image, so a program
@@ -184,6 +187,8 @@ Running `detrytus` with no arguments lists every option.
   calls functions.
 - [`docs/trice.md`](docs/trice.md): Trice, the C-shaped language that
   `detrytus tc` compiles.
+- [`docs/rust.md`](docs/rust.md): Rust programs, through rustc's LLVM IR
+  and `detrytus ll`.
 - [`CONTEXT.md`](CONTEXT.md): the decisions behind the design and why
   they were made.
 - [`docs/rust-plan.md`](docs/rust-plan.md): how the implementation
@@ -201,7 +206,7 @@ Running `detrytus` with no arguments lists every option.
 |------|-----|
 | `rust/core/` | the machine: trits, the instruction set, the hart, privilege, paging, the bus and devices, images; no dependencies |
 | `rust/asm/` | the assembler, disassembler and linker |
-| `rust/cli/` | the `detrytus` command: `asm`, `link`, `run`, `debug` and `tc` |
+| `rust/cli/` | the `detrytus` command: `asm`, `link`, `run`, `debug`, `tc` and `ll` |
 | `rust/conformance/` | runs the conformance suite on the assembler and core |
 | `conformance/` | the conformance suite, as data |
 | `docs/` | the specification and the tools' manuals |

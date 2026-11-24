@@ -15,8 +15,9 @@ system expects from a core. The repository holds:
 - **The ISA specification**, [`docs/isa.md`](docs/isa.md). It is the
   source of truth for what the machine does.
 - **The `detrytus` tools in Rust**: a core (`rust/core/`), an assembler
-  and linker (`rust/asm/`), the Trice compiler (`rust/tc/`, [`docs/trice.md`](docs/trice.md))
-  and a command line with `asm`, `link`, `run`, `debug` and `tc` (`rust/cli/`).
+  and linker (`rust/asm/`), the Trice compiler (`rust/tc/`, [`docs/trice.md`](docs/trice.md)),
+  which also translates rustc's LLVM IR ([`docs/rust.md`](docs/rust.md)), and a command
+  line with `asm`, `link`, `run`, `debug`, `tc` and `ll` (`rust/cli/`).
 - **The conformance suite** ([`conformance/`](conformance/README.md)),
   machine and assembler behaviour as data, and **examples**.
 
@@ -56,6 +57,7 @@ and hides a failure.
 | `docs/debugger.md` | the debugger's commands |
 | `docs/abi.md` | the ABI: data layout and the calling convention for compiled code |
 | `docs/trice.md` | the Trice language |
+| `docs/rust.md` | Rust programs: rustc's LLVM IR translated by `detrytus ll` |
 | `docs/rust-plan.md` | how the Rust tools replaced the Python ones (history) |
 | `rust/core/src/trits.rs` | balanced-ternary arithmetic on `i64` |
 | `rust/core/src/isa.rs` | the instruction set as data: opcodes, formats, fields, CSRs, decode and encode |
@@ -73,9 +75,9 @@ and hides a failure.
 | `rust/core/src/machine.rs` | the platform wired together, and the harts run in rounds |
 | `rust/core/tests/` | the spec sync test |
 | `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm`; `error`, `text` and `pyrepr` keep messages and splitting as the Python assembler had them; `object` (the object format) and `link` (the linker) |
-| `rust/tc/src/` | the Trice compiler: `lex`, `parse` (into `ast`), `codegen` (types are checked as code is made, on virtual registers), `alloc` (the back end: registers, redundancy, inlining, frames); `lib.rs` loads imports, reading `.equ` constants from imported assembly, whole or for one file on its own (`tc -c`) |
-| `rust/tc/tests/` | Trice programs compiled and run on the bare machine (`bare.s`), and refused ones |
-| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files, linking objects), `link.rs` (`link`), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `tc.rs` (`tc`), `debug/` (engine and shell) |
+| `rust/tc/src/` | the Trice compiler: `lex`, `parse` (into `ast`), `codegen` (types are checked as code is made, on virtual registers), `alloc` (the back end: registers, redundancy, inlining, frames); `lib.rs` loads imports, reading `.equ` constants from imported assembly, whole or for one file on its own (`tc -c`); `ll/` reads LLVM IR (`ir.rs`) and lowers it to the same back end (`lower.rs`) |
+| `rust/tc/tests/` | Trice programs compiled and run on the bare machine (`bare.s`), and refused ones; `ll/` holds Rust programs, their pruned IR (rebuild with `ll/regenerate.sh`) and a bare-machine runtime, which `ll.rs` translates and runs |
+| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files, linking objects), `link.rs` (`link`), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `tc.rs` (`tc`), `ll.rs` (`ll`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
 | `rust/cli/tests/pace.rs` | pacing the clock over idle time, as a live console does |
 | `rust/conformance/` | the conformance runner (tests only) |

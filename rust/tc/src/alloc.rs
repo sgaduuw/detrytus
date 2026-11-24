@@ -66,7 +66,8 @@ pub fn vreg(n: usize) -> &'static str {
 /// A function's body, as code generation leaves it.
 pub struct Func<'a> {
     pub name: &'a str,
-    pub returns: bool,
+    /// Words of result left in a0 (and a1) at the return: 0, 1 or 2.
+    pub results: usize,
     /// Frame words code generation gave to locals in memory.
     pub slots: i128,
     /// Parameters past the sixth, which the callee reads from `s0`.
@@ -171,6 +172,14 @@ fn effects(line: &Line) -> Effects {
                 e.targets.push(arg(0).to_string());
                 e.falls = false;
                 e.keep = true;
+            } else if op == "callr" {
+                // `callr reg, n`: a call through a register (a function
+                // pointer), with n arguments; it becomes `jalr ra, 0(reg)`.
+                let n: usize = arg(1).parse().unwrap_or(ARGS.len());
+                e.uses = ARGS[..n.min(ARGS.len())].iter().map(|r| r.to_string()).collect();
+                e.uses.extend(reg(arg(0)));
+                e.defs = clobbered();
+                e.keep = true;
             } else if op == "call" || op == "sys" {
                 let n: usize = args.last().and_then(|a| a.parse().ok()).unwrap_or(ARGS.len());
                 e.uses = ARGS[..n.min(ARGS.len())].iter().map(|r| r.to_string()).collect();
@@ -230,6 +239,7 @@ fn render(line: &Line) -> String {
         Line::Text(t) => t.clone(),
         Line::Label(l) => format!("{l}:"),
         Line::Raw(r) => r.clone(),
+        Line::Op { op, args } if op == "callr" => format!("        jalr  ra, 0({})", args[0]),
         Line::Op { op, args } => {
             // A call's argument count was for the allocator only.
             let args = if op == "call" || op == "sys" {
@@ -264,7 +274,7 @@ fn rename(line: &mut Line, from: &str, to: &str) {
 
 /// Liveness over the control flow graph: the registers live after
 /// each line.
-fn live_after(lines: &[Line], returns: bool) -> Vec<BTreeSet<String>> {
+fn live_after(lines: &[Line], returns: usize) -> Vec<BTreeSet<String>> {
     let fx: Vec<Effects> = lines.iter().map(effects).collect();
     // Blocks: a label starts one, a branch or jump ends one.
     let mut starts = vec![0];
@@ -315,8 +325,7 @@ fn live_after(lines: &[Line], returns: bool) -> Vec<BTreeSet<String>> {
             out
         })
         .collect();
-    let exit_live: BTreeSet<String> =
-        if returns { ["a0".to_string()].into() } else { BTreeSet::new() };
+    let exit_live: BTreeSet<String> = ARGS[..returns].iter().map(|r| r.to_string()).collect();
     let mut live_in = vec![BTreeSet::<String>::new(); blocks.len()];
     let mut live_out = vec![BTreeSet::<String>::new(); blocks.len()];
     loop {
@@ -359,7 +368,7 @@ fn live_after(lines: &[Line], returns: bool) -> Vec<BTreeSet<String>> {
 }
 
 /// Remove instructions whose results nothing reads, until none is left.
-fn dead_code(lines: &mut Vec<Line>, returns: bool) {
+fn dead_code(lines: &mut Vec<Line>, returns: usize) {
     loop {
         let after = live_after(lines, returns);
         let mut removed = false;
@@ -511,7 +520,7 @@ type Graph = (BTreeMap<String, BTreeSet<String>>, Vec<(String, String)>);
 
 /// The interference graph (each virtual register and the registers live
 /// where it is written, both ways) and the copies between registers.
-fn graph(lines: &[Line], returns: bool) -> Graph {
+fn graph(lines: &[Line], returns: usize) -> Graph {
     let after = live_after(lines, returns);
     let mut adj: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut moves: Vec<(String, String)> = Vec::new();
@@ -547,7 +556,7 @@ fn graph(lines: &[Line], returns: bool) -> Graph {
 /// when the merged one still has fewer busy neighbours than there are
 /// registers (Briggs), so merging never forces a spill; a virtual
 /// register merges into a fixed one whenever they do not interfere.
-fn coalesce(lines: &mut [Line], returns: bool) {
+fn coalesce(lines: &mut [Line], returns: usize) {
     let k = colours().len();
     loop {
         let (adj, moves) = graph(lines, returns);
@@ -590,7 +599,7 @@ fn coalesce(lines: &mut [Line], returns: bool) {
 
 /// Colour the interference graph: a register for every virtual one, or
 /// the virtual registers that must be spilled.
-fn colour(lines: &[Line], returns: bool) -> Result<BTreeMap<String, String>, Vec<String>> {
+fn colour(lines: &[Line], returns: usize) -> Result<BTreeMap<String, String>, Vec<String>> {
     let (adj, moves) = graph(lines, returns);
     let palette = colours();
     let k = palette.len();
@@ -871,9 +880,9 @@ pub fn finish(f: Func) -> Result<Vec<String>, String> {
     let mut spills: i128 = 0;
     let mut fresh = 0;
     let colours = loop {
-        dead_code(&mut lines, f.returns);
-        coalesce(&mut lines, f.returns);
-        match colour(&lines, f.returns) {
+        dead_code(&mut lines, f.results);
+        coalesce(&mut lines, f.results);
+        match colour(&lines, f.results) {
             Ok(c) => break c,
             Err(vs) => {
                 if spills > 1000 {

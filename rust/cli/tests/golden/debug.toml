@@ -2504,6 +2504,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
+       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
 detrytus: debug reads its commands from stdin; give --input a file
 '''
 
