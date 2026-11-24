@@ -337,18 +337,25 @@ compiles each that way, so a program and its library build as
 detrytus link bin/echo.tc lib/io.tc -o echo.dti
 ```
 
-Compiled on its own, a file differs from a whole program in three ways:
+Compiled on its own, a file differs from a whole program in four ways:
 
 - **What it imports from other `.tc` files is only declared.** Their
   functions, globals, constants and structs can be used, but their code
   and data belong to their own objects. Their own imports count only
   for their constants: an assembly file is included only by the file
   that imports it directly.
-- **Every function and global it defines is `.global`**, so other
-  objects can use it, and each is in a part of its own (`.part`,
-  linker.md), so the linker leaves out the ones no kept code uses. A
-  small function is still copied into its callers in the file, and kept
-  for the others.
+- **A library exports everything; a program only `main`.** A file
+  that defines no `main` is a library: every function and global it
+  defines is `.global`, so other objects can use it, and each is in a
+  part of its own (`.part`, linker.md), so the linker leaves out the
+  ones no kept code uses. A small function is still copied into its
+  callers in the file, and kept for the others. A file that defines
+  `main` is a program, which nothing but its start code calls into, so
+  only `main` is `.global` and the rest is compiled as in a whole
+  program: what nothing calls is left out by the compiler, and calls
+  within the file are finished by the assembler.
+- **The assembly it imports is a part of its own**, so a library's
+  assembly helpers are left out of programs that do not use them.
 - **Its code is in the section the assembly puts it in**: after a start
   file's `.section`, where that leaves off, and otherwise in `text`,
   which the linker places after the sections before it. On trylobite,
@@ -358,5 +365,7 @@ Compiled on its own, a file differs from a whole program in three ways:
 A global the file reaches through `gp` (section 10) is one instruction
 whichever object holds it, but the linker finishes its offset, so that
 instruction is never put in a compressed bundle (linker.md). So are
-calls between functions, which are in different parts. Linked programs
-are larger than whole ones for that reason.
+calls into a library and calls between a library's functions, which
+are in different parts, and a library's small functions are not copied
+into the program. Linked programs are a little larger than whole ones
+for those reasons.

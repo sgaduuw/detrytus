@@ -1262,3 +1262,25 @@ as the next step after the linker; these choices were proposed with it:
   within a file now cross parts, so they are relocated and stay out of
   bundles; relaxation would win them back. Linked `echo` drops from 339
   to 189 trytes, against 154 compiled whole.
+
+### 2026-11-24 · Linked Trice programs close the gap
+
+Linked trylobite programs were 6 to 23% larger than whole ones. The
+owner asked for linker relaxation next; measuring first showed most of
+the gap had cheaper causes, fixed here before deciding on relaxation:
+
+- **Imported assembly is a part.** A library's assembly (trylobite's
+  `lib/fs.s`) sat before its first `.part`, so every program kept it.
+  Now `tc -c` starts a part before each `.include`; placed sections,
+  such as a program's start code, are kept as before.
+- **A program is compiled as a whole program**, apart from its imports.
+  A file defining `main` is called into only by its start code, so it
+  exports only `main` (start code may be its own object), drops what
+  nothing calls and inlines single callers itself, and its calls are
+  ordinary assembled branches that bundling can take.
+- With trylobite giving `lib/io.tc` the `.gp` its programs have, linked
+  echo is 153 trytes against 154 whole and upper 366 against 375; wc
+  957 against 901, grep 1,713 against 1,663 and head 891 against 851.
+  What is left is calls into the library, which the linker finishes and
+  so are not bundled, and library functions not copied into callers.
+

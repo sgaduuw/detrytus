@@ -66,9 +66,10 @@ putc:   ...                     # kept if some kept code calls putc
 puts:   ...                     # left out otherwise
 ```
 
-Trice puts each function and each global in a part of its own when it
-compiles a file alone ([`trice.md`](trice.md), section 13), so a
-program linked with a library gets only the library functions it calls.
+Trice puts each function and each global of a library in a part of its
+own, and each assembly file it imports ([`trice.md`](trice.md), section
+13), so a program linked with a library gets only the library code it
+calls.
 
 ### What the linker can finish
 

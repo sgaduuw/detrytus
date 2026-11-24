@@ -1,0 +1,7 @@
+// A program compiled on its own: only main is global, and plus, which
+// nothing else can call, is compiled as in a whole program.
+import "sum.tc";
+
+int plus(int a, int b) { return a + b; }
+
+int main() { return plus(twice(10), 22); }
