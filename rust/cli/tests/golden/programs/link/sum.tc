@@ -1,0 +1,3 @@
+// A Trice file compiled on its own: every function it defines is global.
+int twice(int x) { return x + x; }
+int thrice(int x) { return x + x + x; }

@@ -78,9 +78,24 @@ pub fn load_one(path: &str) -> Result<Loaded, Fail> {
     }
 }
 
-/// A file as an object: an object file read, or a source assembled as
-/// one, with its listing.
+/// A file as an object: an object file read, or a source assembled (or
+/// a Trice file compiled, `tc -c`) as one, with its listing.
 pub fn load_object(path: &str) -> Result<(Object, Option<Image>), Fail> {
+    if path.ends_with(".tc") {
+        // Compiled as if to the .s beside it, so its .include paths and
+        // messages read the same.
+        let file = std::path::Path::new(path);
+        let dir = file.parent().filter(|d| !d.as_os_str().is_empty());
+        let dir = dir.unwrap_or(std::path::Path::new("."));
+        let out = detrytus_tc::compile_unit(file, dir)
+            .map_err(|e| Fail::new(e.to_string(), BAD_INPUT))?;
+        for w in &out.warnings {
+            eprintln!("{w}");
+        }
+        let shown = format!("{}.s", path.trim_end_matches(".tc"));
+        let (o, image) = assemble_object(&out.assembly, Some(&shown)).map_err(asm_error)?;
+        return Ok((o, Some(image)));
+    }
     match read(path)? {
         Contents::Image(_) => Err(Fail::new(
             format!("{path}: an image cannot be linked, only objects and sources"),

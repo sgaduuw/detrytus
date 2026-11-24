@@ -1,5 +1,6 @@
 # Objects and the linker (docs/linker.md): an object listed, written,
-# linked into an image or a map, run and debugged, and the errors.
+# linked into an image or a map, run and debugged, Trice files compiled
+# on their own (tc -c), and the errors.
 
 [[case]]
 args = ["asm", "-c", "{here}/programs/link/main.s"]
@@ -110,4 +111,69 @@ status = 65
 stderr = """
 detrytus: {tmp}/lib.dto: an object: link it into an image with detrytus link
 """
+stdout = ""
+
+[[case]]
+args = ["tc", "-c", "{here}/programs/link/sum.tc"]
+name = "tc -c compiles one file and makes its names global"
+status = 0
+stderr = ""
+stdout = """
+# Compiled by detrytus tc from {here}/programs/link/sum.tc: docs/trice.md, docs/abi.md.
+        .global twice, thrice
+        .compress
+
+# int twice(...), {here}/programs/link/sum.tc:2
+twice:
+# {here}/programs/link/sum.tc:2
+        add   a0, a0, a0
+        ret
+
+# int thrice(...), {here}/programs/link/sum.tc:3
+thrice:
+# {here}/programs/link/sum.tc:3
+        add   t0, a0, a0
+        add   a0, a0, t0
+        ret
+        .nocompress
+"""
+
+[[case]]
+args = ["tc", "-c", "{here}/programs/link/main.tc"]
+name = "an imported Trice file is only declared"
+status = 0
+stderr = ""
+stdout = """
+# Compiled by detrytus tc from {here}/programs/link/main.tc: docs/trice.md, docs/abi.md.
+        .global main
+        .compress
+
+# int main(...), {here}/programs/link/main.tc:4
+main:
+        addi  sp, sp, -3
+        sw    ra, 0(sp)
+# {here}/programs/link/main.tc:4
+        li    a0, 21
+        call  twice
+        lw    ra, 0(sp)
+        addi  sp, sp, 3
+        ret
+        .nocompress
+"""
+
+[[case]]
+args = ["run", "{tmp}/p.dti"]
+name = "link compiles Trice files on their own"
+setup = [["link", "{here}/programs/link/start.s", "{here}/programs/link/main.tc", "{here}/programs/link/sum.tc", "-o", "{tmp}/p.dti"]]
+status = 42
+stderr = ""
+stdout = ""
+
+[[case]]
+args = ["tc", "-c", "{here}/programs/link/sum.tc", "-o", "{tmp}/sum.dto"]
+file = "{tmp}/sum.dto"
+file_hex = "6465747279747573206f626a65637420310a73656374696f6e2074657874203120380a646174612074657874202d3120363932352036383133202d39373220383236332039203020363932352036383637202d3937320a73796d626f6c20676c6f62616c206c6162656c207477696365203020696e20746578740a73796d626f6c20676c6f62616c206c6162656c20746872696365203320696e20746578740a"
+name = "tc -c writes an object"
+status = 0
+stderr = ""
 stdout = ""

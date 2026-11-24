@@ -15,6 +15,8 @@ detrytus run prog.dti
 
 `link` takes sources as well as objects, assembling each as an object,
 so `detrytus link main.s lib.s -o prog.dti` does the same in one step.
+It compiles Trice files (`.tc`) each on its own as well, as `detrytus tc
+-c` does ([`trice.md`](trice.md), section 13).
 `run` and `debug` link the objects among their files, then load the
 result with the rest as usual. Without `-o`, or with `--map`, `link`
 prints where each object's part of each section went and the address

@@ -1227,3 +1227,12 @@ proposed with it:
   linked programs to measure.
 - **Undefined names are external**, as in other assemblers, so a typo
   surfaces at link time, at the line that used it.
+- **Trice compiles a file on its own** (`tc -c`, trice.md 13) by
+  treating what it imports from other `.tc` files as declarations, and
+  making everything it defines global. Nothing is dropped as unused,
+  since another object may call it. Imported assembly is included only
+  by the file that imports it, so start code lands in the program's
+  object alone. trylobite's `echo`, linked from `bin/echo.tc` and
+  `lib/io.tc`, runs unchanged; it is 339 trytes against 154 compiled
+  whole, from the library functions it does not use and the
+  instructions the linker finishes, which stay out of bundles.

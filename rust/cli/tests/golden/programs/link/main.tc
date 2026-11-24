@@ -1,0 +1,4 @@
+// Uses sum.tc, compiled in an object of its own.
+import "sum.tc";
+
+int main() { return twice(21); }

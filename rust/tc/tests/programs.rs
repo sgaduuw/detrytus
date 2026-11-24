@@ -570,3 +570,105 @@ fn reading_a_variable_waits_for_earlier_arguments() {
         }";
     assert_eq!(exit(src), 102 * 1000 + 115);
 }
+
+/// A library in its own file, for compiling separately: a struct, a
+/// constant, a global with an initialiser, and functions, one of which
+/// nothing in it calls.
+const LIBRARY: &str = "
+    import \"bare.s\";
+    extern void putc(int c);
+    struct pair { int a; tryte b; };
+    const int SCALE = 10;
+    int total = 5;
+    struct pair last;
+    void add(int n) { total = total + n * SCALE; last.a = n; }
+    void say(tryte *s) { while (s[0] != 0) { putc(s[0]); s = s + 1; } }
+    int unused(int x) { return x + 1; }
+";
+
+/// The program that uses it: the library's declarations come from
+/// importing it.
+const USER: &str = "
+    int main() {
+        add(3);
+        add(4);
+        say(\"linked\\n\");
+        return total + last.a;
+    }
+";
+
+/// Write the library beside a copy of the start code, and the program
+/// importing both; the program's path.
+fn write_pair(start: &str) -> PathBuf {
+    let main = write_with(USER, start);
+    let dir = main.parent().unwrap();
+    let bare = format!("{}/tests/{start}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(bare, dir.join("bare.s")).unwrap();
+    std::fs::write(dir.join("lib.tc"), LIBRARY.replace("import \"bare.s\";", "")).unwrap();
+    let text = std::fs::read_to_string(&main).unwrap();
+    std::fs::write(&main, text.replace("extern void putc", "import \"lib.tc\";\nextern void putc"))
+        .unwrap();
+    main
+}
+
+/// Compile the program and its library each on its own, link them and
+/// run the result: its exit code and console output.
+fn link_run(start: &str) -> (i64, String) {
+    let main = write_pair(start);
+    let dir = main.parent().unwrap();
+    let mut objects = Vec::new();
+    for path in [main.clone(), dir.join("lib.tc")] {
+        let out = detrytus_tc::compile_unit(&path, dir)
+            .unwrap_or_else(|e| panic!("does not compile: {e}"));
+        let shown = path.with_extension("s").display().to_string();
+        let (object, _) = detrytus_asm::assemble_object(&out.assembly, Some(&shown))
+            .unwrap_or_else(|e| panic!("does not assemble: {e}\n{}", out.assembly));
+        objects.push((shown, object));
+    }
+    let linked = detrytus_asm::link::link(&objects).unwrap_or_else(|e| panic!("{e}"));
+    let mut machine = Machine::with_harts(10, 1, 1);
+    for (addr, tryte) in linked.image.trytes {
+        machine.bus.poke(addr, tryte);
+    }
+    match machine.run(2_000_000) {
+        Outcome::Exit { code, .. } => (code, machine.bus.console.text()),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn files_compiled_separately_link_into_the_same_program() {
+    let whole = {
+        let main = write_pair("bare.s");
+        let out = detrytus_tc::compile(&main, main.parent().unwrap()).unwrap();
+        let shown = main.with_extension("s").display().to_string();
+        let image = detrytus_asm::assemble(&out.assembly, Some(&shown)).unwrap();
+        let mut machine = Machine::with_harts(10, 1, 1);
+        for (addr, tryte) in image.trytes {
+            machine.bus.poke(addr, tryte);
+        }
+        match machine.run(2_000_000) {
+            Outcome::Exit { code, .. } => (code, machine.bus.console.text()),
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(whole, (5 + 30 + 40 + 4, "linked\n".to_string()));
+    assert_eq!(link_run("bare.s"), whole);
+    // With a global pointer, the library's globals are reached from gp
+    // across objects.
+    assert_eq!(link_run("bare_gp.s"), whole);
+}
+
+#[test]
+fn a_file_compiled_on_its_own_exports_everything_it_defines() {
+    let main = write_pair("bare.s");
+    let lib = main.parent().unwrap().join("lib.tc");
+    let out = detrytus_tc::compile_unit(&lib, main.parent().unwrap()).unwrap();
+    // Nothing here calls unused, but another file may.
+    assert!(out.assembly.contains(".global total, last, add, say, unused"), "{}", out.assembly);
+    assert!(out.assembly.contains("unused:"));
+    // The program declares what it imports, and defines none of it.
+    let out = detrytus_tc::compile_unit(&main, main.parent().unwrap()).unwrap();
+    assert!(out.assembly.contains(".global main\n"), "{}", out.assembly);
+    assert!(!out.assembly.contains("add:") && !out.assembly.contains("total:"));
+}

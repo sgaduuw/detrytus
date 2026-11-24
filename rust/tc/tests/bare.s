@@ -6,6 +6,9 @@
         .equ  POWER_OFF, -39366
         .equ  CONSOLE_OUT, -19683
 
+        # Reset code gets a section of its own, so that code linked in
+        # from other objects (in text) follows program, in RAM.
+        .section reset, 0
         li    sp, 4 * 19683
         j     _start
 
@@ -14,7 +17,9 @@ _start: call  main
         li    t0, POWER_OFF
         sw    a0, 0(t0)
 
-# putc(int c): print code point c on the console.
+# putc(int c): print code point c on the console. Global, for programs
+# linked from objects (docs/linker.md).
+        .global putc
 putc:   li    t0, CONSOLE_OUT
         sw    a0, 0(t0)
         ret

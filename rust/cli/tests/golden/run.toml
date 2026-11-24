@@ -792,7 +792,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --harts takes 1 to 729
 '''
 
@@ -810,7 +810,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: hart 0 cannot be removed
 '''
 
@@ -828,7 +828,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --plug needs TIME:HART
 '''
 
@@ -908,7 +908,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: stdin can be a FILE or the --input, not both
 '''
 
@@ -926,7 +926,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --input needs a file
 '''
 
@@ -972,7 +972,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --disk-blocks needs --disk
 '''
 
@@ -990,7 +990,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --disk-blocks takes 1 or more
 '''
 
@@ -1118,6 +1118,6 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
-       detrytus tc FILE [-o FILE]
+       detrytus tc [-c] FILE [-o FILE]
 detrytus: --input and --live both give the console its input
 """
