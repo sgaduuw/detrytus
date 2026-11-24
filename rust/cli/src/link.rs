@@ -44,7 +44,14 @@ pub(crate) fn cmd_link(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
         }
         let _ = writeln!(stdout);
         for p in &s.parts {
-            let _ = writeln!(stdout, "  {:>12} .. {:<12}  {}", p.start, p.end, p.object);
+            let label = p.label.as_deref().map(|l| format!(" {l}")).unwrap_or_default();
+            let _ = writeln!(stdout, "  {:>12} .. {:<12}  {}{label}", p.start, p.end, p.object);
+        }
+    }
+    if !linked.dropped.is_empty() {
+        let _ = writeln!(stdout, "left out, unused");
+        for (object, name) in &linked.dropped {
+            let _ = writeln!(stdout, "  {object} {name}");
         }
     }
     let _ = writeln!(stdout, "globals");

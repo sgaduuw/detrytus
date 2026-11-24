@@ -143,6 +143,8 @@ struct Objects {
     defined: Vec<String>,
     /// The `.global` names, with the statement that declared each.
     globals: Vec<(String, usize)>,
+    /// Each section's part being assembled, after a `.part`: `NAME:K`.
+    parts: HashMap<String, String>,
 }
 
 impl Objects {
@@ -251,6 +253,13 @@ impl Assembler {
                     }
                 }
             }
+            ".part" => {
+                stmts[i].kind = Kind::None;
+                expect::<0>(&stmts[i])?;
+                if self.object.is_some() {
+                    self.new_part(stmts)?;
+                }
+            }
             ".org" => {
                 stmts[i].kind = Kind::None;
                 let s = &stmts[i];
@@ -346,12 +355,35 @@ impl Assembler {
 
     /// Switch sections. A section is placed once, on first use, and
     /// resumes where it left off after that.
+    /// `.part` in an object: the current section goes on in a new part,
+    /// which the linker places on its own and leaves out if nothing uses
+    /// it (docs/linker.md).
+    fn new_part(&mut self, stmts: &[Statement]) -> PassResult<()> {
+        let o = self.object.as_mut().expect("assembling an object");
+        let section = self.section.split(':').next().unwrap_or_default().to_string();
+        let count = o.order.iter().filter(|p| p.split(':').next() == Some(&section)).count();
+        let part = format!("{section}:{}", count + 1);
+        o.float(&part);
+        o.parts.insert(section, part.clone());
+        // Labels written before it name the end of the part left.
+        self.bind(stmts, self.loc)?;
+        self.sections.insert(self.section.clone(), (self.loc, self.shift));
+        (self.section, self.loc, self.shift) = (part, -1, 0);
+        Ok(())
+    }
+
     fn lay_section(&mut self, stmts: &[Statement], i: usize) -> PassResult<()> {
         let s = &stmts[i];
         if !(1..=3).contains(&s.operands.len()) {
             return Err(s.error(".section takes NAME, or NAME, LOAD[, RUN]").into());
         }
-        let name = crate::text::strip(&s.operands[0]).to_string();
+        let mut name = crate::text::strip(&s.operands[0]).to_string();
+        // A section resumes in its latest part.
+        if let Some(part) = self.object.as_ref().and_then(|o| o.parts.get(&name))
+            && s.operands.len() == 1
+        {
+            name = part.clone();
+        }
         if name == self.section && s.operands.len() == 1 {
             return Ok(());
         }

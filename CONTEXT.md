@@ -1236,3 +1236,29 @@ proposed with it:
   `lib/io.tc`, runs unchanged; it is 339 trytes against 154 compiled
   whole, from the library functions it does not use and the
   instructions the linker finishes, which stay out of bundles.
+
+### 2026-11-24 · Unused code left out at link time
+
+A Rust backend will emit large libraries of which a program uses
+little, so the linker now leaves out what nothing uses, as
+`--gc-sections` does elsewhere (`docs/linker.md`). The owner chose it
+as the next step after the linker; these choices were proposed with it:
+
+- **A part, not a section per function.** `.part` starts an anonymous
+  piece of the current section, written in the object as `text:2` and
+  so on, rather than asking each function for a uniquely named section.
+  Placement is unchanged: a part is one more contribution to its
+  section, in source order.
+- **What is before the first `.part` is a root**, along with every
+  section given an address. Start code needs no marking and plain
+  assembly objects behave as before; only code that opts in can be
+  dropped. There is no entry-symbol option, matching the rule that
+  layout lives in sources.
+- **Reachability follows relocations**: a part's own base, or a global
+  name to the part that defines it. A part reached only through a
+  computed address it never names would be dropped, as with other
+  linkers; nothing in detrytus or trylobite does that.
+- **Trice parts every function and global** under `tc -c`. Calls
+  within a file now cross parts, so they are relocated and stay out of
+  bundles; relaxation would win them back. Linked `echo` drops from 339
+  to 189 trytes, against 154 compiled whole.
