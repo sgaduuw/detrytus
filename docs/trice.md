@@ -345,9 +345,10 @@ Compiled on its own, a file differs from a whole program in three ways:
   for their constants: an assembly file is included only by the file
   that imports it directly.
 - **Every function and global it defines is `.global`**, so other
-  objects can use it, and none is left out for being unused, since
-  another file may call it. A small function is still copied into its
-  callers in the file, and kept for the others.
+  objects can use it, and each is in a part of its own (`.part`,
+  linker.md), so the linker leaves out the ones no kept code uses. A
+  small function is still copied into its callers in the file, and kept
+  for the others.
 - **Its code is in the section the assembly puts it in**: after a start
   file's `.section`, where that leaves off, and otherwise in `text`,
   which the linker places after the sections before it. On trylobite,
@@ -356,6 +357,6 @@ Compiled on its own, a file differs from a whole program in three ways:
 
 A global the file reaches through `gp` (section 10) is one instruction
 whichever object holds it, but the linker finishes its offset, so that
-instruction is never put in a compressed bundle (linker.md). Linked
-programs are larger than whole ones for that reason, and because
-nothing unused is left out of a library.
+instruction is never put in a compressed bundle (linker.md). So are
+calls between functions, which are in different parts. Linked programs
+are larger than whole ones for that reason.

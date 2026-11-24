@@ -7,6 +7,10 @@
 //! and the first one starts so that its first word is centred on 0, as
 //! the assembler starts. Then every global symbol has its address, and
 //! each relocation is written into the word it names.
+//!
+//! A part made by `.part` is left out when nothing kept uses it: every
+//! other part is kept, and so is any part a kept part's relocations
+//! name, directly or through a global symbol.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -21,6 +25,8 @@ use crate::object::{Object, Reloc, RelocKind};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Part {
     pub object: String,
+    /// The first name defined in it, if any.
+    pub label: Option<String>,
     /// Its base: where its addresses count from (0 for the part its
     /// source placed, whose addresses are already where it runs).
     pub base: Value,
@@ -45,6 +51,54 @@ pub struct Linked {
     pub sections: Vec<Placed>,
     /// The global symbols, by name, with the object defining each.
     pub globals: BTreeMap<String, (Value, String)>,
+    /// The parts left out because nothing uses them: (object, the first
+    /// name defined in the part, or the part's own name).
+    pub dropped: Vec<(String, String)>,
+}
+
+/// The section a part belongs to: `text:3` is part of `text`.
+pub fn section_of(part: &str) -> &str {
+    part.split(':').next().unwrap_or(part)
+}
+
+/// The parts to link, by (object, index in its sections): every part
+/// not made by `.part`, and whatever kept parts use.
+fn used_parts(objects: &[(String, Object)]) -> HashSet<(usize, usize)> {
+    let mut defined: HashMap<&str, (usize, usize)> = HashMap::new();
+    for (k, (_, o)) in objects.iter().enumerate() {
+        for sym in o.symbols.iter().filter(|s| s.global) {
+            let part =
+                sym.section.as_deref().and_then(|p| o.sections.iter().position(|s| s.name == p));
+            if let Some(j) = part {
+                defined.entry(&sym.name).or_insert((k, j));
+            }
+        }
+    }
+    let mut work: Vec<(usize, usize)> = Vec::new();
+    for (k, (_, o)) in objects.iter().enumerate() {
+        for (j, s) in o.sections.iter().enumerate() {
+            if !s.name.contains(':') {
+                work.push((k, j));
+            }
+        }
+    }
+    let mut kept = HashSet::new();
+    while let Some((k, j)) = work.pop() {
+        if !kept.insert((k, j)) {
+            continue;
+        }
+        let o = &objects[k].1;
+        for r in &o.sections[j].relocs {
+            for base in [&r.plus, &r.minus].into_iter().flatten() {
+                let to = match base.strip_prefix('[').and_then(|b| b.strip_suffix(']')) {
+                    Some(sec) => o.sections.iter().position(|s| s.name == sec).map(|j| (k, j)),
+                    None => defined.get(base.as_str()).copied(),
+                };
+                work.extend(to);
+            }
+        }
+    }
+    kept
 }
 
 /// The first multiple of unit at which a word can be centred without
@@ -56,13 +110,39 @@ fn next_centre(loc: Value, unit: Value) -> Value {
 /// Link objects, each with the name its messages use.
 pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
     let mut linked = Linked::default();
-    // Where each object's sections went: (object, section) -> (base, shift).
+    let kept = used_parts(objects);
+    // The first name defined in each part, for the map.
+    let label = |k: usize, part: &str| -> Option<String> {
+        let o = &objects[k].1;
+        o.symbols
+            .iter()
+            .filter(|s| s.section.as_deref() == Some(part))
+            .min_by_key(|s| s.value)
+            .map(|s| s.name.clone())
+    };
+    for (k, (shown, o)) in objects.iter().enumerate() {
+        for (j, s) in o.sections.iter().enumerate() {
+            if !kept.contains(&(k, j)) {
+                let name = label(k, &s.name).unwrap_or_else(|| s.name.clone());
+                linked.dropped.push((shown.clone(), name));
+            }
+        }
+    }
+    let is_kept = |k: usize, part: &str| {
+        objects[k]
+            .1
+            .sections
+            .iter()
+            .position(|s| s.name == part)
+            .is_some_and(|j| kept.contains(&(k, j)))
+    };
+    // Where each object's parts went: (object, part) -> (base, shift).
     let mut bases: HashMap<(usize, &str), (Value, Value)> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
-    for (_, o) in objects {
-        for s in &o.sections {
-            if !order.contains(&s.name.as_str()) {
-                order.push(&s.name);
+    for (k, (_, o)) in objects.iter().enumerate() {
+        for s in o.sections.iter().filter(|s| is_kept(k, &s.name)) {
+            if !order.contains(&section_of(&s.name)) {
+                order.push(section_of(&s.name));
             }
         }
     }
@@ -72,7 +152,10 @@ pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
             .iter()
             .enumerate()
             .flat_map(|(k, (_, o))| {
-                o.sections.iter().filter(|s| s.name == name).map(move |s| (k, s))
+                o.sections
+                    .iter()
+                    .filter(move |s| section_of(&s.name) == name && is_kept(k, &s.name))
+                    .map(move |s| (k, s))
             })
             .collect();
         let placed: Vec<_> = parts.iter().filter(|(_, s)| s.placed.is_some()).collect();
@@ -86,15 +169,22 @@ pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
         if let Some(&&(k, s)) = placed.first() {
             out.shift = s.placed.unwrap_or(0);
             let start = s.trytes.keys().next().map_or(s.end, |&a| a as Value);
-            bases.insert((k, name), (0, out.shift));
-            out.parts.push(Part { object: objects[k].0.clone(), base: 0, start, end: s.end });
+            bases.insert((k, &s.name), (0, out.shift));
+            let label = label(k, &s.name);
+            let object = objects[k].0.clone();
+            out.parts.push(Part { object, label, base: 0, start, end: s.end });
             cursor = s.end;
         }
         for &(k, s) in parts.iter().filter(|(_, s)| s.placed.is_none()) {
             let base = next_centre(cursor, pow3(s.align) as Value);
-            bases.insert((k, name), (base, out.shift));
-            let part =
-                Part { object: objects[k].0.clone(), base, start: base - 1, end: base + s.end };
+            bases.insert((k, &s.name), (base, out.shift));
+            let part = Part {
+                object: objects[k].0.clone(),
+                label: label(k, &s.name),
+                base,
+                start: base - 1,
+                end: base + s.end,
+            };
             cursor = part.end;
             out.parts.push(part);
         }
@@ -104,6 +194,9 @@ pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
     // Global symbols.
     for (k, (shown, o)) in objects.iter().enumerate() {
         for sym in o.symbols.iter().filter(|s| s.global) {
+            if sym.section.as_deref().is_some_and(|p| !is_kept(k, p)) {
+                continue;
+            }
             let value = sym.value + section_base(&bases, k, sym.section.as_deref(), shown)?;
             if let Some((_, other)) = linked.globals.get(&sym.name) {
                 return Err(format!("symbol {} is defined in both {other} and {shown}", sym.name));
@@ -115,7 +208,7 @@ pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
     // Trytes, at their load addresses.
     let image = &mut linked.image;
     for (k, (shown, o)) in objects.iter().enumerate() {
-        for s in &o.sections {
+        for s in o.sections.iter().filter(|s| is_kept(k, &s.name)) {
             let (base, shift) = bases[&(k, s.name.as_str())];
             for (&a, &t) in &s.trytes {
                 let at = base + a as Value + shift;
@@ -132,7 +225,7 @@ pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
 
     // Relocations.
     for (k, (shown, o)) in objects.iter().enumerate() {
-        for s in &o.sections {
+        for s in o.sections.iter().filter(|s| is_kept(k, &s.name)) {
             let (base, shift) = bases[&(k, s.name.as_str())];
             for r in &s.relocs {
                 let resolve = |b: &Option<String>| -> Result<Value, String> {
@@ -158,6 +251,9 @@ pub fn link(objects: &[(String, Object)]) -> Result<Linked, String> {
     let mut ambiguous: HashSet<&str> = HashSet::new();
     for (k, (shown, o)) in objects.iter().enumerate() {
         for sym in &o.symbols {
+            if sym.section.as_deref().is_some_and(|p| !is_kept(k, p)) {
+                continue;
+            }
             if !order.iter().any(|(n, _)| *n == sym.name) {
                 order.push((&sym.name, sym.label));
             }

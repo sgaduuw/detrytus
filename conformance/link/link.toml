@@ -164,6 +164,90 @@ start:  li    a0, 4
 '''
 expect.exit_code = 4
 
+[[case]]
+name = "a part nothing uses is left out"
+# Between g and f lies a part nothing refers to. f - g is the size of
+# g's part, 3 trytes, only because the linker leaves that part out.
+objects = [
+'''
+        call  g
+        call  f
+        li    a0, f - g
+        li    t6, -39366
+        sw    a0, 0(t6)
+''',
+'''
+        .part
+        .global g
+g:      ret
+        .part
+unused: nop
+        nop
+        nop
+        .part
+        .global f
+f:      ret
+''',
+]
+expect.exit_code = 3
+
+[[case]]
+name = "a part used only within its object is kept"
+# helper is local, so only f's jump keeps its part.
+objects = [
+'''
+        call  f
+        li    t6, -39366
+        sw    a0, 0(t6)
+''',
+'''
+        .part
+        .global f
+f:      j     helper
+        .part
+dead:   li    a0, 1
+        ret
+        .part
+helper: li    a0, 8
+        ret
+''',
+]
+expect.exit_code = 8
+
+[[case]]
+name = "returning to a section resumes its latest part"
+# The addi and ret after .section text are still f's.
+objects = [
+'''
+        call  f
+        li    t6, -39366
+        sw    a0, 0(t6)
+''',
+'''
+        .part
+        .global f
+f:      la    t0, val
+        lw    a0, 0(t0)
+        .section data
+val:    .word 5
+        .section text
+        addi  a0, a0, 1
+        ret
+''',
+]
+expect.exit_code = 6
+
+[[case]]
+name = "whole-program assembly ignores .part"
+program = '''
+        li    a0, 2
+        .part
+        addi  a0, a0, 3
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+expect.exit_code = 5
+
 # --- what the linker refuses ------------------------------------------------
 
 [[case]]

@@ -19,8 +19,9 @@ It compiles Trice files (`.tc`) each on its own as well, as `detrytus tc
 -c` does ([`trice.md`](trice.md), section 13).
 `run` and `debug` link the objects among their files, then load the
 result with the rest as usual. Without `-o`, or with `--map`, `link`
-prints where each object's part of each section went and the address
-of every global symbol.
+prints where each object's part of each section went, named by its
+first label, the parts it left out as unused, and the address of every
+global symbol.
 
 ## Writing a source for an object
 
@@ -42,6 +43,32 @@ makes global is an error then, reported at the line that used it.
 and constants defined with `.equ`. Everything else stays local to its
 object. A source assembled whole accepts `.global` and ignores it, so
 the same file builds either way.
+
+**`.part` starts a piece the linker may leave out.** The code and data
+after it, up to the next `.part` or the end, are a part of the current
+section of their own, which the linker keeps only if something it keeps
+refers to it. Everything before a section's first `.part` is always
+kept, as is every section given an address, so a program's start code
+and whatever it reaches stay, and a library function nothing calls
+goes. Switching to another section and back resumes the latest part.
+A part counts as used when a kept part branches to it, loads its
+address or holds it in a `.word`, by a label of its own or a global
+name it defines. A source assembled whole accepts `.part` and ignores
+it.
+
+```asm
+        .part
+        .global putc
+putc:   ...                     # kept if some kept code calls putc
+        ret
+        .part
+        .global puts
+puts:   ...                     # left out otherwise
+```
+
+Trice puts each function and each global in a part of its own when it
+compiles a file alone ([`trice.md`](trice.md), section 13), so a
+program linked with a library gets only the library functions it calls.
 
 ### What the linker can finish
 
@@ -80,6 +107,11 @@ is given once, in the source that owns it. trylobite's `lib/start.s`,
 which places a program's section at `V_USER`, is that source for every
 program linked with it.
 
+Parts started by `.part` that nothing kept refers to are left out
+first (Writing a source for an object); the rest are placed as above,
+each `.part` as one more part of its section, in the order they come
+in their object.
+
 Parts that land on each other are an error, as are a global defined in
 two objects and a value that does not fit the field it goes in.
 
@@ -106,7 +138,7 @@ symbol local constant POWER_OFF -39366
 | Line | Says |
 |------|------|
 | `detrytus object 1` | the format and its version, always first |
-| `section NAME ALIGN END [at SHIFT]` | a section: its base a multiple of 3^ALIGN; END the tryte after its last. With `at`, its source placed it, its addresses are where it runs and SHIFT is its load address minus its run address |
+| `section NAME ALIGN END [at SHIFT]` | a section: its base a multiple of 3^ALIGN; END the tryte after its last. With `at`, its source placed it, its addresses are where it runs and SHIFT is its load address minus its run address. `NAME:K`, such as `text:2`, is a part `.part` started, which goes into section NAME |
 | `data NAME ADDR TRYTE...` | trytes from ADDR up |
 | `reloc NAME ADDR KIND ADDEND [+BASE] [-BASE] @ LINE [FILE]` | what the linker writes at ADDR |
 | `symbol global\|local label\|constant NAME VALUE [in SECTION]` | a name; `in` a section the linker places, VALUE counts from its base |

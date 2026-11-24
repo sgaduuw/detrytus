@@ -66,6 +66,7 @@ reset address.
 | `.compress` / `.nocompress` | turn automatic bundling on and off from here (below); off at the start |
 | `.gp E` / `.nogp` | in this section, from here: `gp` holds E, or nothing known (below) |
 | `.global NAME, ...` | in an object, make these names visible to other objects ([`linker.md`](linker.md)); ignored otherwise |
+| `.part` | in an object, start a part of the section that the linker leaves out if nothing uses it ([`linker.md`](linker.md)); ignored otherwise |
 
 `.assert` is checked once every symbol is known, so it may use labels
 defined after it. If assembly stops earlier, on a line that needs a

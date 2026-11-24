@@ -1,6 +1,6 @@
 # Objects and the linker (docs/linker.md): an object listed, written,
 # linked into an image or a map, run and debugged, Trice files compiled
-# on their own (tc -c), and the errors.
+# on their own (tc -c), unused parts left out, and the errors.
 
 [[case]]
 args = ["asm", "-c", "{here}/programs/link/main.s"]
@@ -35,11 +35,11 @@ status = 0
 stderr = ""
 stdout = """
 section text
-            -1 .. 20            {tmp}/main.dto
-            20 .. 38            {here}/programs/link/lib.s
+            -1 .. 20            {tmp}/main.dto start
+            20 .. 38            {here}/programs/link/lib.s puts
 section data
-            38 .. 46            {tmp}/main.dto
-            47 .. 50            {here}/programs/link/lib.s
+            38 .. 46            {tmp}/main.dto greeting
+            47 .. 50            {here}/programs/link/lib.s answer
 globals
             48  answer  ({here}/programs/link/lib.s)
             36  halt  ({here}/programs/link/lib.s)
@@ -122,12 +122,14 @@ stdout = """
 # Compiled by detrytus tc from {here}/programs/link/sum.tc: docs/trice.md, docs/abi.md.
         .global twice, thrice
         .compress
+        .part
 
 # int twice(...), {here}/programs/link/sum.tc:2
 twice:
 # {here}/programs/link/sum.tc:2
         add   a0, a0, a0
         ret
+        .part
 
 # int thrice(...), {here}/programs/link/sum.tc:3
 thrice:
@@ -147,6 +149,7 @@ stdout = """
 # Compiled by detrytus tc from {here}/programs/link/main.tc: docs/trice.md, docs/abi.md.
         .global main
         .compress
+        .part
 
 # int main(...), {here}/programs/link/main.tc:4
 main:
@@ -172,8 +175,25 @@ stdout = ""
 [[case]]
 args = ["tc", "-c", "{here}/programs/link/sum.tc", "-o", "{tmp}/sum.dto"]
 file = "{tmp}/sum.dto"
-file_hex = "6465747279747573206f626a65637420310a73656374696f6e2074657874203120380a646174612074657874202d3120363932352036383133202d39373220383236332039203020363932352036383637202d3937320a73796d626f6c20676c6f62616c206c6162656c207477696365203020696e20746578740a73796d626f6c20676c6f62616c206c6162656c20746872696365203320696e20746578740a"
+file_hex = "6465747279747573206f626a65637420310a73656374696f6e20746578743a32203120320a6461746120746578743a32202d3120363932352036383133202d3937320a73656374696f6e20746578743a33203120350a6461746120746578743a33202d3120383236332039203020363932352036383637202d3937320a73796d626f6c20676c6f62616c206c6162656c207477696365203020696e20746578743a320a73796d626f6c20676c6f62616c206c6162656c20746872696365203020696e20746578743a330a"
 name = "tc -c writes an object"
 status = 0
 stderr = ""
 stdout = ""
+
+[[case]]
+args = ["link", "--map", "{here}/programs/link/start.s", "{here}/programs/link/main.tc", "{here}/programs/link/sum.tc", "-o", "{tmp}/p.dti"]
+name = "the map lists the functions nothing calls"
+status = 0
+stderr = ""
+stdout = """
+section text
+            -1 .. 11            {here}/programs/link/start.s
+            11 .. 26            {here}/programs/link/main.tc main
+            26 .. 29            {here}/programs/link/sum.tc twice
+left out, unused
+  {here}/programs/link/sum.tc thrice
+globals
+            12  main  ({here}/programs/link/main.tc)
+            27  twice  ({here}/programs/link/sum.tc)
+"""
