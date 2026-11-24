@@ -19,6 +19,10 @@ const BUILTIN2: [&str; 12] =
     ["min", "max", "divr", "remr", "tmul", "tsum", "tcons", "tany", "band", "bor", "bxor", "bsh"];
 /// Builtins of one argument.
 const BUILTIN1: [&str; 5] = ["abs", "tabs", "lzt", "tzt", "nzt"];
+/// Builtins whose last arguments are constants the instruction holds.
+const FIELD: [&str; 3] = ["tlut", "tex", "tins"];
+/// The largest `tlut` table: nine trits, `fn[8:0]` (isa.md 7.5).
+const TABLE_MAX: i128 = (19_683 - 1) / 2;
 
 /// The 16-trit immediate of format I, H16.
 const IMM_MAX: i128 = (43_046_721 - 1) / 2;
@@ -200,7 +204,7 @@ fn is_register(name: &str) -> bool {
 }
 
 fn is_builtin(name: &str) -> bool {
-    name == "sys" || BUILTIN1.contains(&name) || BUILTIN2.contains(&name)
+    name == "sys" || FIELD.contains(&name) || BUILTIN1.contains(&name) || BUILTIN2.contains(&name)
 }
 
 fn literal_minus_one(e: &Expr) -> bool {
@@ -2193,6 +2197,56 @@ impl Gen {
         Ok(t)
     }
 
+    /// `tlut(a, b, T)`, `tex(x, pos, len)` and `tins(x, v, pos, len)`:
+    /// one instruction each, the constants in its immediate.
+    fn field_builtin(&mut self, name: &str, args: &[Expr], line: usize) -> R<Type> {
+        let (values, form) = match name {
+            "tlut" => (2, "tlut(a, b, T)"),
+            "tex" => (1, "tex(x, pos, len)"),
+            _ => (2, "tins(x, v, pos, len)"),
+        };
+        let consts = if name == "tlut" { 1 } else { 2 };
+        if args.len() != values + consts {
+            return self.err(line, format!("{name} takes {} arguments: {form}", values + consts));
+        }
+        let mut imm = Vec::new();
+        for a in &args[values..] {
+            imm.push(self.const_eval(a)?);
+        }
+        if name == "tlut" {
+            if imm[0].abs() > TABLE_MAX {
+                return self.err(args[2].line, "a tlut table is nine trits, -9841 to 9841");
+            }
+        } else {
+            let (pos, len) = (imm[0], imm[1]);
+            if pos < 0 || len < 1 || pos + len > 27 {
+                return self.err(
+                    args[values].line,
+                    format!("{name} needs 0 <= pos, 1 <= len and pos + len <= 27"),
+                );
+            }
+        }
+        for a in &args[..values] {
+            let t = self.expr(a)?;
+            if !t.numeric() {
+                return self.err(a.line, format!("{name} takes numbers, not {}", t.a()));
+            }
+        }
+        let imm = imm.iter().map(i128::to_string).collect::<Vec<_>>().join(", ");
+        if values == 2 {
+            // tins writes into its rd, keeping the trits outside the
+            // field: x is already there.
+            let (x, y) = (self.second(), self.top());
+            let srcs = if name == "tins" { y.to_string() } else { format!("{x}, {y}") };
+            self.emit(format!("{name:<5} {x}, {srcs}, {imm}"));
+            self.pop();
+        } else {
+            let r = self.top();
+            self.emit(format!("{name:<5} {r}, {r}, {imm}"));
+        }
+        Ok(Type::Int)
+    }
+
     fn cast(&mut self, to: &Type, x: &Expr, line: usize) -> R<Type> {
         let from = self.expr(x)?;
         let r = self.top();
@@ -2222,6 +2276,9 @@ impl Gen {
     }
 
     fn call(&mut self, name: &str, args: &[Expr], line: usize) -> R<Type> {
+        if FIELD.contains(&name) {
+            return self.field_builtin(name, args, line);
+        }
         if BUILTIN2.contains(&name) || BUILTIN1.contains(&name) {
             let want = if BUILTIN2.contains(&name) { 2 } else { 1 };
             if args.len() != want {

@@ -37,9 +37,9 @@ const TEMPS: [&str; 7] = ["t0", "t1", "t2", "t3", "t4", "t5", "t6"];
 const SAVED: [&str; 8] = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
 /// Three-register instructions: rd, rs1, rs2.
-const ALU3: [&str; 22] = [
-    "add", "sub", "mul", "div", "rem", "sh", "tmin", "tmax", "min", "max", "cmp", "divr", "remr",
-    "tmul", "tsum", "tcons", "tany", "band", "bor", "bxor", "bsh", "and",
+const ALU3: [&str; 23] = [
+    "tlut", "add", "sub", "mul", "div", "rem", "sh", "tmin", "tmax", "min", "max", "cmp", "divr",
+    "remr", "tmul", "tsum", "tcons", "tany", "band", "bor", "bxor", "bsh", "and",
 ];
 /// Instructions of the form rd, rs1[, immediates].
 const ALU2: [&str; 11] =
@@ -138,6 +138,11 @@ fn effects(line: &Line) -> Effects {
                 if op == "mv" && tracked(arg(0)) && tracked(arg(1)) {
                     e.copy = Some((arg(0).to_string(), arg(1).to_string()));
                 }
+            } else if op == "tins" {
+                // Changes only a field of rd, so reads it too.
+                e.defs.extend(reg(arg(0)));
+                e.uses.extend(reg(arg(0)));
+                e.uses.extend(reg(arg(1)));
             } else if op == "li" || op == "la" {
                 e.defs.extend(reg(arg(0)));
             } else if op == "lw" || op == "lt" {

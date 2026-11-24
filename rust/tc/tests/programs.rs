@@ -276,6 +276,42 @@ fn builtins() {
 }
 
 #[test]
+fn table_and_field_builtins() {
+    // tmin's table, tritwise: min(+0-, 0++) = 0 0 - = -1.
+    assert_eq!(exit("int main() { return tlut(0t+0-, 0t0++, 0t+0-00----); }"), -1);
+    // A named constant as the table, and a variable operand.
+    let src = "
+        const int TMAX = 9728;
+        int main() { int a = 0t+0-; return tlut(a, 0t0++, TMAX); }";
+    assert_eq!(exit(src), 9 + 3 + 1);
+    // Trits 3, 2 and 1 of 0t+-0+0 are -0+.
+    assert_eq!(exit("int main() { return tex(0t+-0+0, 1, 3); }"), -8);
+    assert_eq!(exit("int main() { return tex(-5, 0, 27); }"), -5);
+    // Replace trits 1..2 of 0t++++ with 0t-0.
+    assert_eq!(exit("int main() { return tins(0t++++, 0t-0, 1, 2); }"), 27 - 9 + 1);
+    // x stays as it was; the result is a new value.
+    let src = "
+        int main() {
+            int x = 40;
+            int y = tins(x, 0, 0, 2);
+            return x * 100 + y;
+        }";
+    assert_eq!(exit(src), 40 * 100 + 36);
+    // Pack three tryte-wide fields and take them apart again; pack is
+    // copied into main, and x lives across the calls to f.
+    let src = "
+        int pack(int a, int b, int c) { return tins(tins(tins(0, a, 0, 3), b, 3, 3), c, 6, 3); }
+        int f(int x) { return x; }
+        int main() {
+            int w = pack(-13, 5, 13);
+            int x = f(tex(w, 0, 3));
+            int y = f(tex(w, 3, 3));
+            return x * 10000 + y * 100 + tex(w, 6, 3);
+        }";
+    assert_eq!(exit(src), -13 * 10_000 + 5 * 100 + 13);
+}
+
+#[test]
 fn inline_assembly() {
     assert_eq!(exit("int main() { asm {\n li a0, 17\n j main$ret\n} return 0; }"), 17);
 }
@@ -296,6 +332,26 @@ fn errors() {
         "Trice has no ~: -x already flips every trit"
     );
     assert_eq!(refused("int main() { int a0 = 1; return a0; }"), "a0 is a register name");
+    assert_eq!(
+        refused("int main() { int t = 1; return tlut(1, 1, t); }"),
+        "a constant is needed here"
+    );
+    assert_eq!(
+        refused("int main() { return tlut(1, 1, 9842); }"),
+        "a tlut table is nine trits, -9841 to 9841"
+    );
+    assert_eq!(
+        refused("int main() { return tex(1, 20, 8); }"),
+        "tex needs 0 <= pos, 1 <= len and pos + len <= 27"
+    );
+    assert_eq!(
+        refused("int main() { return tins(1, 2, 3); }"),
+        "tins takes 4 arguments: tins(x, v, pos, len)"
+    );
+    assert_eq!(
+        refused("int tex(int x) { return x; } int main() { return 0; }"),
+        "tex is a builtin"
+    );
     assert_eq!(refused("int main() { bool b = 1; return 0; }"), "cannot use an int as a bool");
     assert_eq!(
         refused("int main() { int x = 1; bool b = (bool) x; return 0; }"),
