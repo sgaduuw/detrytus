@@ -23,7 +23,8 @@ abort at once (`-Cpanic=immediate-abort`): a panic becomes a call to
 rustup target add riscv32imac-unknown-none-elf
 rustup component add rust-src
 # a cargo project whose crate type is staticlib, release profile with
-# opt-level = "z", panic = "abort", codegen-units = 1
+# opt-level = "s" (smaller than "z" here, since "z" keeps iterator
+# methods out of line), panic = "abort", codegen-units = 1
 RUSTC_BOOTSTRAP=1 \
 RUSTFLAGS="--emit=llvm-ir,link -Zunstable-options -Cpanic=immediate-abort" \
 cargo build --release -Zbuild-std=core --target riscv32imac-unknown-none-elf
@@ -102,6 +103,14 @@ slice two, and a result of one or two scalars comes back in `a0` and
 `fn` value) is `jalr ra`. An `alloca` gets room in the frame, below
 `s0`. Static data is emitted byte by byte; a pointer in it is four
 trytes worked out from the label by the assembler.
+
+## Size
+
+Faithful bytes cost room: a `u32` loaded from memory is four tryte
+loads joined together, and every wrap is a `band`. On trylobite, a
+Rust hello is 370 trytes, its runtime included, and an echo written
+with iterators 671, against 147 for the Trice echo. Keeping 32-bit
+values in one word where that is safe is the obvious next saving.
 
 ## Not yet
 

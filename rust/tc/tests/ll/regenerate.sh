@@ -18,7 +18,7 @@ edition = "2024"
 [lib]
 crate-type = ["staticlib"]
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 panic = "abort"
 codegen-units = 1
 TOML
