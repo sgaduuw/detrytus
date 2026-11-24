@@ -5,6 +5,7 @@
 //! The compiler knows the ISA and the ABI but no operating system:
 //! start code and system-call numbers arrive through imported assembly.
 
+mod alloc;
 pub mod ast;
 mod codegen;
 pub mod lex;

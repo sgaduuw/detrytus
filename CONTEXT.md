@@ -1159,3 +1159,32 @@ passing its tests unchanged; then `bin/wc`.
   value travels as itself, so the caller cuts it.
 - **Test programs run twice**, with and without a global pointer
   (`tests/bare_gp.s`), and must agree.
+
+### 2026-11-24 · An IR for Trice: assembly over virtual registers
+
+- **The IR is the machine's own instructions.** Code generation emits
+  detrytus assembly over virtual registers (`%n`), and the back end
+  (`rust/tc/src/alloc.rs`) works on that: liveness, dead code,
+  reuse within a block, colouring with coalescing, spills, peepholes,
+  frames. A separate IR with its own operations would have meant a
+  second instruction selection for no gain on one target. A call says
+  how many argument registers it reads (`call f, n`), which is all the
+  allocator needs to know of the ABI.
+- **Ready for another front end.** Nothing in the back end is Trice's:
+  it takes lines of assembly and a few facts about the function (does
+  it return a value, how many frame words its locals use). A Rust
+  backend (rustc_codegen) would emit the same lines and reuse it.
+- **Size, not speed, sets the rules.** Values are not kept over a call
+  (a saved register costs two instructions); a function is copied in
+  only when that cannot grow the program much. The compressed forms
+  shaped the colouring: `rd = rd op rs` fits a slot, so a result
+  prefers its operand's register, and a label splits bundles, so
+  labels nothing jumps to are dropped. trylobite's `wc` went from 1,111
+  trytes to 901 (659 hand-written).
+- **A system call changes only `a0` to `a5`.** trylobite's trap entry
+  saves and restores every register, as preemption requires, so values
+  in temporaries live across `sys`. trice.md 8 states it as what the
+  compiler assumes of any operating system.
+- **Pointers may be devices.** Only loads of globals by name are
+  reused; a load through a pointer is always made, so polling a
+  device's register works.

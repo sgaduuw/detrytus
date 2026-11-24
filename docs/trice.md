@@ -231,7 +231,9 @@ Each builtin is one instruction, or a few, and is named after it, so
 
 `sys` carries no meaning of its own: what the registers mean is the
 operating system's. On trylobite `a0` is the call number and the result
-comes back in `a0`.
+comes back in `a0`. The compiler takes it that a system call changes
+only `a0` to `a5` and leaves every other register as it was, as a trap
+handler that can resume a preempted program must.
 
 ## 9. Diagnostics
 
@@ -245,7 +247,8 @@ The compiler writes one assembly file: the imports, then each function,
 then the globals, under `.compress` so the assembler bundles what it
 can. A function that nothing reaches from `main` is checked and left
 out; a function an `asm` block or imported assembly names counts as
-reached. Where the code goes is the start code's business: on trylobite,
+reached. So is one copied into every caller (section 12), and a global
+or string that no code left in names. Where the code goes is the start code's business: on trylobite,
 `lib/start.s` opens the program's section at `V_USER`, says where `gp`
 points with `.gp`, and calls `main(argc, argv)` before exiting with its
 result. Each statement's code carries a comment naming its source line,
@@ -263,26 +266,51 @@ added without changing what is above.
 `-o OUT.dti` assembles it into an image as well. Errors name the file
 and line; warnings go to standard error.
 
-It walks the tree, with a few rules in place of an optimiser:
+Code generation walks the tree, with every value in a virtual
+register of its own; locals whose address is never taken are virtual
+registers too, and the rest live in the frame. A back end then works on
+each function as assembly over those registers:
 
-- An expression's values live in `t0` to `t6` (an expression that
-  needs more than seven at once is refused), but a variable or a
-  constant is used where it is, and goes straight into an argument
-  register.
-- A scalar local whose address is never taken lives in a saved
-  register, `s1` to `s8`, while one is free; other locals live in the
-  frame.
-- A leaf, a function that makes no calls, keeps its parameters in
-  `a0` to `a5` and its locals in the free ones. With nothing in
-  memory it needs no frame at all.
-- Only a function with locals in memory keeps a frame pointer.
-- When imported assembly sets `.gp`, a global scalar is loaded and
-  stored by name, in one instruction.
+- **Redundancy.** Within a block, a constant, an address, the same
+  arithmetic on the same registers, or a global already loaded (or just
+  stored) is reused rather than computed again. Not across a call,
+  where keeping it would cost a saved register, and never a load
+  through a pointer, which may be a device's register. Copies of a
+  value written once are read through.
+- **Dead code.** An instruction whose result nothing reads goes, by
+  liveness over the function's control flow.
+- **Registers.** An interference graph is coloured with `t0` to `t6`,
+  then `a5` to `a0`, then `s1` to `s8`, so a saved register (which
+  costs a save) holds only what lives across a call. The two sides of a
+  copy are merged first when that cannot force a spill, and a result
+  prefers its operand's register, since `rd = rd op rs` has a
+  compressed form and `rd = rs1 op rs2` none. What does not fit goes to
+  the frame, and allocation runs again.
+- **Copying small functions in.** A function that calls nothing, has
+  nothing in memory and no `asm` is copied into its callers when it has
+  at most four instructions besides copies, or only one caller. A
+  function every caller copied is left out.
+- **Clean-up.** A branch over a jump branches the other way, a jump to
+  a jump goes on to the end, code nothing reaches goes, and so do
+  labels nothing jumps to, which would keep their neighbours out of a
+  bundle.
+- **Frames.** A function with nothing to keep has no frame; one that
+  calls, or uses saved registers, keeps them from `sp`; only one with
+  memory locals or more than six parameters keeps a frame pointer.
 
-Code is still two to three times the size of hand-written assembly:
-trylobite's `bin/wc` is 1,111 trytes against 659. Keeping values in
-registers across statements is the next step, which is what an IR is
-for.
+Sizes of trylobite's programs, in trytes, the buffers included:
+
+| Program | Hand-written | Tree walker | With the back end |
+|---------|-------------:|------------:|------------------:|
+| `wc` | 659 | 1,111 | 901 |
+| `grep` | 1,406 | 1,831 | 1,663 |
+| `head` | 629 | 1,025 | 851 |
+| `upper` | 312 | 459 | 375 |
+| `echo` | 70 | 220 | 154 |
+
+Most of what remains is structure the hand-written programs leave out:
+the start code, layers of small library functions, and the saves a
+function owes its caller.
 
 Not in it yet, though specified above: `tlut`, `tex` and `tins`. A
 `which` arm must be within `br3`'s reach of 3,280 instructions.

@@ -72,7 +72,7 @@ and hides a failure.
 | `rust/core/src/machine.rs` | the platform wired together, and the harts run in rounds |
 | `rust/core/tests/` | the spec sync test |
 | `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm`; `error`, `text` and `pyrepr` keep messages and splitting as the Python assembler had them |
-| `rust/tc/src/` | the Trice compiler: `lex`, `parse` (into `ast`), `codegen` (types are checked as code is made); `lib.rs` loads imports, reading `.equ` constants from imported assembly |
+| `rust/tc/src/` | the Trice compiler: `lex`, `parse` (into `ast`), `codegen` (types are checked as code is made, on virtual registers), `alloc` (the back end: registers, redundancy, inlining, frames); `lib.rs` loads imports, reading `.equ` constants from imported assembly |
 | `rust/tc/tests/` | Trice programs compiled and run on the bare machine (`bare.s`), and refused ones |
 | `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `tc.rs` (`tc`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
