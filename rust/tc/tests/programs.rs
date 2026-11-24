@@ -334,7 +334,7 @@ fn functions_nothing_calls_are_left_out() {
     assert!(!out.assembly.contains("unused:"));
     // putc is reached from main, and an asm block may name a function.
     let out = compile(
-        "int called() { return 2; } int named() { return 3; }
+        "int called() { return named() - 1; } int named() { return 3; }
          int main() { putc(called()); asm {\n call named # not unused2\n} return 0; }
          int unused2() { return 4; }",
     )
@@ -527,11 +527,33 @@ fn locals_live_in_registers_and_memory() {
         int sum3(int a, int b, int c) { int s = a + b; s += c; return s; }
         int main() { int x = 4; return sum3(x, x + 1, sum3(1, 1, 1)) + x; }";
     assert_eq!(exit(src), 4 + 5 + 3 + 4);
-    let out =
-        compile("int leaf(int a) { int b = a * 2; return b; } int main() { return leaf(3); }")
-            .unwrap();
+    let leaf = "int leaf(int a) { int b = a * 2; b = b * b; b = b + a; b = b * a; return b - 3; }";
+    let out = compile(&format!("{leaf} int main() {{ return leaf(3) + leaf(4); }}")).unwrap();
     let leaf = out.assembly.split("leaf:").nth(1).unwrap().split("main:").next().unwrap();
     assert!(!leaf.contains("sp"), "a leaf needs no frame:\n{leaf}");
+}
+
+#[test]
+fn small_functions_are_copied_into_their_callers() {
+    let src = "int twice(int a) { return a + a; } int main() { return twice(3) + twice(4); }";
+    assert_eq!(exit(src), 14);
+    let out = compile(src).unwrap();
+    assert!(!out.assembly.contains("twice:"), "{}", out.assembly);
+    assert!(!out.assembly.contains("call"), "{}", out.assembly);
+    // One called from a single place, whatever its size; labels and
+    // registers of each copy are its own.
+    let src = "
+        int big(int a) { int s = 0; while (a > 0) { s += a * a; a--; } return s; }
+        int small(int a) { if (a < 0) return -a; return a; }
+        int main() { return big(3) + small(-2) + small(5); }";
+    assert_eq!(exit(src), 14 + 2 + 5);
+    let out = compile(src).unwrap();
+    assert!(!out.assembly.contains("big:") && !out.assembly.contains("small:"));
+    // A function that calls is not copied.
+    let src = "int fact(int n) { if (n < 2) return 1; return n * fact(n - 1); }
+               int main() { return fact(4); }";
+    assert_eq!(exit(src), 24);
+    assert!(compile(src).unwrap().assembly.contains("fact:"));
 }
 
 #[test]

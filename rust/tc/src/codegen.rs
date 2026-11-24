@@ -1,17 +1,17 @@
 //! Code generation: the checked program into assembly (abi.md).
 //!
-//! The first version walks the tree. An expression's values live in
-//! `t0`..`t6`, used as a stack; locals live in the frame, reached from
-//! the frame pointer `s0`, so calls can push the temporaries they must
-//! keep without moving the locals. Types are checked on the way.
+//! It walks the tree, checking types on the way, and emits assembly over
+//! virtual registers: each value, and each local whose address is never
+//! taken, gets one of its own. Locals in memory live in the frame,
+//! reached from `s0`. `alloc` then gives each function its registers.
 
-use std::collections::{HashMap, HashSet};
+use crate::alloc;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::*;
 use crate::lex::{TRYTE_MAX, WORD_MAX};
 use crate::{Error, Output, Unit};
 
-const TEMPS: [&str; 7] = ["t0", "t1", "t2", "t3", "t4", "t5", "t6"];
 const ARGS: [&str; 6] = ["a0", "a1", "a2", "a3", "a4", "a5"];
 
 /// Builtins of two arguments, each the instruction of the same name.
@@ -39,9 +39,6 @@ struct Local {
     /// address is never taken.
     reg: Option<&'static str>,
 }
-
-/// The saved registers locals may live in; `s0` is the frame pointer.
-const SAVED: [&str; 8] = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
 /// One tryte or word of a global's initial value.
 enum Cell {
@@ -72,12 +69,18 @@ struct Gen {
     labels: usize,
     scopes: Vec<HashMap<String, Local>>,
     slots: i128,
-    depth: usize,
     loops: Vec<(String, String)>,
     ret: Type,
-    /// Saved registers free for locals, and those the function used.
-    free: Vec<&'static str>,
-    saved: Vec<&'static str>,
+    /// The virtual registers of the values being computed, innermost
+    /// last, and how many virtual registers there are.
+    stack: Vec<&'static str>,
+    vregs: usize,
+    /// Functions small enough to copy into their callers, so far.
+    inlinable: BTreeMap<String, alloc::Inline>,
+    /// Copies made, which number their labels.
+    inlined: usize,
+    /// How many calls each function has in the code kept.
+    call_sites: HashMap<String, usize>,
     /// Names whose address the function takes: they stay in memory.
     addressed: HashSet<String>,
     /// Imported assembly set `.gp`: a global scalar is loaded and stored
@@ -102,19 +105,23 @@ pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
         labels: 0,
         scopes: Vec::new(),
         slots: 0,
-        depth: 0,
         loops: Vec::new(),
         ret: Type::Void,
-        free: Vec::new(),
-        saved: Vec::new(),
+        stack: Vec::new(),
+        vregs: 0,
+        inlinable: BTreeMap::new(),
+        inlined: 0,
+        call_sites: HashMap::new(),
         addressed: HashSet::new(),
         gp: units.iter().any(|u| matches!(u, Unit::Include { gp: true, .. })),
     };
     clear_structs();
     g.declare(units)?;
     let used = used_functions(units);
+    g.call_sites = call_sites(units, used.as_ref());
     g.code.push(format!("# Compiled by detrytus tc from {main_file}: docs/trice.md, docs/abi.md."));
     let mut compressing = false;
+    let mut ranges = Vec::new();
     for unit in units {
         match unit {
             Unit::Include { path, .. } => g.code.push(format!("        .include \"{path}\"")),
@@ -130,6 +137,8 @@ pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
                 if used.as_ref().is_some_and(|u| !u.contains(&f.name)) {
                     g.code.truncate(code);
                     g.data.truncate(data);
+                } else {
+                    ranges.push((f.name.clone(), code, g.code.len()));
                 }
             }
             Unit::Item { .. } => {}
@@ -137,6 +146,10 @@ pub(crate) fn generate(units: &[Unit], main_file: &str) -> R<Output> {
     }
     if !compressing {
         g.code.push("        .compress".into());
+    }
+    if used.is_some() {
+        g.code = drop_inlined(units, std::mem::take(&mut g.code), ranges);
+        g.data = used_data(units, &g.code, std::mem::take(&mut g.data));
     }
     let mut assembly = g.code.join("\n");
     assembly.push('\n');
@@ -580,24 +593,35 @@ impl Gen {
         format!("{}${}", self.fname, self.labels)
     }
 
-    fn push(&mut self, line: usize) -> R<&'static str> {
-        if self.depth == TEMPS.len() {
-            return self.err(line, "expression too complex: more than 7 values at once");
-        }
-        self.depth += 1;
-        Ok(TEMPS[self.depth - 1])
+    /// A new virtual register on the stack of values being computed.
+    fn push(&mut self, _line: usize) -> R<&'static str> {
+        let r = self.vreg();
+        self.stack.push(r);
+        Ok(r)
+    }
+
+    /// A new virtual register, for a local or a value of its own.
+    fn vreg(&mut self) -> &'static str {
+        self.vregs += 1;
+        alloc::vreg(self.vregs)
     }
 
     fn top(&self) -> &'static str {
-        TEMPS[self.depth - 1]
+        self.stack[self.stack.len() - 1]
     }
 
     fn second(&self) -> &'static str {
-        TEMPS[self.depth - 2]
+        self.stack[self.stack.len() - 2]
     }
 
     fn pop(&mut self) {
-        self.depth -= 1;
+        self.stack.pop();
+    }
+
+    /// Whether `r` holds a value being computed, which may be changed
+    /// in place, rather than a variable.
+    fn is_temp(&self, r: &str) -> bool {
+        self.stack.contains(&r)
     }
 
     fn load(&mut self, ty: &Type, dst: &str, off: i128, base: &str) {
@@ -608,7 +632,7 @@ impl Gen {
     fn store(&mut self, ty: &Type, src: &str, off: i128, base: &str) {
         // st keeps 9 trits; a trit keeps one (a value in a register that
         // is not a temporary was cut to its type already).
-        if *ty == Type::Trit && is_temp(src) {
+        if *ty == Type::Trit && self.is_temp(src) {
             self.emit(format!("tex   {src}, {src}, 0, 1"));
         }
         let op = if ty.size() == 1 { "st" } else { "sw" };
@@ -621,35 +645,20 @@ impl Gen {
         self.fname = f.name.clone();
         self.labels = 0;
         self.slots = 0;
-        self.depth = 0;
+        self.stack.clear();
         self.loops.clear();
         self.ret = f.ret.clone();
         self.scopes = vec![HashMap::new()];
-        self.saved.clear();
         self.addressed.clear();
         for st in f.body.as_ref().unwrap() {
             stmt_addressed(st, &mut self.addressed);
-        }
-        // A leaf makes no calls (builtins are instructions) and has no
-        // asm: its parameters stay in their argument registers, and the
-        // free ones hold locals before any saved register does.
-        let mut leaf = f.params.len() <= ARGS.len();
-        let words = |t: &str| t.split_whitespace().map(str::to_string).collect::<Vec<_>>();
-        for st in f.body.as_ref().unwrap() {
-            stmt_calls(st, &mut |n| leaf &= BUILTIN1.contains(&n) || BUILTIN2.contains(&n), &words);
-        }
-        self.free = SAVED.iter().rev().copied().collect();
-        if leaf {
-            self.free.extend(ARGS[f.params.len()..].iter().rev());
         }
         let outer = std::mem::take(&mut self.code);
         for (i, (ty, name)) in f.params.iter().enumerate() {
             if self.scopes[0].contains_key(name) {
                 return self.err(f.line, format!("two parameters are called {name}"));
             }
-            let local = if leaf && !self.addressed.contains(name) {
-                Local { ty: ty.clone(), off: 0, reg: Some(ARGS[i]) }
-            } else if i < ARGS.len() {
+            let local = if i < ARGS.len() {
                 let local = self.bind(name, ty);
                 self.store_local(&local, ARGS[i], ty);
                 local
@@ -677,55 +686,31 @@ impl Gen {
             self.code.pop();
         }
         let body = std::mem::replace(&mut self.code, outer);
-        let mut saved = self.saved.clone();
-        saved.sort();
-        let save_at = |k: usize, slots: i128| -3 * (2 + slots + k as i128 + 1);
-        let frame = 3 * (2 + self.slots + saved.len() as i128);
+        let mut n = self.vregs;
+        let body = alloc::inline(body, &self.inlinable, &mut self.inlined, &mut || {
+            n += 1;
+            alloc::vreg(n)
+        });
+        self.vregs = n;
+        let stack_params = f.params.len() > ARGS.len();
+        if f.name != "main"
+            && let Some(cost) = alloc::inline_cost(&body, self.slots, stack_params)
+            && (cost <= INLINE_MAX || self.call_sites.get(&f.name) == Some(&1))
+        {
+            self.inlinable.insert(f.name.clone(), alloc::Inline { body: body.clone() });
+        }
         self.code.push(String::new());
         self.code.push(format!("# {} {}(...), {}:{}", f.ret.name(), f.name, self.file, f.line));
         self.label(&f.name);
-        if leaf && self.slots == 0 && saved.is_empty() {
-            // Nothing to keep: no frame (abi.md 2.4).
-            self.code.extend(body);
-            self.label(&ret_label);
-            self.emit("ret");
-            return Ok(());
-        }
-        if self.slots == 0 && f.params.len() <= ARGS.len() {
-            // Nothing in memory: a frame of ra and the saved registers,
-            // reached from sp, with no frame pointer.
-            let frame = 3 * (1 + saved.len() as i128);
-            self.emit(format!("addi  sp, sp, {}", -frame));
-            self.emit(format!("sw    ra, {}(sp)", frame - 3));
-            for (k, r) in saved.iter().enumerate() {
-                self.emit(format!("sw    {r}, {}(sp)", frame - 6 - 3 * k as i128));
-            }
-            self.code.extend(body);
-            self.label(&ret_label);
-            for (k, r) in saved.iter().enumerate() {
-                self.emit(format!("lw    {r}, {}(sp)", frame - 6 - 3 * k as i128));
-            }
-            self.emit(format!("lw    ra, {}(sp)", frame - 3));
-            self.emit(format!("addi  sp, sp, {frame}"));
-            self.emit("ret");
-            return Ok(());
-        }
-        self.emit(format!("addi  sp, sp, {}", -frame));
-        self.emit(format!("sw    ra, {}(sp)", frame - 3));
-        self.emit(format!("sw    s0, {}(sp)", frame - 6));
-        self.emit(format!("addi  s0, sp, {frame}"));
-        for (k, r) in saved.iter().enumerate() {
-            self.emit(format!("sw    {r}, {}(s0)", save_at(k, self.slots)));
-        }
-        self.code.extend(body);
-        self.label(&ret_label);
-        for (k, r) in saved.iter().enumerate() {
-            self.emit(format!("lw    {r}, {}(s0)", save_at(k, self.slots)));
-        }
-        self.emit("mv    sp, s0");
-        self.emit("lw    ra, -3(sp)");
-        self.emit("lw    s0, -6(sp)");
-        self.emit("ret");
+        let done = alloc::finish(alloc::Func {
+            name: &f.name,
+            returns: f.ret != Type::Void,
+            slots: self.slots,
+            stack_params,
+            body,
+        })
+        .map_err(|m| Error::new(&self.file, f.line, m))?;
+        self.code.extend(done);
         Ok(())
     }
 
@@ -738,16 +723,11 @@ impl Gen {
         if ty.word_aligned() || !ty.aggregate() { lowest_centre } else { lowest_centre - 1 }
     }
 
-    /// A new local's home: a saved register for a scalar whose address
-    /// is never taken, while one is free, else a frame slot.
+    /// A new local's home: a virtual register for a scalar whose
+    /// address is never taken, else a frame slot.
     fn bind(&mut self, name: &str, ty: &Type) -> Local {
-        if !ty.aggregate()
-            && !self.addressed.contains(name)
-            && let Some(r) = self.free.pop()
-        {
-            if r.starts_with('s') && !self.saved.contains(&r) {
-                self.saved.push(r);
-            }
+        if !ty.aggregate() && !self.addressed.contains(name) {
+            let r = self.vreg();
             return Local { ty: ty.clone(), off: 0, reg: Some(r) };
         }
         let off = self.allocate(ty);
@@ -780,17 +760,8 @@ impl Gen {
         self.scopes.push(HashMap::new());
     }
 
-    /// Close a scope, freeing its locals' registers.
     fn close_scope(&mut self) {
-        if let Some(scope) = self.scopes.pop() {
-            for l in scope.values() {
-                if let Some(r) = l.reg {
-                    self.free.push(r);
-                }
-            }
-            // Lowest first, so the output does not depend on map order.
-            self.free.sort_by(|a, b| b.cmp(a));
-        }
+        self.scopes.pop();
     }
 
     fn lookup(&self, name: &str) -> Option<Place> {
@@ -814,7 +785,7 @@ impl Gen {
     // --- statements --------------------------------------------------------
 
     fn stmt(&mut self, s: &Stmt) -> R<()> {
-        debug_assert_eq!(self.depth, 0);
+        debug_assert!(self.stack.is_empty());
         if let Some(line) = stmt_line(s) {
             self.code.push(format!("# {}:{line}", self.file));
         }
@@ -846,7 +817,6 @@ impl Gen {
                 } else if let Some(init) = init
                     && self.is_simple(init)
                     && !self.addressed.contains(name)
-                    && !self.free.is_empty()
                 {
                     let local = self.bind(name, &ty);
                     let reg = local.reg.unwrap();
@@ -933,7 +903,8 @@ impl Gen {
                     (Some(e), ret) => {
                         let t = self.expr(e)?;
                         self.check_assign(&ret, &t, e)?;
-                        self.emit("mv    a0, t0");
+                        let r = self.top();
+                        self.emit(format!("mv    a0, {r}"));
                         self.narrow(&ret, &t, "a0");
                         self.pop();
                     }
@@ -947,8 +918,9 @@ impl Gen {
             }
             Stmt::Which { value, arms, bool_arms } => self.which(value, arms, *bool_arms)?,
             Stmt::Asm(text, _) => {
+                // Marked, so the allocator passes it through untouched.
                 for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                    self.code.push(line.to_string());
+                    self.code.push(format!("{}{line}", alloc::RAW));
                 }
             }
         }
@@ -1040,7 +1012,7 @@ impl Gen {
                 let (x, y, base) = self.compare_operands(op, a, b, e.line)?;
                 let br = Self::comparison(Self::inverse(op)).unwrap();
                 self.emit(format!("{br}   {x}, {y}, {to}"));
-                self.depth = base;
+                self.stack.truncate(base);
             }
             ExprKind::Binary("&&", a, b) => {
                 self.branch_false(a, to)?;
@@ -1058,12 +1030,12 @@ impl Gen {
                 // !x is true only when x is false.
                 let (base, r) = self.bool_operand(x)?;
                 self.emit(format!("bgez  {r}, {to}"));
-                self.depth = base;
+                self.stack.truncate(base);
             }
             _ => {
                 let (base, r) = self.bool_operand(e)?;
                 self.emit(format!("blez  {r}, {to}"));
-                self.depth = base;
+                self.stack.truncate(base);
             }
         }
         Ok(())
@@ -1076,7 +1048,7 @@ impl Gen {
                 let (x, y, base) = self.compare_operands(op, a, b, e.line)?;
                 let br = Self::comparison(op).unwrap();
                 self.emit(format!("{br}   {x}, {y}, {to}"));
-                self.depth = base;
+                self.stack.truncate(base);
             }
             ExprKind::Binary("&&", a, b) => {
                 let no = self.new_label();
@@ -1093,12 +1065,12 @@ impl Gen {
             ExprKind::Unary("!", x) => {
                 let (base, r) = self.bool_operand(x)?;
                 self.emit(format!("bltz  {r}, {to}"));
-                self.depth = base;
+                self.stack.truncate(base);
             }
             _ => {
                 let (base, r) = self.bool_operand(e)?;
                 self.emit(format!("bgtz  {r}, {to}"));
-                self.depth = base;
+                self.stack.truncate(base);
             }
         }
         Ok(())
@@ -1107,7 +1079,7 @@ impl Gen {
     /// A condition's value in a register (`operand`), checked to be a
     /// bool, with the depth to return to.
     fn bool_operand(&mut self, e: &Expr) -> R<(usize, &'static str)> {
-        let base = self.depth;
+        let base = self.stack.len();
         let (t, r) = self.operand(e, None)?;
         if t != Type::Bool {
             let hint = if t.numeric() { ": compare it, as in x != 0" } else { "" };
@@ -1140,7 +1112,7 @@ impl Gen {
                 self.file
             ));
         }
-        let base = self.depth;
+        let base = self.stack.len();
         let (ta, x) = self.operand(a, Some(b))?;
         let (tb, y) = self.operand(b, None)?;
         let ok = (ta.numeric() && tb.numeric())
@@ -1174,7 +1146,7 @@ impl Gen {
     /// The register a result goes in, once the operands above `base`
     /// are used: the first of them, or a new temporary.
     fn result_reg(&mut self, base: usize, line: usize) -> R<&'static str> {
-        self.depth = base;
+        self.stack.truncate(base);
         self.push(line)
     }
 
@@ -1336,12 +1308,18 @@ impl Gen {
             ExprKind::Cond(c, a, b) => {
                 let (other, end) = (self.new_label(), self.new_label());
                 self.branch_false(c, &other)?;
-                let base = self.depth;
+                let base = self.stack.len();
                 let ta = self.expr(a)?;
+                let result = self.top();
                 self.emit(format!("j     {end}"));
-                self.depth = base;
+                self.stack.truncate(base);
                 self.label(&other);
                 let tb = self.expr(b)?;
+                // Both sides leave the value in the same register.
+                let rb = self.top();
+                self.emit(format!("mv    {result}, {rb}"));
+                self.stack.pop();
+                self.stack.push(result);
                 self.label(&end);
                 if ta == tb {
                     Ok(ta)
@@ -1385,8 +1363,8 @@ impl Gen {
 
     /// The type of `x`, without arrays decaying and without its code.
     fn type_of(&mut self, x: &Expr) -> R<Type> {
-        let (code, depth, strings, data) =
-            (self.code.len(), self.depth, self.strings, self.data.len());
+        let (code, depth, strings, data, warnings) =
+            (self.code.len(), self.stack.len(), self.strings, self.data.len(), self.warnings.len());
         if let ExprKind::Name(n) = &x.kind
             && let Some(Place::Local(l)) = self.lookup(n)
         {
@@ -1401,8 +1379,9 @@ impl Gen {
         };
         self.code.truncate(code);
         self.data.truncate(data);
-        self.depth = depth;
+        self.stack.truncate(depth);
         self.strings = strings;
+        self.warnings.truncate(warnings);
         t
     }
 
@@ -1480,7 +1459,7 @@ impl Gen {
                 }
             }
             ExprKind::Index(a, i) => {
-                let base = self.depth;
+                let base = self.stack.len();
                 let (ta, rb) = self.operand(a, Some(i))?;
                 let Type::Ptr(elem) = ta else {
                     return self.err(line, format!("cannot index {}", ta.a()));
@@ -1490,7 +1469,7 @@ impl Gen {
                 }
                 let size = elem.size();
                 if let Some(k) = self.try_const(i).filter(|k| (k * size).abs() <= IMM_MAX) {
-                    if !(k == 0 && is_temp(rb)) {
+                    if !(k == 0 && self.is_temp(rb)) {
                         let d = self.result_reg(base, line)?;
                         self.emit(format!("addi  {d}, {rb}, {}", k * size));
                     }
@@ -1502,7 +1481,7 @@ impl Gen {
                     let scaled = if size == 1 {
                         ri
                     } else {
-                        let tmp = if is_temp(ri) { ri } else { self.push(line)? };
+                        let tmp = if self.is_temp(ri) { ri } else { self.push(line)? };
                         self.scale_into(tmp, ri, size, line)?;
                         tmp
                     };
@@ -1576,22 +1555,13 @@ impl Gen {
         rb: &'static str,
         line: usize,
     ) -> R<()> {
-        let (x, y) = (TEMPS[base], TEMPS.get(base + 1).copied().unwrap_or(""));
-        match (ra == x, rb == y) {
-            (true, true) => {}
-            (true, false) => {
-                let t = self.result_reg(base + 1, line)?;
-                self.emit(format!("mv    {t}, {rb}"));
-            }
-            _ => {
-                // ra is not a temporary, so rb is at base if anything.
-                self.depth = base;
-                let t0 = self.push(line)?;
-                let t1 = self.push(line)?;
-                self.emit(format!("mv    {t1}, {rb}"));
-                self.emit(format!("mv    {t0}, {ra}"));
-            }
-        }
+        // Fresh registers: the moves cost nothing once allocation joins
+        // them to their sources.
+        self.stack.truncate(base);
+        let t0 = self.push(line)?;
+        let t1 = self.push(line)?;
+        self.emit(format!("mv    {t1}, {rb}"));
+        self.emit(format!("mv    {t0}, {ra}"));
         Ok(())
     }
 
@@ -1692,7 +1662,7 @@ impl Gen {
                 Ok(Type::Trit)
             }
             _ => {
-                let base = self.depth;
+                let base = self.stack.len();
                 let (ta, mut ra) = self.operand(a, Some(b))?;
                 if let Some(k) = self.try_const(b)
                     && ta.numeric()
@@ -1711,7 +1681,7 @@ impl Gen {
                     }
                 }
                 if ta.is_ptr() && self.try_const(b).is_some() {
-                    if !is_temp(ra) {
+                    if !self.is_temp(ra) {
                         let t = self.result_reg(base, line)?;
                         self.emit(format!("mv    {t}, {ra}"));
                         ra = t;
@@ -1724,7 +1694,7 @@ impl Gen {
                 let plain = ["+", "-", "*", "/", "%", "<<", ">>", "&", "|"];
                 if ta.numeric() && tb.numeric() && plain.contains(&op) {
                     let rb = if op == ">>" {
-                        let n = if is_temp(rb) { rb } else { self.push(line)? };
+                        let n = if self.is_temp(rb) { rb } else { self.push(line)? };
                         self.emit(format!("neg   {n}, {rb}"));
                         n
                     } else {
@@ -1898,21 +1868,21 @@ impl Gen {
                 return Ok(local.ty);
             }
             if let Some(ty) = self.gp_global(l) {
-                let base = self.depth;
+                let base = self.stack.len();
                 let (t, mut v) = self.operand(r, None)?;
                 self.check_assign(&ty, &t, r)?;
-                if ty == Type::Trit && t != Type::Trit && !is_temp(v) && v != "zero" {
+                if ty == Type::Trit && t != Type::Trit && !self.is_temp(v) && v != "zero" {
                     let d = self.result_reg(base, line)?;
                     self.emit(format!("mv    {d}, {v}"));
                     v = d;
                 }
-                if is_temp(v) {
+                if self.is_temp(v) {
                     self.narrow(&ty, &t, v);
                 }
                 let op = if ty.size() == 1 { "st" } else { "sw" };
                 let ExprKind::Name(n) = &l.kind else { unreachable!() };
                 self.emit(format!("{op}    {v}, {n}"));
-                if !is_temp(v) {
+                if !self.is_temp(v) {
                     let d = self.result_reg(base, line)?;
                     self.emit(format!("mv    {d}, {v}"));
                 }
@@ -2265,7 +2235,7 @@ impl Gen {
         if args.len() > ARGS.len() {
             return self.long_call(name, args, &ret, params.as_deref().unwrap_or_default(), line);
         }
-        let base = self.depth;
+        let base = self.stack.len();
         let check = |g: &Self, i: usize, t: &Type, a: &Expr| match &params {
             Some(p) => g.check_assign(&p[i], t, a),
             None if *t == Type::Void => g.err(a.line, "sys takes values"),
@@ -2300,39 +2270,30 @@ impl Gen {
                 types[i] = t;
             }
         }
-        // Keep the temporaries an enclosing expression still needs.
-        if base > 0 {
-            self.emit(format!("addi  sp, sp, {}", -3 * base as i128));
-            for (i, t) in TEMPS.iter().enumerate().take(base) {
-                self.emit(format!("sw    {t}, {}(sp)", 3 * i));
-            }
-        }
-        let mut next = base;
-        for (i, a) in args.iter().enumerate() {
+        // The last argument first: a value moving down one register, as
+        // when a function passes its own parameters on shifted, then
+        // leaves its old register before that register is written.
+        for (i, a) in args.iter().enumerate().rev() {
+            let next = base + simple[..i].iter().filter(|s| !**s).count();
             if simple[i] {
                 types[i] = self.simple_into(a, ARGS[i])?;
                 check(self, i, &types[i], a)?;
             } else {
-                self.emit(format!("mv    {}, {}", ARGS[i], TEMPS[next]));
-                next += 1;
+                self.emit(format!("mv    {}, {}", ARGS[i], self.stack[next]));
             }
             // A tryte or trit argument travels cut to its type (abi.md 2.2).
             if let Some(p) = &params {
                 self.narrow(&p[i], &types[i], ARGS[i]);
             }
         }
+        // The argument count tells the allocator which registers the
+        // call reads; it is dropped from the output.
         if name == "sys" {
-            self.emit("sys");
+            self.emit(format!("sys   {}", args.len()));
         } else {
-            self.emit(format!("call  {name}"));
+            self.emit(format!("call  {name}, {}", args.len()));
         }
-        if base > 0 {
-            for (i, t) in TEMPS.iter().enumerate().take(base) {
-                self.emit(format!("lw    {t}, {}(sp)", 3 * i));
-            }
-            self.emit(format!("addi  sp, sp, {}", 3 * base));
-        }
-        self.depth = base;
+        self.stack.truncate(base);
         let r = self.push(line)?;
         if ret != Type::Void {
             self.emit(format!("mv    {r}, a0"));
@@ -2379,6 +2340,135 @@ fn used_functions(units: &[Unit]) -> Option<HashSet<String>> {
         }
     }
     Some(used)
+}
+
+/// The most instructions, besides copies, of a function copied into
+/// every caller; one called from a single place is copied whatever its
+/// size. A call costs about two (the call and, in a leaf, the frame for
+/// ra), so copying a function this small rarely makes the program bigger.
+const INLINE_MAX: usize = 4;
+
+/// How many calls each function used has in the functions used.
+fn call_sites(units: &[Unit], used: Option<&HashSet<String>>) -> HashMap<String, usize> {
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let mut sites = HashMap::new();
+    for unit in units {
+        match unit {
+            Unit::Item { item: Item::Func(f), .. } => {
+                if used.is_some_and(|u| !u.contains(&f.name)) {
+                    continue;
+                }
+                for s in f.body.iter().flatten() {
+                    stmt_calls(s, &mut |n| *sites.entry(n.to_string()).or_insert(0) += 1, &words);
+                }
+            }
+            Unit::Include { operands, .. } => {
+                for w in words(operands) {
+                    *sites.entry(w).or_insert(0) += 2;
+                }
+            }
+            Unit::Item { .. } => {}
+        }
+    }
+    sites
+}
+
+/// Leave out the functions that every caller got a copy of: those no
+/// other kept code, nor imported assembly, names any more.
+fn drop_inlined(
+    units: &[Unit],
+    code: Vec<String>,
+    ranges: Vec<(String, usize, usize)>,
+) -> Vec<String> {
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let mut gone = vec![false; ranges.len()];
+    loop {
+        let mut named: HashSet<String> = HashSet::new();
+        for unit in units {
+            if let Unit::Include { operands, .. } = unit {
+                named.extend(words(operands));
+            }
+        }
+        let mut owner = vec![None; code.len()];
+        for (k, (_, start, end)) in ranges.iter().enumerate() {
+            for o in owner.iter_mut().take(*end).skip(*start) {
+                *o = Some(k);
+            }
+        }
+        for (i, line) in code.iter().enumerate() {
+            if owner[i].is_some_and(|k| gone[k]) || line.trim_start().starts_with('#') {
+                continue;
+            }
+            let own = owner[i].map(|k| ranges[k].0.as_str());
+            named.extend(words(line).into_iter().filter(|w| Some(w.as_str()) != own));
+        }
+        let mut more = false;
+        for (k, (name, ..)) in ranges.iter().enumerate() {
+            if !gone[k] && name != "main" && !named.contains(name) {
+                gone[k] = true;
+                more = true;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    let mut drop = vec![false; code.len()];
+    for (k, (_, start, end)) in ranges.iter().enumerate() {
+        if gone[k] {
+            drop[*start..*end].iter_mut().for_each(|d| *d = true);
+        }
+    }
+    code.into_iter().zip(drop).filter_map(|(l, d)| (!d).then_some(l)).collect()
+}
+
+/// The data a program uses: the globals and strings its code or
+/// imported assembly names, and those their initialisers name.
+fn used_data(units: &[Unit], code: &[String], data: Vec<String>) -> Vec<String> {
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let mut named: HashSet<String> = HashSet::new();
+    for line in code {
+        if !line.trim_start().starts_with('#') {
+            named.extend(words(line));
+        }
+    }
+    for unit in units {
+        if let Unit::Include { operands, .. } = unit {
+            named.extend(words(operands));
+        }
+    }
+    let label = |entry: &String| entry.split(':').next().unwrap_or("").trim().to_string();
+    let mut keep = vec![false; data.len()];
+    loop {
+        let mut grew = false;
+        for (k, entry) in data.iter().enumerate() {
+            if !keep[k] && named.contains(&label(entry)) {
+                keep[k] = true;
+                grew = true;
+                let body = entry.split_once(':').map_or("", |(_, b)| b);
+                named.extend(words(body));
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    data.into_iter().zip(keep).filter_map(|(entry, k)| k.then_some(entry)).collect()
 }
 
 /// Report each name `s` calls, or names in an `asm` block.
@@ -2468,14 +2558,10 @@ impl Gen {
         params: &[Type],
         line: usize,
     ) -> R<Type> {
-        let base = self.depth;
         let n = args.len() as i128;
         let extra = n - ARGS.len() as i128;
-        let room = 3 * (base as i128 + n);
+        let room = 3 * n;
         self.emit(format!("addi  sp, sp, {}", -room));
-        for (i, t) in TEMPS.iter().enumerate().take(base) {
-            self.emit(format!("sw    {t}, {}(sp)", 3 * (n + i as i128)));
-        }
         let slot = |i: i128| if i < ARGS.len() as i128 { 3 * (extra + i) } else { 3 * (i - 6) };
         for (i, a) in args.iter().enumerate() {
             let t = self.expr(a)?;
@@ -2488,10 +2574,7 @@ impl Gen {
         for (i, reg) in ARGS.iter().enumerate() {
             self.emit(format!("lw    {reg}, {}(sp)", slot(i as i128)));
         }
-        self.emit(format!("call  {name}"));
-        for (i, t) in TEMPS.iter().enumerate().take(base) {
-            self.emit(format!("lw    {t}, {}(sp)", 3 * (n + i as i128)));
-        }
+        self.emit(format!("call  {name}, {}", ARGS.len()));
         self.emit(format!("addi  sp, sp, {room}"));
         let r = self.push(line)?;
         if *ret != Type::Void {
@@ -2604,10 +2687,6 @@ fn expr_addressed(e: &Expr, out: &mut HashSet<String>) {
         | ExprKind::Name(_)
         | ExprKind::SizeofType(_) => {}
     }
-}
-
-fn is_temp(r: &str) -> bool {
-    TEMPS.contains(&r)
 }
 
 fn pointee_size(t: &Type) -> i128 {
