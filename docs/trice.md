@@ -223,8 +223,8 @@ Each builtin is one instruction, or a few, and is named after it, so
 | `abs(x)`, `min(a, b)`, `max(a, b)` | `abs`, `min`, `max` |
 | `divr(a, b)`, `remr(a, b)` | division rounded to nearest, and its remainder (7.1) |
 | `tmul(a, b)`, `tsum(a, b)`, `tcons(a, b)`, `tany(a, b)`, `tabs(x)` | the named truth tables (7.5) |
-| `tlut(a, b, T)` | any two-input trit function; `T` a constant table |
-| `tex(x, pos, len)`, `tins(x, v, pos, len)` | a trit field, and `x` with one replaced; `pos` and `len` constant (7.3) |
+| `tlut(a, b, T)` | any two-input trit function; `T` a constant nine-trit table, −9,841 to 9,841 (7.5) |
+| `tex(x, pos, len)`, `tins(x, v, pos, len)` | a trit field, and `x` with one replaced; `pos` and `len` constant, `0 ≤ pos`, `1 ≤ len`, `pos + len ≤ 27` (7.3) |
 | `lzt(x)`, `tzt(x)`, `nzt(x)` | trit counts (7.4) |
 | `band(a, b)`, `bor(a, b)`, `bxor(a, b)`, `bsh(a, n)` | binary operations for binary data (7.6) |
 | `sys(a0, a1, a2, a3, a4, a5)` | puts its arguments, up to six, in `a0` onward, runs `sys`, gives `a0` |
@@ -234,6 +234,15 @@ operating system's. On trylobite `a0` is the call number and the result
 comes back in `a0`. The compiler takes it that a system call changes
 only `a0` to `a5` and leaves every other register as it was, as a trap
 handler that can resume a preempted program must.
+
+A `tlut` table reads best as a `0t` literal, entry 8 first, as in
+isa.md's table: `tlut(a, b, 0t+0-00----)` is `a & b`. `tins` gives a
+new value and leaves `x` as it was, so packing a word is a chain:
+
+```c
+int pack(int hi, int lo) { return tins(tins(0, lo, 0, 9), hi, 9, 9); }
+int hi_of(int w)         { return tex(w, 9, 9); }
+```
 
 ## 9. Diagnostics
 
@@ -312,5 +321,4 @@ Most of what remains is structure the hand-written programs leave out:
 the start code, layers of small library functions, and the saves a
 function owes its caller.
 
-Not in it yet, though specified above: `tlut`, `tex` and `tins`. A
-`which` arm must be within `br3`'s reach of 3,280 instructions.
+A `which` arm must be within `br3`'s reach of 3,280 instructions.
