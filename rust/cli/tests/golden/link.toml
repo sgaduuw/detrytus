@@ -188,13 +188,13 @@ stderr = ""
 stdout = """
 section text
             -1 .. 11            {here}/programs/link/start.s
-            11 .. 26            {here}/programs/link/main.tc main
-            26 .. 29            {here}/programs/link/sum.tc twice
+            11 .. 23            {here}/programs/link/main.tc main
+            23 .. 26            {here}/programs/link/sum.tc twice
 left out, unused
   {here}/programs/link/sum.tc thrice
 globals
             12  main  ({here}/programs/link/main.tc)
-            27  twice  ({here}/programs/link/sum.tc)
+            24  twice  ({here}/programs/link/sum.tc)
 """
 
 [[case]]

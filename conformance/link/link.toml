@@ -248,6 +248,28 @@ program = '''
 '''
 expect.exit_code = 5
 
+[[case]]
+name = "relaxing puts a call to another object in a slot"
+# Assembled alone, the call is the linker's to finish and stays a whole
+# word, and end is 8; relaxed, it shares a bundle with the addi, the li
+# and the sw share the next, and end is 5.
+objects = [
+'''
+        .compress
+start:  call  f
+        addi  a0, a0, end - start
+        li    t6, -39366
+        sw    a0, 0(t6)
+end:
+''',
+'''
+        .global f
+f:      li    a0, 0
+        ret
+''',
+]
+expect.exit_code = 5
+
 # --- what the linker refuses ------------------------------------------------
 
 [[case]]

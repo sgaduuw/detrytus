@@ -1284,3 +1284,29 @@ the gap had cheaper causes, fixed here before deciding on relaxation:
   What is left is calls into the library, which the linker finishes and
   so are not bundled, and library functions not copied into callers.
 
+### 2026-11-24 · Relaxing linked sources
+
+The owner chose to build relaxation for what the entry above left:
+calls into a library, which the linker finishes and so were never
+bundled. Choices:
+
+- **Relax by assembling again, not by moving code.** A linker that
+  shrinks code itself must know every branch and every `end - start`
+  inside a section, which objects settle as constants; recording them
+  all would change the format throughout. Instead `link`, given
+  sources, assembles them again with the addresses its first link
+  found, so the assembler pairs what would fit, and everything within
+  a section is laid out afresh by the assembler as always. Objects
+  given ready-made are linked as they are.
+- **The linker checks every slot.** Two relocation kinds, `slot.a` and
+  `slot.b`, put a value into a slot's full instruction and encode it
+  again. One that no longer fits where the program landed sends that
+  instruction (by file and line) back out of slots, and the sources are
+  assembled again; the set only grows, so this ends, as the
+  assembler's own pairing loop does. A success with new addresses tries
+  again while the program shrinks.
+- Linked wc is 933 trytes against 901 whole (957 before), grep 1,689
+  against 1,663, head 864 against 851; echo 147 and upper 360 are below
+  their whole builds. What is left is library functions not copied
+  into their callers.
+

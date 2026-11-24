@@ -83,10 +83,26 @@ another such value, divided or compared, or be checked by an `.assert`.
 Two addresses in the same section subtract to a constant, so `end -
 start` within a section works anywhere a number does.
 
-`li` of such a value always takes the long form (`lui` + `addi`), and
-an instruction the linker finishes is never put in a compressed bundle,
-neither by `.compress` nor by a `c.` mnemonic: whether it would fit a
-slot is not known until it is linked.
+`li` of such a value always takes the long form (`lui` + `addi`). An
+object made by `asm -c` never puts an instruction the linker finishes
+in a compressed bundle, neither by `.compress` nor by a `c.` mnemonic:
+whether it would fit a slot is not known until it is linked. `link`
+does better with the sources it assembles itself (Relaxing, below).
+
+### Relaxing
+
+Given sources (`.s` or `.tc`) rather than objects, `link` assembles
+each, links them, and then assembles them again knowing where that
+link put every section and global. With those addresses, automatic
+pairing under `.compress` may put a call, a branch, or an immediate
+that the linker finishes in a slot, when its value would fit one. The
+linker writes the value into the slot's full instruction and checks
+that it still fits a slot where the program really landed; if one does
+not, that instruction is kept out of slots and the sources are
+assembled again. Bundles shrink the code, so the addresses change, and
+`link` repeats while the program keeps getting smaller. Objects given
+ready-made are linked as they are, and a `c.` mnemonic written by hand
+still cannot take a value the linker finishes.
 
 ## How the linker places sections
 
@@ -158,6 +174,7 @@ value goes:
 | `branch.FIELD` | the value less ADDR, in words, in FIELD (`off`, `offn`, `offp` or `imm`) | branches, `br3`, `jal` |
 | `pair` | split over the `lui` at ADDR and the `addi` after it | `li` |
 | `pcpair` | the value less ADDR, split over the `auipc` at ADDR and the `addi` after it | `la` |
+| `slot.a.KIND`, `slot.b.KIND` | as KIND (`imm` or `branch.FIELD`), in the full instruction in slot A or B of the bundle at ADDR, which is then encoded in its slot again; a branch counts from the bundle | instructions relaxing put in a slot |
 
 A pair splits its value as `li` and `la` do: the low 8 trits, balanced,
 in the `addi`, and the rest in the first instruction, so neither part

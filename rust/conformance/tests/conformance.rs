@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use detrytus_asm::link::Input;
 use detrytus_asm::{AsmError, assemble, assemble_object};
 use detrytus_core::block::MemoryDisk;
 use detrytus_core::bus::Access;
@@ -244,14 +245,17 @@ fn build(case: &Case) -> Result<Vec<(i64, i64)>, Failed> {
     match &case.program {
         // Named after the case and their place in its list.
         Program::Objects(texts) => {
-            let mut objects = Vec::new();
+            // Assembled first for the assembler's errors, then linked
+            // as sources, so the linker relaxes them.
+            let mut inputs = Vec::new();
             for (k, text) in texts.iter().enumerate() {
                 let file = case.id.split("::").next().unwrap_or_default();
                 let name = format!("{file}.toml [{}] #{}", case.name, k + 1);
-                let (object, _) = assemble_object(text, Some(&name)).map_err(Failed::Asm)?;
-                objects.push((format!("#{}", k + 1), object));
+                assemble_object(text, Some(&name)).map_err(Failed::Asm)?;
+                let source = Input::Source { text: text.clone(), file: name };
+                inputs.push((format!("#{}", k + 1), source));
             }
-            let linked = detrytus_asm::link::link(&objects).map_err(Failed::Link)?;
+            let linked = detrytus_asm::link::link_inputs(&inputs).map_err(Failed::Link)?;
             Ok(linked.image.trytes.into_iter().collect())
         }
         // Named after the case, beside its file, as the Python runner does.

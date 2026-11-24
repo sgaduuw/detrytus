@@ -17,5 +17,5 @@ pub mod slots;
 pub mod source;
 pub mod text;
 
-pub use assembler::{Image, Listing, assemble, assemble_object};
+pub use assembler::{Image, Listing, Relax, assemble, assemble_object, assemble_object_relaxed};
 pub use error::AsmError;

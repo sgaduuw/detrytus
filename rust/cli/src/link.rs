@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use crate::program::{link, load_object, strerror};
+use crate::program::{link_inputs, load_input, strerror};
 use crate::{Fail, NO_INPUT, usage};
 
 pub(crate) fn cmd_link(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
@@ -24,11 +24,11 @@ pub(crate) fn cmd_link(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     if files.is_empty() {
         return Err(usage("link needs a file"));
     }
-    let mut objects = Vec::new();
+    let mut inputs = Vec::new();
     for file in &files {
-        objects.push((file.clone(), load_object(file)?.0));
+        inputs.push((file.clone(), load_input(file)?));
     }
-    let linked = link(&objects)?;
+    let linked = link_inputs(&inputs)?;
     if let Some(out) = &output {
         std::fs::write(out, linked.image.to_bytes())
             .map_err(|e| Fail::new(format!("{out}: {}", strerror(&e)), NO_INPUT))?;
