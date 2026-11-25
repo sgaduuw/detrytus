@@ -360,6 +360,14 @@ fn apply_suffix(op: &Op, suffix: &str, fields: &mut Fields) -> Result<(), Operan
         "unlikely" => Some(-1),
         _ => None,
     };
+    let rounding = isa::ROUNDING_SUFFIXES.iter().find(|(s, _)| *s == suffix).map(|(_, v)| *v);
+    if op.rounds() {
+        let Some(mode) = rounding else {
+            return fail(format!("{} takes no suffix .{suffix}", op.name));
+        };
+        fields.set("fn", mode as Value);
+        return Ok(());
+    }
     match (op.atomic(), op.format, ordering, hint_t, hint_b) {
         (true, _, Some(o), _, _) => fields.set("rs3", o),
         (_, Format::T, _, Some(h), _) => fields.set("hint", h),

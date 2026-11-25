@@ -1,0 +1,351 @@
+# Floating point (docs/isa.md 7.11). Each program leaves its answer in
+# a0, usually converted back to an integer, and the postlude powers off
+# with it. fcsr's flags are trits 4..0: invalid 81, divide-by-zero 27,
+# overflow 9, underflow 3, inexact 1.
+
+[defaults]
+postlude = '''
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+
+[[case]]
+name = "fadd of converted integers"
+program = '''
+        li    a1, 3
+        li    a2, 4
+        fcvt.f.i a1, a1
+        fcvt.f.i a2, a2
+        fadd  a0, a1, a2
+        fcvt.i.f a0, a0
+'''
+expect.exit_code = 7
+expect.csrs = { fcsr = 0 }
+
+[[case]]
+name = "1.0 is 3^20 in the significand and exponent 0"
+program = "li a1, 1\nfcvt.f.i a0, a1"
+expect.exit_code = 3486784401
+
+[[case]]
+name = "fsub from zero negates"
+program = '''
+        la    t5, x
+        lw    a1, 0(t5)
+        fsub  a2, zero, a1
+        fcvt.i.f a0, a2
+        j     done
+x:      .float 12
+done:
+'''
+expect.exit_code = -12
+
+[[case]]
+name = "a third is exact in ternary"
+program = '''
+        la    t5, one
+        lw    a1, 0(t5)
+        la    t5, three
+        lw    a2, 0(t5)
+        fdiv  a3, a1, a2
+        fmul  a3, a3, a2
+        feq   a0, a3, a1
+        j     done
+one:    .float 1
+three:  .float 3
+done:
+'''
+expect.exit_code = 1
+expect.csrs = { fcsr = 0 }
+
+[[case]]
+name = "a tenth is not, and raises inexact"
+program = '''
+        la    t5, one
+        lw    a1, 0(t5)
+        la    t5, ten
+        lw    a2, 0(t5)
+        fdiv  a0, a1, a2
+        csrr  a0, fcsr
+        j     done
+one:    .float 1
+ten:    .float 10
+done:
+'''
+expect.exit_code = 1
+
+[[case]]
+name = "fdiv ties go toward zero: seven halves is stored just under 3.5"
+program = '''
+        li    a1, 7
+        li    a2, 2
+        fcvt.f.i a1, a1
+        fcvt.f.i a2, a2
+        fdiv  a3, a1, a2
+        fcvt.i.f a0, a3
+'''
+expect.exit_code = 3
+
+[[case]]
+name = "rounding upward gives the place above"
+program = '''
+        li    a1, 7
+        li    a2, 2
+        fcvt.f.i a1, a1
+        fcvt.f.i a2, a2
+        fdiv.rup a3, a1, a2
+        fcvt.i.f a0, a3
+'''
+expect.exit_code = 4
+
+[[case]]
+name = "fcvt.i.f rounding modes"
+program = '''
+        la    t5, x
+        lw    a1, 0(t5)
+        fcvt.i.f     a2, a1
+        fcvt.i.f.rup a3, a1
+        fcvt.i.f.rdn a4, a1
+        fcvt.i.f.rtz a5, a1
+        li    a0, 0
+        j     done
+x:      .float -2.75
+done:
+'''
+expect.exit_code = 0
+expect.registers = { a2 = -3, a3 = -2, a4 = -3, a5 = -2 }
+
+[[case]]
+name = "the dynamic rounding mode comes from fcsr"
+program = '''
+        li    t0, 243           # trits 6..5 = +1: toward +∞
+        csrw  fcsr, t0
+        la    t5, x
+        lw    a1, 0(t5)
+        fcvt.i.f.dyn a0, a1
+        j     done
+x:      .float 2.25
+done:
+'''
+expect.exit_code = 3
+expect.csrs = { fcsr = 244 }
+
+[[case]]
+name = "a reserved dynamic mode is an illegal instruction"
+prelude = ""
+program = '''
+        li    t0, 486           # trits 6..5 = +, −: 2, reserved
+        csrw  fcsr, t0
+        fadd.dyn a0, a0, a0
+'''
+expect.unhandled_cause = 1
+
+[[case]]
+name = "a reserved rounding mode in fn is illegal"
+prelude = ""
+program = ".word 258280366       # fadd with fn = 2"
+expect.unhandled_cause = 1
+
+[[case]]
+name = "fsqrt"
+program = '''
+        la    t5, x
+        lw    a1, 0(t5)
+        fsqrt a2, a1
+        fcvt.i.f a0, a2
+        j     done
+x:      .float 2.25e4
+done:
+'''
+expect.exit_code = 150
+expect.csrs = { fcsr = 0 }
+
+[[case]]
+name = "fma rounds once"
+program = '''
+        la    t5, fa
+        lw    a1, 0(t5)
+        la    t5, fb
+        lw    a2, 0(t5)
+        la    t5, fc
+        lw    a3, 0(t5)
+        fma   a4, a1, a2, a3    # (1 + 3^-15)(1 - 3^-15) - 1 = -3^-30
+        fmul  a5, a1, a2        # rounds to 1.0
+        fadd  a5, a5, a3        # 1.0 - 1.0
+        fclass a0, a4
+        j     done
+fa:     .float 1.00000006969172
+fb:     .float 0.99999993030828
+fc:     .float -1
+done:
+'''
+expect.exit_code = -3
+expect.registers = { a5 = 0 }
+
+[[case]]
+name = "divide by zero gives an infinity and the flag"
+program = '''
+        li    a1, -5
+        fcvt.f.i a1, a1
+        fdiv  a2, a1, zero
+        fclass a0, a2
+        csrr  a3, fcsr
+'''
+expect.exit_code = -4
+expect.registers = { a3 = 27 }
+
+[[case]]
+name = "zero over zero is NaN and invalid"
+program = '''
+        fdiv  a2, zero, zero
+        fclass a0, a2
+        csrr  a3, fcsr
+'''
+expect.exit_code = 1
+expect.registers = { a3 = 81 }
+
+[[case]]
+name = "comparisons with a NaN are unknown; flt signals, feq does not"
+program = '''
+        fdiv  a1, zero, zero
+        li    a2, 1
+        fcvt.f.i a2, a2
+        feq   a3, a1, a2
+        csrr  a4, fcsr
+        flt   a5, a1, a2
+        csrr  t1, fcsr
+        fle   a0, a2, a2
+'''
+expect.exit_code = 1
+expect.registers = { a3 = 0, a4 = 81, a5 = 0, t1 = 81 }
+
+[[case]]
+name = "flt and fle"
+program = '''
+        la    t5, x
+        lw    a1, 0(t5)
+        la    t5, y
+        lw    a2, 0(t5)
+        flt   a3, a1, a2
+        flt   a4, a2, a1
+        fle   a5, a1, a1
+        li    a0, 0
+        j     done
+x:      .float -1.5
+y:      .float 0.25
+done:
+'''
+expect.exit_code = 0
+expect.registers = { a3 = 1, a4 = -1, a5 = 1 }
+
+[[case]]
+name = "fcmp orders NaNs above infinity"
+program = '''
+        fdiv  a1, zero, zero
+        la    t5, inf
+        lw    a2, 0(t5)
+        fcmp  a0, a1, a2
+        csrr  a3, fcsr
+        j     done
+inf:    .float inf
+done:
+'''
+expect.exit_code = 1
+expect.registers = { a3 = 81 }
+
+[[case]]
+name = "fmin and fmax ignore a NaN"
+program = '''
+        fdiv  a1, zero, zero
+        la    t5, x
+        lw    a2, 0(t5)
+        fmin  a3, a1, a2
+        fmax  a4, a2, a1
+        fcvt.i.f a3, a3
+        fcvt.i.f a4, a4
+        la    t5, y
+        lw    a5, 0(t5)
+        fmin  a5, a5, a2
+        fcvt.i.f a0, a5
+        j     done
+x:      .float 6
+y:      .float -9
+done:
+'''
+expect.exit_code = -9
+expect.registers = { a3 = 6, a4 = 6 }
+
+[[case]]
+name = "fclass"
+program = '''
+        la    t5, tiny
+        lw    a1, 0(t5)
+        fclass a2, a1
+        la    t5, big
+        lw    a1, 0(t5)
+        fclass a3, a1
+        fclass a4, zero
+        li    a0, 0
+        j     done
+tiny:   .float 1e-175
+big:    .float -1e170
+done:
+'''
+expect.exit_code = 0
+expect.registers = { a2 = 2, a3 = -3, a4 = 0 }
+
+[[case]]
+name = "out of range conversions saturate and raise invalid"
+program = '''
+        la    t5, x
+        lw    a1, 0(t5)
+        fcvt.i.f a0, a1
+        csrr  a2, fcsr
+        j     done
+x:      .float 1e30
+done:
+'''
+expect.exit_code = 3812798742493
+expect.registers = { a2 = 81 }
+
+[[case]]
+name = "overflow"
+program = '''
+        la    t5, x
+        lw    a1, 0(t5)
+        fmul  a2, a1, a1
+        fclass a0, a2
+        csrr  a3, fcsr
+        j     done
+x:      .float 1e100
+done:
+'''
+expect.exit_code = 4
+expect.registers = { a3 = 10 }
+
+[[case]]
+name = "underflow"
+program = '''
+        la    t5, x
+        lw    a1, 0(t5)
+        fmul  a2, a1, a1
+        fclass a0, a2
+        csrr  a3, fcsr
+        j     done
+x:      .float 1e-100
+done:
+'''
+expect.exit_code = 0
+expect.registers = { a3 = 4 }
+
+[[case]]
+name = "csrrtmin clears the flags and keeps the rounding mode"
+program = '''
+        li    t0, 243
+        csrw  fcsr, t0
+        fdiv  a1, zero, zero
+        li    t0, 3812798742372 # trits 4..0 zero, the rest +
+        csrrtmin zero, fcsr, t0
+        csrr  a0, fcsr
+'''
+expect.exit_code = 243

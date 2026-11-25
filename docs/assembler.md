@@ -55,6 +55,7 @@ reset address.
 | `.align K` | place the next word centred on a multiple of 3^K |
 | `.balign N` | place the next tryte at a multiple of N (binary data, rust.md); not in a section the linker places |
 | `.word E, ...` | one word per expression |
+| `.float X, ...` | one float per decimal literal (`-1.5e-3`, `inf`, `-inf`, `nan`), rounded once to nearest (isa.md 7.11) |
 | `.tryte E, ...` | one tryte per expression |
 | `.string "..."` | one code point per tryte, then a 0 tryte |
 | `.ascii "..."` | the same without the terminator |
@@ -189,6 +190,7 @@ and link them ([`linker.md`](linker.md)).
 | `.likely` / `.unlikely` | `b<cond>` | static prediction hint |
 | `.n` / `.z` / `.p` | `br3` | predicted sign |
 | `.aq` / `.rl` / `.aqrl` | atomics | memory ordering |
+| `.rup` / `.rdn` / `.rtz` / `.dyn` | float arithmetic and conversions | round toward +∞, toward −∞, toward zero, or by `fcsr`; none is nearest |
 
 ## Pseudo-instructions
 

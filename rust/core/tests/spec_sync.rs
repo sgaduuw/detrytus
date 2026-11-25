@@ -49,8 +49,6 @@ fn every_spec_instruction_matches_the_table() {
     let mut spec = spec_opcodes(&spec());
     // The branch-condition table has rows like "| 0 | `beq` |".
     spec.retain(|name, _| !["beq", "bne", "bgt", "blt", "bge", "ble"].contains(&name.as_str()));
-    // Floating point is specified but not implemented yet.
-    spec.retain(|name, v| !(name.starts_with('f') && (40..=54).contains(v)));
     assert!(spec.len() > 50, "the spec parser found too few rows: {}", spec.len());
     let table: BTreeMap<String, i64> =
         OPS.iter().filter(|op| op.name != "b").map(|op| (op.name.to_string(), op.opcode)).collect();

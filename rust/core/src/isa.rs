@@ -82,6 +82,21 @@ pub enum Kind {
     Cclean,
     Cflush,
     Cinval,
+    Fadd,
+    Fsub,
+    Fmul,
+    Fdiv,
+    Fsqrt,
+    Fma,
+    Fmin,
+    Fmax,
+    Fcmp,
+    Fclass,
+    FcvtFI,
+    FcvtIF,
+    Feq,
+    Flt,
+    Fle,
 }
 
 /// One instruction: its mnemonic, opcode, format and operand syntax.
@@ -105,6 +120,12 @@ impl Op {
 
     pub fn atomic(&self) -> bool {
         (-27..=-20).contains(&self.opcode)
+    }
+
+    /// Floating point arithmetic and conversions, which take a rounding
+    /// mode in `fn[1:0]` (7.11).
+    pub fn rounds(&self) -> bool {
+        (40..=45).contains(&self.opcode) || self.opcode == 50 || self.opcode == 51
     }
 }
 
@@ -179,6 +200,22 @@ pub const OPS: &[Op] = &[
     op(Kind::Jalr, "jalr", -11, I, "d,m"),
     op(Kind::B, "b", -12, FB, "s,t,L"),
     op(Kind::Br3, "br3", -13, T, "s,N,P"),
+    // 7.11 floating point
+    op(Kind::Fadd, "fadd", 40, R, "d,s,t"),
+    op(Kind::Fsub, "fsub", 41, R, "d,s,t"),
+    op(Kind::Fmul, "fmul", 42, R, "d,s,t"),
+    op(Kind::Fdiv, "fdiv", 43, R, "d,s,t"),
+    op(Kind::Fsqrt, "fsqrt", 44, R, "d,s"),
+    op(Kind::Fma, "fma", 45, R, "d,s,t,u"),
+    op(Kind::Fmin, "fmin", 46, R, "d,s,t"),
+    op(Kind::Fmax, "fmax", 47, R, "d,s,t"),
+    op(Kind::Fcmp, "fcmp", 48, R, "d,s,t"),
+    op(Kind::Fclass, "fclass", 49, R, "d,s"),
+    op(Kind::FcvtFI, "fcvt.f.i", 50, R, "d,s"),
+    op(Kind::FcvtIF, "fcvt.i.f", 51, R, "d,s"),
+    op(Kind::Feq, "feq", 52, R, "d,s,t"),
+    op(Kind::Flt, "flt", 53, R, "d,s,t"),
+    op(Kind::Fle, "fle", 54, R, "d,s,t"),
     // 7.12 system
     op(Kind::Sys, "sys", -30, I, ""),
     op(Kind::Tret, "tret", -31, I, ""),
@@ -582,8 +619,25 @@ fn check_r(d: &Decoded) -> Result<(), Illegal> {
     } else {
         zero(d.rs3, op.has("u"), "rs3")?;
     }
-    if op.has("x") { zero(field(d.fn_, 9, 1), false, "fn[9]") } else { zero(d.fn_, false, "fn") }
+    if op.has("x") {
+        zero(field(d.fn_, 9, 1), false, "fn[9]")
+    } else if op.rounds() {
+        zero(d.fn_ - low(d.fn_, 2), false, "fn above the rounding mode")?;
+        if !ROUNDING_MODES.contains(&low(d.fn_, 2)) {
+            return Err(Illegal(format!("reserved rounding mode {}", low(d.fn_, 2))));
+        }
+        Ok(())
+    } else {
+        zero(d.fn_, false, "fn")
+    }
 }
+
+/// The rounding modes `fn[1:0]` may name (7.11): nearest, toward +∞,
+/// toward −∞, toward zero, dynamic.
+pub const ROUNDING_MODES: [i64; 5] = [0, 1, -1, 3, -3];
+
+/// Assembler suffixes for the rounding modes other than nearest.
+pub const ROUNDING_SUFFIXES: [(&str, i64); 4] = [("rup", 1), ("rdn", -1), ("rtz", 3), ("dyn", -3)];
 
 fn check_i(d: &Decoded) -> Result<(), Illegal> {
     let op = d.op;
