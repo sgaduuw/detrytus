@@ -309,7 +309,7 @@ one word.
 | F−3, F | B_LO, B_HI | rw | operand B |
 | F+3, F+6 | C_LO, C_HI | rw | operand C (`FPU_FMA` only) |
 | F+9 | OP | wo | computes the operation written from A, B and C into R at once; other values are ignored |
-| F+12, F+15 | R_LO, R_HI | ro | the result |
+| F+12, F+15 | R_LO, R_HI | rw | the result; writable so that a kernel can restore a bank |
 
 - **Values are bits.** A binary32 value or a 32-bit integer is one
   word, LO, holding the bit pattern as a number from 0 to 2³² − 1; HI
@@ -350,7 +350,8 @@ one word.
   binary64 add is four stores of operands, one of OP and two loads.
 - **Context switches.** A bank is state like registers: a kernel that
   lets several processes use the coprocessor saves and restores A, B,
-  C and R when it switches between them.
+  C and R, eight words, when it switches between them, since a process
+  can be interrupted between writing OP and reading R.
 
 ## Emulator behaviour outside the ISA
 

@@ -212,6 +212,9 @@ impl Fpu {
             B_HI => bank.b[1] = value,
             C_LO => bank.c[0] = value,
             C_HI => bank.c[1] = value,
+            // Writable so that a kernel can restore a bank.
+            R_LO => bank.r[0] = value,
+            R_HI => bank.r[1] = value,
             OP => {
                 let r = if value < 0 { single(-value, bank) } else { double(value, bank) };
                 if let Some(r) = r {
@@ -294,6 +297,8 @@ mod tests {
         assert_eq!(fpu.read(fpu_addr(A_LO), 0), 5);
         assert_eq!(fpu.read(fpu_addr(A_LO), 1), 6);
         assert_eq!(fpu.read(fpu_addr(PRESENT), 7), FPU_VERSION);
+        fpu.write(fpu_addr(R_HI), 0, 77);
+        assert_eq!(fpu.read(fpu_addr(R_HI), 0), 77, "R is writable, for a kernel's restore");
         // An unknown operation leaves R alone.
         fpu.write(fpu_addr(OP), 0, -FPU_FROM_I32);
         fpu.write(fpu_addr(OP), 0, 99);
