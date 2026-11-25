@@ -49,6 +49,8 @@ pub extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
         check(b"sdiv", (c / d) as u32, (-7i32 / 3) as u32);
         check(b"srem", (c % d) as u32, (-7i32 % 3) as u32);
         check(b"shl", a << s, 0xDEAD_BEEFu32 << 5);
+        check(b"shl 20", a << 20, 0xDEAD_BEEFu32 << 20);
+        check(b"shl 27", a << (s + 22), 0xDEAD_BEEFu32 << 27);
         check(b"lshr", a >> s, 0xDEAD_BEEFu32 >> 5);
         check(b"ashr", (c >> (s - 4)) as u32, (-7i32 >> 1) as u32);
         check(b"and", a & b, 0xDEAD_BEEF & 0x1234_5678);

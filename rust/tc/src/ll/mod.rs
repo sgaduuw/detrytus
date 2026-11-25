@@ -129,6 +129,16 @@ fn translate_module(m: &ir::Module, shown: &str, includes: &[String]) -> Result<
     }
     let mut low = lower::Lower::new(m);
     let (funcs, globals, external) = low.reachable(&["main"]);
+    let muls = funcs
+        .iter()
+        .flat_map(|f| &m.funcs[f].blocks)
+        .flat_map(|b| &b.instrs)
+        .filter(|i| {
+            matches!(&i.op, ir::Op::Bin { op, ty: ir::Ty::Int(64), a, b, .. }
+                if op == "mul" && matches!(a, ir::Val::Local(_)) && matches!(b, ir::Val::Local(_)))
+        })
+        .count();
+    low.mul_helper = muls > 1;
     let mut out =
         vec![format!("# Translated by detrytus ll from {shown}: docs/rust.md, docs/abi.md.")];
     for i in includes {
@@ -142,6 +152,21 @@ fn translate_module(m: &ir::Module, shown: &str, includes: &[String]) -> Result<
     for f in &funcs {
         out.extend(low.function(&m.funcs[f])?);
     }
+    out.push(String::new());
+    // The 64-bit helper functions used, and those they use.
+    if !low.wide_calls.is_empty() {
+        let mut hm = ir::Module::default();
+        ir::parse(lower::WIDE_IR, "lower/wide.ll", 0, &mut hm)?;
+        let roots: Vec<&str> = low.wide_calls.iter().copied().collect();
+        let mut wl = lower::Lower::new(&hm);
+        wl.inline_wide = true;
+        let (hfuncs, _, _) = wl.reachable(&roots);
+        for f in &hfuncs {
+            out.extend(wl.function(&hm.funcs[f])?);
+        }
+        low.helpers.extend(wl.helpers.iter().copied());
+    }
+    out.extend(lower::helpers(&low.helpers));
     out.push(String::new());
     for g in &globals {
         out.extend(low.global(&m.globals[g])?);

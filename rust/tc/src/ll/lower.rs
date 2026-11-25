@@ -7,13 +7,14 @@
 //! holding 0..255, and wider values are stored little-endian, a byte a
 //! tryte, as LLVM's layout for a 32-bit target expects.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::ir::*;
 use crate::Error;
 use crate::alloc;
 
 mod wide;
+pub use wide::WIDE_IR;
 
 const ARGS: [&str; 6] = ["a0", "a1", "a2", "a3", "a4", "a5"];
 
@@ -23,6 +24,9 @@ const MAX_BITS: u32 = 32;
 const WIDE_BITS: u32 = 64;
 /// 2^32 - 1, the mask of a low half.
 const M32: i128 = (1 << 32) - 1;
+/// How many times a function makes a large constant before it is made
+/// once, at the start, instead (`share_constants`).
+const SHARE_AT: usize = 4;
 
 type R<T> = Result<T, String>;
 
@@ -59,6 +63,60 @@ pub struct Lower<'m> {
     /// Allocas that ask for an alignment, by their offset from a base
     /// register made aligned at the function's start.
     aligned: HashMap<String, (&'static str, i128)>,
+    /// The load and store helpers the program uses (`HELPERS`).
+    pub helpers: BTreeSet<&'static str>,
+    /// The 64-bit helper functions it calls (lower/wide.ll).
+    pub wide_calls: BTreeSet<&'static str>,
+    /// Lowering those helpers themselves: their operations in line.
+    pub inline_wide: bool,
+    /// The value of each register made by `li`, for folding.
+    konst: HashMap<&'static str, i128>,
+    /// Whether a 64-bit multiply goes to the helper: when the program
+    /// has more than one, so that the helper costs less than copies.
+    pub mul_helper: bool,
+}
+
+/// Helpers that load or store a 2- or 4-byte value, a byte a tryte, low
+/// byte first: called with `jal t6`, the address in t5 and the value in
+/// t4, changing only t2..t6 (alloc.rs, `hload` and `hstore`). One call
+/// takes the place of up to eleven instructions at every load or store.
+const HELPERS: [(&str, &str); 4] = [
+    (
+        "ll$ld2",
+        "lt    t4, 1(t5)\nli    t3, 256\nmul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2",
+    ),
+    (
+        "ll$ld4",
+        "lt    t4, 3(t5)\nli    t3, 256\nmul   t4, t4, t3\nlt    t2, 2(t5)\nadd   t4, t4, t2\n\
+         mul   t4, t4, t3\nlt    t2, 1(t5)\nadd   t4, t4, t2\n\
+         mul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2",
+    ),
+    (
+        "ll$st2",
+        "li    t3, 256\nrem   t2, t4, t3\nst    t2, 0(t5)\ndiv   t4, t4, t3\nst    t4, 1(t5)",
+    ),
+    (
+        "ll$st4",
+        "li    t3, 256\nrem   t2, t4, t3\nst    t2, 0(t5)\ndiv   t4, t4, t3\n\
+         rem   t2, t4, t3\nst    t2, 1(t5)\ndiv   t4, t4, t3\n\
+         rem   t2, t4, t3\nst    t2, 2(t5)\ndiv   t4, t4, t3\nst    t4, 3(t5)",
+    ),
+];
+
+/// The assembly of the helpers in `used`.
+pub fn helpers(used: &BTreeSet<&'static str>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (name, body) in HELPERS {
+        if used.contains(name) {
+            out.push(String::new());
+            out.push(format!("{name}:"));
+            for l in body.lines() {
+                out.push(format!("        {}", l.trim()));
+            }
+            out.push("        jalr  zero, 0(t6)".into());
+        }
+    }
+    out
 }
 
 fn mask(bits: u32) -> i128 {
@@ -230,6 +288,11 @@ impl<'m> Lower<'m> {
             fused: HashMap::new(),
             stubs: Vec::new(),
             aligned: HashMap::new(),
+            helpers: BTreeSet::new(),
+            wide_calls: BTreeSet::new(),
+            inline_wide: false,
+            mul_helper: false,
+            konst: HashMap::new(),
             stub_labels: HashMap::new(),
             local_labels: 0,
             block: String::new(),
@@ -437,7 +500,45 @@ impl<'m> Lower<'m> {
         }
         let r = self.vreg();
         self.emit(format!("li    {r}, {v}"));
+        self.konst.insert(r, v);
         r
+    }
+
+    /// Large constants (beyond an `addi`, so two instructions each) that
+    /// the code makes more than once, made once at the start instead,
+    /// in a register of their own; mostly the masks that wrap 32-bit
+    /// results. Returns the code with them taken out of it.
+    fn share_constants(&mut self, code: Vec<String>) -> Vec<String> {
+        let big = |v: i128| !(-265_720..=265_720).contains(&v);
+        let mut count: BTreeMap<i128, usize> = BTreeMap::new();
+        let parse = |l: &str| -> Option<(String, i128)> {
+            let rest = l.trim().strip_prefix("li    ")?;
+            let (r, v) = rest.split_once(", ")?;
+            Some((r.to_string(), v.parse().ok()?))
+        };
+        for l in &code {
+            if let Some((_, v)) = parse(l)
+                && big(v)
+            {
+                *count.entry(v).or_default() += 1;
+            }
+        }
+        let mut shared: BTreeMap<i128, &'static str> = BTreeMap::new();
+        for (v, n) in count {
+            if n >= SHARE_AT {
+                let r = self.vreg();
+                self.emit(format!("li    {r}, {v}"));
+                shared.insert(v, r);
+            }
+        }
+        code.into_iter()
+            .map(|l| match parse(&l) {
+                Some((r, v)) if shared.contains_key(&v) => {
+                    format!("        mv    {r}, {}", shared[&v])
+                }
+                _ => l,
+            })
+            .collect()
     }
 
     /// Wrap `r` in place to `bits` bits.
@@ -450,6 +551,9 @@ impl<'m> Lower<'m> {
     fn signed(&mut self, r: &'static str, bits: u32) -> &'static str {
         if r == "zero" {
             return r;
+        }
+        if let Some(&v) = self.konst.get(r) {
+            return self.li(Self::as_signed(v, bits));
         }
         let h = self.li(1i128 << (bits - 1));
         let d = self.vreg();
@@ -639,10 +743,28 @@ impl<'m> Lower<'m> {
 
     // --- memory ----------------------------------------------------------
 
+    /// The address `off(base)` into t5, for a helper.
+    fn helper_address(&mut self, base: &str, off: i128) {
+        if off == 0 {
+            self.emit(format!("mv    t5, {base}"));
+        } else {
+            self.emit(format!("addi  t5, {base}, {off}"));
+        }
+    }
+
     fn load_scalar(&mut self, t: &Ty, base: &str, off: i128) -> R<&'static str> {
         let bytes = self.size(t)? as i128;
         if bytes > 4 {
             return Err(format!("{}-byte values are not supported yet", bytes));
+        }
+        if bytes == 2 || bytes == 4 {
+            let name = if bytes == 2 { "ll$ld2" } else { "ll$ld4" };
+            self.helper_address(base, off);
+            self.emit(format!("hload {name}"));
+            self.helpers.insert(name);
+            let d = self.vreg();
+            self.emit(format!("mv    {d}, t4"));
+            return Ok(d);
         }
         let d = self.vreg();
         self.emit(format!("lt    {d}, {}({base})", off + bytes - 1));
@@ -667,6 +789,14 @@ impl<'m> Lower<'m> {
             for k in 0..bytes {
                 self.emit(format!("st    {v}, {}({base})", off + k));
             }
+            return Ok(());
+        }
+        if bytes == 2 || bytes == 4 {
+            let name = if bytes == 2 { "ll$st2" } else { "ll$st4" };
+            self.emit(format!("mv    t4, {v}"));
+            self.helper_address(base, off);
+            self.emit(format!("hstore {name}"));
+            self.helpers.insert(name);
             return Ok(());
         }
         let m = self.li(255);
@@ -714,13 +844,30 @@ impl<'m> Lower<'m> {
                 self.wrap(d, bits);
                 d
             }
-            "shl" => {
-                let d = self.op3("bsh", ra, rb);
-                if !nuw {
-                    self.wrap(d, bits);
+            // A word holds about 41 bits, so the bits that a shift would
+            // push past `bits` go first: (x mod 2^(bits - k)) << k.
+            "shl" if nuw => self.op3("bsh", ra, rb),
+            "shl" => match b {
+                Val::Const(c) if self.const_int(c, t)?.is_some() => {
+                    let k = self.const_int(c, t)?.unwrap_or(0).min(bits as i128);
+                    let m = self.li(mask(bits - k as u32));
+                    let low = self.op3("band", ra, m);
+                    self.op3("bsh", low, rb)
                 }
-                d
-            }
+                _ if bits <= 20 => {
+                    let d = self.op3("bsh", ra, rb);
+                    self.wrap(d, bits);
+                    d
+                }
+                _ => {
+                    let w = self.li(bits as i128);
+                    let room = self.op3("sub", w, rb);
+                    let one = self.li(1);
+                    let unit = self.op3("bsh", one, room);
+                    let low = self.op3("rem", ra, unit);
+                    self.op3("bsh", low, rb)
+                }
+            },
             "lshr" | "ashr" => {
                 let n = match b {
                     Val::Const(c) if self.const_int(c, t)?.is_some() => {
@@ -1524,7 +1671,9 @@ impl<'m> Lower<'m> {
             code[k] = std::mem::take(&mut self.body);
         }
         self.body = start;
-        self.body.extend(code.into_iter().flatten());
+        let blocks: Vec<String> = code.into_iter().flatten().collect();
+        let blocks = self.share_constants(blocks);
+        self.body.extend(blocks);
         let ret = format!("        j     {}$ret", self.fsym);
         if self.body.last() == Some(&ret) {
             self.body.pop();

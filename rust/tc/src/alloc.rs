@@ -172,6 +172,18 @@ fn effects(line: &Line) -> Effects {
                 e.targets.push(arg(0).to_string());
                 e.falls = false;
                 e.keep = true;
+            } else if op == "hload" || op == "hstore" {
+                // `hload SYM` / `hstore SYM`: a call to a small helper
+                // that links through t6 and leaves the rest alone: it
+                // reads an address in t5 (and, to store, a value in t4)
+                // and changes t2..t6, a loaded value coming back in t4
+                // (docs/rust.md, Size). It becomes `jal t6, SYM`.
+                e.uses.push("t5".into());
+                if op == "hstore" {
+                    e.uses.push("t4".into());
+                }
+                e.defs = ["t2", "t3", "t4", "t5", "t6"].map(String::from).to_vec();
+                e.keep = true;
             } else if op == "callr" {
                 // `callr reg, n`: a call through a register (a function
                 // pointer), with n arguments; it becomes `jalr ra, 0(reg)`.
@@ -240,6 +252,9 @@ fn render(line: &Line) -> String {
         Line::Label(l) => format!("{l}:"),
         Line::Raw(r) => r.clone(),
         Line::Op { op, args } if op == "callr" => format!("        jalr  ra, 0({})", args[0]),
+        Line::Op { op, args } if op == "hload" || op == "hstore" => {
+            format!("        jal   t6, {}", args[0])
+        }
         Line::Op { op, args } => {
             // A call's argument count was for the allocator only.
             let args = if op == "call" || op == "sys" {
@@ -914,7 +929,12 @@ pub fn finish(f: Func) -> Result<Vec<String>, String> {
         // A system call traps and comes back, leaving ra alone.
         Line::Op { op, .. } => {
             let e = effects(l);
-            op != "sys" && e.defs.len() > 1 && e.keep && e.targets.is_empty()
+            op != "sys"
+                && op != "hload"
+                && op != "hstore"
+                && e.defs.len() > 1
+                && e.keep
+                && e.targets.is_empty()
         }
         _ => false,
     });

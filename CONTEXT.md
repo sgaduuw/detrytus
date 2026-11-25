@@ -1360,7 +1360,7 @@ The owner approved 64-bit integers next, since `core::fmt` needs them
   plus an overflow word of other widths, which would make every
   operation a special case.
 - **Only what core::fmt needs, refused by name otherwise.** Division
-  is by a constant below 2²⁶ (core divides by 10 000 and 100), a
+  is by a constant below 2²⁵ (core divides by 10 000 and 100), a
   16-bit digit at a time; shifts are by a constant. A general 64-bit
   divide and variable shifts wait for a program that needs them.
 - **Binary alignment where LLVM asks for it.** `fmt::Arguments` keeps
@@ -1373,3 +1373,28 @@ The owner approved 64-bit integers next, since `core::fmt` needs them
 - **More than six argument words** go on the stack as abi.md 2.2 says
   (core calls `pad_integral` with eight), and an `alias` is another
   name for what it aliases.
+
+### 2026-11-25 · Smaller Rust programs
+
+The owner approved making Rust programs smaller next, suggesting a
+`u32` kept in one word. Choices (`docs/rust.md`, Size):
+
+- **Memory stays a byte a tryte.** LLVM reads integers as bytes and
+  bytes as integers (struct copies, a `u64` read as two `u32`s, core's
+  byte counting), so a `u32` cannot live in a word in memory without
+  proving no such access reaches it, which the IR does not make easy.
+  In registers it already is one word.
+- **Helpers for 2- and 4-byte loads and stores** instead: a `jal t6`
+  to code emitted once, with the address in `t5` and the value in
+  `t4`, changing only `t2`..`t6`, which the allocator is told, so the
+  rest of the registers survive. That gave most of the saving (rfact
+  5 715 to about 4 100 trytes). Rejected: ordinary calls, which would
+  make every load spill the caller's temporaries.
+- **64-bit helper functions written in LLVM IR** (`lower/wide.ll`),
+  lowered like the program and kept only when used. They also lift
+  the limits of the first version: any divisor, signed division and
+  shifts by a variable amount now work.
+- **A bug found on the way:** a 32-bit `shl` by 10 or more could
+  overflow the word before its result was masked, since `bsh` wraps
+  in ternary. A shift now drops the bits that would leave the type
+  first.

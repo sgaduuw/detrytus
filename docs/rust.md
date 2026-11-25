@@ -92,8 +92,14 @@ the type is at most 20 bits, for the product to fit. A comparison that
 a branch uses becomes a compare-and-branch; one kept as a value is
 `cmp` followed by a `tlut` that maps its −1/0/+1 to 0 or 1.
 
-A load of a wider value reads its trytes and joins them with `bsh` and
-`bor`; a store splits it with `band` and `bsh`.
+A load of a 2- or 4-byte value calls a small helper that reads its
+trytes and joins them; a store calls one that splits it (see Size).
+A struct or array value is held as one register per scalar in it (a
+slice is two: pointer and length).
+
+A shift left first drops the bits that would go past the type,
+`(x mod 2^(N − k)) << k`, since a word holds only about 42 bits and
+`bsh` would otherwise wrap in ternary.
 
 ### 64-bit integers
 
@@ -113,18 +119,22 @@ The operations are worked out on the halves:
   of the product (four products of two 16-bit pieces and a carry still
   fit a word), and leaves out the pieces a constant or a zero-extended
   value has none of;
-- `udiv` and `urem` by a constant below 2²⁶ go a 16-bit digit at a
+- `udiv` and `urem` by a constant below 2²⁵ go a 16-bit digit at a
   time from the top, as long division does by hand, which is what
   core's formatting needs (it divides by 10 000 and by 100);
+- the rest, too big to repeat at every use, are helper functions
+  written in LLVM IR (`rust/tc/src/ll/lower/wide.ll`) and lowered like
+  the program, only those it uses: division by anything else a bit at
+  a time, signed division, shifts by an amount known at run time, and
+  multiplication when a program multiplies two unknown values more
+  than once;
 - comparisons weigh the halves' −1/0/+1 three to one, which gives a
   word with the comparison's sign: `eq` and `ne` test the halves'
   `bxor` instead;
 - `zext`, `sext` and `trunc` take or make the high half.
 
-Shifts by a variable amount, other divisions and 128-bit integers are
-refused for now. A struct or array
-value is held as one register per scalar in it (a slice is two:
-pointer and length).
+Integers of 33 to 63 bits get the operations done on the halves, not
+the helpers; 128-bit integers are refused for now.
 
 ## Calls and frames
 
@@ -153,21 +163,39 @@ trytes to spare for it.
 
 ## Size
 
-Faithful bytes cost room: a `u32` loaded from memory is four tryte
-loads joined together, and every wrap is a `band`. On trylobite, a
-Rust hello is 370 trytes, its runtime included, and an echo written
-with iterators 671, against 147 for the Trice echo. `core::fmt` costs
-more: `rust/tc/tests/ll/fmt.rs`, which formats integers, strings,
-padding and `Debug`, is about 21 000 trytes on the bare machine. Keeping 32-bit values in one word where that is
-safe is the obvious next saving.
+Faithful bytes cost room: a `u32` in memory is four trytes to read
+and join, and every wrap is a `band`. Memory has to stay a byte a
+tryte, since LLVM reads integers as bytes and bytes as integers
+(`memcpy` of a struct, a `u64` read as two `u32`s), so a value cannot
+simply live in a word there. What helps instead:
+
+- **Helpers for loads and stores.** A 2- or 4-byte load or store is
+  a call, `jal t6`, to one of four helpers (`ll$ld2`, `ll$ld4`,
+  `ll$st2`, `ll$st4`) emitted once, with the address in `t5` and the
+  value in `t4`. They change only `t2`..`t6`, which the register
+  allocator knows (`hload` and `hstore` in alloc.rs), so values in
+  other registers stay. Three instructions replace up to eleven.
+- **Large constants made once.** A constant beyond `addi`'s range
+  costs two instructions; one a function makes four times or more
+  (mostly 2³² − 1, the mask that wraps 32-bit results) is made once at
+  its start.
+- **Folding.** The signed form of a constant is worked out at once,
+  and 64-bit operations leave out halves known to be zero.
+
+On trylobite, a Rust hello is 367 trytes, its runtime included, an
+echo written with iterators 596 (671 before these), against 147 for
+the Trice echo, and `rfact`, which prints a table of 64-bit factorials
+with `println!`, 3 960 (5 715 before). `rust/tc/tests/ll/fmt.rs`,
+which formats integers, strings, padding and `Debug`, is about 14 000
+trytes on the bare machine.
 
 ## Not yet
 
 The translator refuses these with an error that names the function and
 the line:
 
-- 128-bit integers; for 64-bit ones, shifts by a variable amount,
-  signed division and division by anything but a constant below 2²⁶;
+- 128-bit integers; for integers of 33 to 63 bits, shifts by a
+  variable amount and division by anything but a constant below 2²⁵;
 - floating point, atomics, vectors, varargs;
 - results of more than two words;
 - variable-sized `alloca`;

@@ -8,6 +8,9 @@ use super::*;
 
 type Pair = (&'static str, &'static str);
 
+/// The 64-bit helper functions, as LLVM IR (docs/rust.md).
+pub const WIDE_IR: &str = include_str!("wide.ll");
+
 impl Lower<'_> {
     fn and_mask(&mut self, r: &'static str, bits: u32) -> &'static str {
         if r == "zero" {
@@ -27,9 +30,17 @@ impl Lower<'_> {
     }
 
     fn or2(&mut self, a: &'static str, b: &'static str) -> &'static str {
-        match (a, b) {
-            ("zero", r) | (r, "zero") => r,
-            _ => self.op3("bor", a, b),
+        self.pure("bor", a, b)
+    }
+
+    /// `op` of `a` and `b`, leaving out what a zero makes needless. The
+    /// result may be `a` or `b` itself, so it must not be changed in
+    /// place.
+    fn pure(&mut self, op: &str, a: &'static str, b: &'static str) -> &'static str {
+        match (op, a, b) {
+            ("add" | "bor" | "bxor", "zero", r) | ("add" | "sub" | "bor" | "bxor", r, "zero") => r,
+            ("band" | "mul", "zero", _) | ("band" | "mul", _, "zero") => "zero",
+            _ => self.op3(op, a, b),
         }
     }
 
@@ -42,26 +53,32 @@ impl Lower<'_> {
         bits: u32,
     ) -> Pair {
         // The low halves' difference is negative when a borrow is due.
+        if blo == "zero" {
+            let hi = self.pure("sub", ahi, bhi);
+            return (alo, self.and_mask(hi, bits - MAX_BITS));
+        }
         let lo = self.op3("sub", alo, blo);
         let c = self.op3("cmp", lo, "zero");
         let borrow = self.op3("min", c, "zero");
-        self.wrap(lo, MAX_BITS);
-        let hi = self.op3("sub", ahi, bhi);
-        self.emit(format!("add   {hi}, {hi}, {borrow}"));
-        self.wrap(hi, bits - MAX_BITS);
-        (lo, hi)
+        let lo = self.and_mask(lo, MAX_BITS);
+        let hi = self.pure("sub", ahi, bhi);
+        let hi = self.op3("add", hi, borrow);
+        (lo, self.and_mask(hi, bits - MAX_BITS))
     }
 
     fn wide_add(&mut self, a: Pair, b: Pair, bits: u32) -> Pair {
+        if a.0 == "zero" || b.0 == "zero" {
+            let hi = self.pure("add", a.1, b.1);
+            return (self.pure("add", a.0, b.0), self.and_mask(hi, bits - MAX_BITS));
+        }
         let lo = self.op3("add", a.0, b.0);
         let m = self.li(M32);
         let c = self.op3("cmp", lo, m);
         let carry = self.op3("max", c, "zero");
-        self.emit(format!("band  {lo}, {lo}, {m}"));
-        let hi = self.op3("add", a.1, b.1);
-        self.emit(format!("add   {hi}, {hi}, {carry}"));
-        self.wrap(hi, bits - MAX_BITS);
-        (lo, hi)
+        let lo = self.op3("band", lo, m);
+        let hi = self.pure("add", a.1, b.1);
+        let hi = self.op3("add", hi, carry);
+        (lo, self.and_mask(hi, bits - MAX_BITS))
     }
 
     /// The four 16-bit pieces of a value, low first ("zero" where known).
@@ -122,7 +139,7 @@ impl Lower<'_> {
         (lo, hi)
     }
 
-    /// Division by a constant below 2^26, a 16-bit digit at a time from
+    /// Division by a constant below 2^25, a 16-bit digit at a time from
     /// the top, so that a remainder and a digit always fit a word.
     fn wide_divmod(&mut self, a: Pair, d: i128, bits: u32) -> (Pair, Pair) {
         let p = self.pieces(a, None);
@@ -154,22 +171,41 @@ impl Lower<'_> {
         a: &Val,
         b: &Val,
     ) -> R<Vec<&'static str>> {
-        let pa = self.pair(a, t)?;
-        let pb = self.pair(b, t)?;
         let ka = self.wide_const(a, bits);
         let kb = self.wide_const(b, bits);
+        // What is too big to repeat goes to a helper function.
+        let small_divisor = kb.is_some_and(|d| d > 0 && d < 1 << 25);
+        let helper = match op {
+            _ if self.inline_wide || bits != 64 => None,
+            "mul" if self.mul_helper && ka.is_none() && kb.is_none() => Some("ll$mul64"),
+            "udiv" if !small_divisor => Some("ll$udiv64"),
+            "urem" if !small_divisor => Some("ll$urem64"),
+            "sdiv" => Some("ll$sdiv64"),
+            "srem" => Some("ll$srem64"),
+            "shl" if kb.is_none() => Some("ll$shl64"),
+            "lshr" if kb.is_none() => Some("ll$lshr64"),
+            "ashr" if kb.is_none() => Some("ll$ashr64"),
+            _ => None,
+        };
+        if let Some(h) = helper {
+            self.wide_calls.insert(h);
+            let args = [(t.clone(), a.clone()), (t.clone(), b.clone())];
+            return self.call_named(h, &args, t);
+        }
+        let pa = self.pair(a, t)?;
+        let pb = self.pair(b, t)?;
         let (lo, hi) = match op {
             "add" => self.wide_add(pa, pb, bits),
             "sub" => self.wide_sub(pa.0, pa.1, pb.0, pb.1, bits),
             "and" | "or" | "xor" => {
                 let op = format!("b{op}");
-                (self.op3(&op, pa.0, pb.0), self.op3(&op, pa.1, pb.1))
+                (self.pure(&op, pa.0, pb.0), self.pure(&op, pa.1, pb.1))
             }
             "mul" => self.wide_mul(pa, ka, pb, kb, bits),
             "udiv" | "urem" => {
-                let Some(d) = kb.filter(|&d| d > 0 && d < 1 << 26) else {
+                let Some(d) = kb.filter(|&d| d > 0 && d < 1 << 25) else {
                     return Err(format!(
-                        "{op} of {bits}-bit integers is supported only by a constant below 2^26"
+                        "{op} of {bits}-bit integers is supported only by a constant below 2^25"
                     ));
                 };
                 let (q, r) = self.wide_divmod(pa, d, bits);
@@ -253,9 +289,9 @@ impl Lower<'_> {
         let (alo, ahi) = self.pair(a, t)?;
         let (blo, bhi) = self.pair(b, t)?;
         if pred == "eq" || pred == "ne" {
-            let l = self.op3("bxor", alo, blo);
-            let h = self.op3("bxor", ahi, bhi);
-            return Ok((self.op3("bor", l, h), "zero"));
+            let l = self.pure("bxor", alo, blo);
+            let h = self.pure("bxor", ahi, bhi);
+            return Ok((self.pure("bor", l, h), "zero"));
         }
         let (ahi, bhi) = if Self::signed_pred(pred) {
             let hb = bits - MAX_BITS;
