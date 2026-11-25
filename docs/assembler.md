@@ -53,6 +53,7 @@ reset address.
 |-----------|--------|
 | `.org ADDR` | place the next word centred on `ADDR`, a multiple of 3 |
 | `.align K` | place the next word centred on a multiple of 3^K |
+| `.balign N` | place the next tryte at a multiple of N (binary data, rust.md); not in a section the linker places |
 | `.word E, ...` | one word per expression |
 | `.tryte E, ...` | one tryte per expression |
 | `.string "..."` | one code point per tryte, then a 0 tryte |
