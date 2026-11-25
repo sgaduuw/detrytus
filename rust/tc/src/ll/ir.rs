@@ -29,6 +29,9 @@ pub enum Ty {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Const {
     Int(i128),
+    /// A floating-point constant, as the bits of the double that LLVM
+    /// writes for it (also for a `float`, whose value it holds exactly).
+    Float(u64),
     Null,
     /// `undef` and `poison`: any value will do.
     Undef,
@@ -164,6 +167,17 @@ pub enum Op {
         p: Val,
         a: Val,
         b: Val,
+    },
+    /// A floating-point operation as read, before [`expand_float`] turns
+    /// it into calls and integer operations: `fadd` and the rest with
+    /// `a` and `b`, `fneg` with `a`, `fcmp PRED` (`op` holds both
+    /// words), and the casts from `ty` to `to`.
+    Float {
+        op: String,
+        ty: Ty,
+        a: Val,
+        b: Val,
+        to: Ty,
     },
     /// A line that could not be read, or an instruction not handled:
     /// what to say if the function is used.
@@ -350,8 +364,8 @@ fn tokens(line: &str) -> Result<Vec<Tok>, String> {
                 }
                 let text = &line[start..i];
                 if i < s.len() && (s[i] == b'.' || s[i] == b'e') {
-                    // A decimal float: a word, never lowered.
-                    while i < s.len() && word_char(s[i]) {
+                    // A decimal float, `1.500000e+00`: a word.
+                    while i < s.len() && (word_char(s[i]) || (s[i] == b'+' && s[i - 1] == b'e')) {
                         i += 1;
                     }
                     out.push(Tok::Word(line[start..i].to_string()));
@@ -363,6 +377,16 @@ fn tokens(line: &str) -> Result<Vec<Tok>, String> {
             | b'|' => {
                 out.push(Tok::Punct(c as char));
                 i += 1;
+            }
+            // `+inf`, `+qnan`: floating-point constants as newer LLVM
+            // writes them.
+            b'+' if s.get(i + 1).is_some_and(|d| d.is_ascii_alphabetic()) => {
+                let start = i;
+                i += 1;
+                while i < s.len() && word_char(s[i]) {
+                    i += 1;
+                }
+                out.push(Tok::Word(line[start..i].to_string()));
             }
             _ if word_char(c) => {
                 let start = i;
@@ -385,6 +409,452 @@ struct P {
 }
 
 type R<T> = Result<T, String>;
+
+/// Whether a word is a floating-point constant.
+fn is_float_word(w: &str) -> bool {
+    w.starts_with("0x")
+        || w.starts_with("f0x")
+        || w.starts_with(|c: char| c.is_ascii_digit())
+        || matches!(w.trim_start_matches(['+', '-']), "inf" | "qnan")
+        || (w.starts_with('-') && w[1..].starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// A floating-point constant word: decimal (`1.500000e+00`) or the
+/// bits of a double in hex (`0x3FF8000000000000`), or of a float
+/// (`f0x3E99999B` for a float, `f0x...` with 16 digits for a double, as
+/// newer LLVM writes them).
+fn float_const(w: &str) -> R<Const> {
+    if let Some(h) = w.strip_prefix("f0x") {
+        if h.len() == 8
+            && let Ok(b) = u32::from_str_radix(h, 16)
+        {
+            return Ok(Const::Float((f32::from_bits(b) as f64).to_bits()));
+        }
+        if h.len() == 16
+            && let Ok(b) = u64::from_str_radix(h, 16)
+        {
+            return Ok(Const::Float(b));
+        }
+    }
+    let negative = w.starts_with('-');
+    match w.trim_start_matches(['+', '-']) {
+        "inf" => {
+            return Ok(Const::Float(
+                if negative { f64::NEG_INFINITY } else { f64::INFINITY }.to_bits(),
+            ));
+        }
+        "qnan" => return Ok(Const::Float(0x7FF8_0000_0000_0000 | (negative as u64) << 63)),
+        _ => {}
+    }
+    if let Some(h) = w.strip_prefix("0x") {
+        if h.len() == 16 && h.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(Const::Float(u64::from_str_radix(h, 16).map_err(|e| e.to_string())?));
+        }
+        return Err(format!("the floating-point constant {w} is not supported"));
+    }
+    w.parse::<f64>()
+        .map(|v| Const::Float(v.to_bits()))
+        .map_err(|_| format!("constant {w} is not supported"))
+}
+
+/// A type as LLVM writes the simple ones.
+fn shown(t: &Ty) -> String {
+    match t {
+        Ty::Float(f) => f.clone(),
+        Ty::Int(n) => format!("i{n}"),
+        Ty::Ptr => "ptr".into(),
+        t => format!("{t:?}"),
+    }
+}
+
+/// The integer type as wide as a float type, and the suffix of
+/// compiler_builtins' functions for it, if it is one done in software.
+fn float_kind(t: &Ty) -> Option<(u32, &'static str)> {
+    match t {
+        Ty::Float(f) if f == "float" => Some((32, "sf")),
+        Ty::Float(f) if f == "double" => Some((64, "df")),
+        _ => None,
+    }
+}
+
+/// Builds the instructions that replace one floating-point operation.
+struct FloatOps {
+    res: String,
+    line: usize,
+    n: usize,
+    out: Vec<Instr>,
+}
+
+impl FloatOps {
+    fn fresh(&mut self) -> String {
+        self.n += 1;
+        format!("{}$f{}", self.res, self.n)
+    }
+
+    /// `op` into a new local, or into the result when `last`.
+    fn put(&mut self, op: Op, last: bool) -> Val {
+        let r = if last { self.res.clone() } else { self.fresh() };
+        self.out.push(Instr { res: Some(r.clone()), op, line: self.line });
+        Val::Local(r)
+    }
+
+    fn call(&mut self, f: &str, ret: Ty, args: Vec<(Ty, Val)>, last: bool) -> Val {
+        let callee = Val::Const(Const::Global(f.to_string()));
+        self.put(Op::Call { ret, callee, args }, last)
+    }
+
+    fn cast(&mut self, op: &str, from: &Ty, v: Val, to: &Ty, last: bool) -> Val {
+        let op = Op::Cast { op: op.into(), flags: vec![], from: from.clone(), v, to: to.clone() };
+        self.put(op, last)
+    }
+
+    fn bin(&mut self, op: &str, ty: &Ty, a: Val, b: Val, last: bool) -> Val {
+        self.put(Op::Bin { op: op.into(), flags: vec![], ty: ty.clone(), a, b }, last)
+    }
+
+    fn icmp(&mut self, pred: &str, a: Val, k: i128, last: bool) -> Val {
+        let op = Op::Icmp { pred: pred.into(), ty: Ty::Int(32), a, b: Val::Const(Const::Int(k)) };
+        self.put(op, last)
+    }
+}
+
+/// A floating-point operation as calls to compiler_builtins' software
+/// floating point (lower/float.ll) and integer operations on the bits
+/// (docs/rust.md, Floating point). `float` and `double` are held as the
+/// integers of their bits. Anything else is itself.
+fn expand_float(i: Instr) -> Vec<Instr> {
+    let line = i.line;
+    let res = i.res.clone().unwrap_or_else(|| format!("fp${line}"));
+    let mut f = FloatOps { res, line, n: 0, out: Vec::new() };
+    let done = match &i.op {
+        Op::Float { op, ty, a, b, to } => float_op(&mut f, op, ty, a, b, to),
+        Op::Call { ret, callee: Val::Const(Const::Global(name)), args }
+            if name.starts_with("llvm.") =>
+        {
+            float_intrinsic(&mut f, name, ret, args)
+        }
+        _ => return vec![i],
+    };
+    match done {
+        Ok(true) => f.out.into_iter().flat_map(expand_float).collect(),
+        Ok(false) => vec![i],
+        // Op::Other names what is not supported.
+        Err(e) => {
+            let what = e.trim_end_matches(" is not supported").to_string();
+            vec![Instr { res: i.res, op: Op::Other(what), line }]
+        }
+    }
+}
+
+fn float_op(f: &mut FloatOps, op: &str, ty: &Ty, a: &Val, b: &Val, to: &Ty) -> R<bool> {
+    let i32t = Ty::Int(32);
+    let fty = ty.clone();
+    match op {
+        "fadd" | "fsub" | "fmul" | "fdiv" | "frem" | "fneg" => {
+            let (bits, sfx) =
+                float_kind(ty).ok_or(format!("{op} on {} is not supported", shown(ty)))?;
+            match op {
+                "fneg" => {
+                    let it = Ty::Int(bits);
+                    let x = f.cast("bitcast", ty, a.clone(), &it, false);
+                    let sign = Val::Const(Const::Int(1i128 << (bits - 1)));
+                    let n = f.bin("xor", &it, x, sign, false);
+                    f.cast("bitcast", &it, n, ty, true);
+                }
+                "frem" => {
+                    let name = if bits == 32 { "fmodf" } else { "fmod" };
+                    f.call(
+                        name,
+                        fty.clone(),
+                        vec![(fty.clone(), a.clone()), (fty, b.clone())],
+                        true,
+                    );
+                }
+                _ => {
+                    let name = format!("__{}{sfx}3", &op[1..]);
+                    f.call(
+                        &name,
+                        fty.clone(),
+                        vec![(fty.clone(), a.clone()), (fty, b.clone())],
+                        true,
+                    );
+                }
+            }
+        }
+        _ if op.starts_with("fcmp ") => {
+            let (_, sfx) =
+                float_kind(ty).ok_or(format!("{op} on {} is not supported", shown(ty)))?;
+            let pred = &op[5..];
+            let args = vec![(fty.clone(), a.clone()), (fty.clone(), b.clone())];
+            let lib = |f: &mut FloatOps, name: &str| {
+                f.call(&format!("__{name}{sfx}2"), i32t.clone(), args.clone(), false)
+            };
+            let (name, ipred) = match pred {
+                "false" | "true" => {
+                    let p = if pred == "true" { "eq" } else { "ne" };
+                    f.icmp(p, Val::Const(Const::Int(0)), 0, true);
+                    return Ok(true);
+                }
+                "ueq" | "one" => {
+                    let u = lib(f, "unord");
+                    let e = lib(f, "eq");
+                    let (pu, pe, join) =
+                        if pred == "ueq" { ("ne", "eq", "or") } else { ("eq", "ne", "and") };
+                    let u = f.icmp(pu, u, 0, false);
+                    let e = f.icmp(pe, e, 0, false);
+                    f.bin(join, &Ty::Int(1), u, e, true);
+                    return Ok(true);
+                }
+                "oeq" => ("eq", "eq"),
+                "une" => ("ne", "ne"),
+                "olt" => ("lt", "slt"),
+                "ole" => ("le", "sle"),
+                "ogt" => ("gt", "sgt"),
+                "oge" => ("ge", "sge"),
+                "ult" => ("ge", "slt"),
+                "ule" => ("gt", "sle"),
+                "ugt" => ("le", "sgt"),
+                "uge" => ("lt", "sge"),
+                "uno" => ("unord", "ne"),
+                "ord" => ("unord", "eq"),
+                p => return Err(format!("fcmp {p} is not supported")),
+            };
+            let c = lib(f, name);
+            f.icmp(ipred, c, 0, true);
+        }
+        "fptosi" | "fptoui" => {
+            let (_, sfx) =
+                float_kind(ty).ok_or(format!("{op} from {} is not supported", shown(ty)))?;
+            let Ty::Int(n) = to else {
+                return Err(format!("{op} to {} is not supported", shown(to)));
+            };
+            let (w, size) = int_width(*n)?;
+            let u = if op == "fptoui" { "uns" } else { "" };
+            let wt = Ty::Int(w);
+            let v = f.call(
+                &format!("__fix{u}{sfx}{size}"),
+                wt.clone(),
+                vec![(fty, a.clone())],
+                w == *n,
+            );
+            if w != *n {
+                f.cast("trunc", &wt, v, to, true);
+            }
+        }
+        "sitofp" | "uitofp" => {
+            let (_, sfx) =
+                float_kind(to).ok_or(format!("{op} to {} is not supported", shown(to)))?;
+            let Ty::Int(n) = ty else {
+                return Err(format!("{op} from {} is not supported", shown(ty)));
+            };
+            let (w, size) = int_width(*n)?;
+            let (u, ext) = if op == "uitofp" { ("un", "zext") } else { ("", "sext") };
+            let wt = Ty::Int(w);
+            let v = if w != *n { f.cast(ext, ty, a.clone(), &wt, false) } else { a.clone() };
+            f.call(&format!("__float{u}{size}{sfx}"), to.clone(), vec![(wt, v)], true);
+        }
+        "fpext" | "fptrunc" => {
+            let name = match (float_kind(ty), float_kind(to)) {
+                (Some((32, _)), Some((64, _))) => "__extendsfdf2",
+                (Some((64, _)), Some((32, _))) => "__truncdfsf2",
+                _ => {
+                    return Err(format!(
+                        "{op} from {} to {} is not supported",
+                        shown(ty),
+                        shown(to)
+                    ));
+                }
+            };
+            f.call(name, to.clone(), vec![(fty, a.clone())], true);
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// The width an integer of `n` bits goes through a conversion as, and
+/// the suffix for it: `si` (32), `di` (64) or `ti` (128).
+fn int_width(n: u32) -> R<(u32, &'static str)> {
+    Ok(match n {
+        0..=32 => (32, "si"),
+        33..=64 => (64, "di"),
+        65..=128 => (128, "ti"),
+        _ => return Err(format!("{n}-bit integers cannot be converted to floating point")),
+    })
+}
+
+fn float_intrinsic(f: &mut FloatOps, name: &str, ret: &Ty, args: &[(Ty, Val)]) -> R<bool> {
+    let parts: Vec<&str> = name.split('.').collect();
+    let base = parts.get(1).copied().unwrap_or("");
+    // Three-way comparisons, -1, 0 or 1: (a > b) - (a < b).
+    if matches!(base, "ucmp" | "scmp") {
+        let (u, it) = (if base == "ucmp" { "u" } else { "s" }, args[0].0.clone());
+        let (a, b) = (args[0].1.clone(), args[1].1.clone());
+        let lt = f.put(
+            Op::Icmp { pred: format!("{u}lt"), ty: it.clone(), a: a.clone(), b: b.clone() },
+            false,
+        );
+        let gt = f.put(Op::Icmp { pred: format!("{u}gt"), ty: it, a, b }, false);
+        let lt = f.cast("zext", &Ty::Int(1), lt, ret, false);
+        let gt = f.cast("zext", &Ty::Int(1), gt, ret, false);
+        f.bin("sub", ret, gt, lt, true);
+        return Ok(true);
+    }
+    // Minimum, maximum and saturating add and subtract of integers
+    // wider than a word: a comparison and a select.
+    if let Ty::Int(w) = ret
+        && *w > 32
+        && matches!(base, "umin" | "umax" | "smin" | "smax" | "usub" | "uadd")
+    {
+        let (a, b) = (args[0].1.clone(), args[1].1.clone());
+        let icmp = |f: &mut FloatOps, pred: &str, x: Val, y: Val| {
+            f.put(Op::Icmp { pred: pred.into(), ty: ret.clone(), a: x, b: y }, false)
+        };
+        let select = |f: &mut FloatOps, c: Val, x: Val, y: Val| {
+            f.put(Op::Select { c, ty: ret.clone(), a: x, b: y }, true)
+        };
+        match base {
+            "usub" => {
+                let less = icmp(f, "ult", a.clone(), b.clone());
+                let d = f.bin("sub", ret, a, b, false);
+                select(f, less, Val::Const(Const::Int(0)), d);
+            }
+            "uadd" => {
+                let s = f.bin("add", ret, a.clone(), b, false);
+                let over = icmp(f, "ult", s.clone(), a);
+                select(f, over, Val::Const(Const::Int(-1)), s);
+            }
+            _ => {
+                let pred = match base {
+                    "umin" => "ult",
+                    "umax" => "ugt",
+                    "smin" => "slt",
+                    _ => "sgt",
+                };
+                let c = icmp(f, pred, a.clone(), b.clone());
+                select(f, c, a, b);
+            }
+        }
+        return Ok(true);
+    }
+    // Funnel shifts, which compiler_builtins uses: shifts and an or,
+    // the amount mod the width, folded when it is a constant.
+    if let ("fshl" | "fshr", Ty::Int(w)) = (base, ret) {
+        let k = |v: i128| Val::Const(Const::Int(v));
+        let (a, b) = (args[0].1.clone(), args[1].1.clone());
+        let wm = *w as i128 - 1;
+        let (c, inv) = match &args[2].1 {
+            Val::Const(Const::Int(c)) => (k(c & wm), k(wm - (c & wm))),
+            c => {
+                let c = f.bin("and", ret, c.clone(), k(wm), false);
+                let inv = f.bin("xor", ret, c.clone(), k(wm), false);
+                (c, inv)
+            }
+        };
+        let (hi, lo) = if base == "fshl" {
+            let hi = f.bin("shl", ret, a, c, false);
+            let b1 = f.bin("lshr", ret, b, k(1), false);
+            (hi, f.bin("lshr", ret, b1, inv, false))
+        } else {
+            let lo = f.bin("lshr", ret, b, c, false);
+            let a1 = f.bin("shl", ret, a, k(1), false);
+            (f.bin("shl", ret, a1, inv, false), lo)
+        };
+        f.bin("or", ret, hi, lo, true);
+        return Ok(true);
+    }
+    // `llvm.fptosi.sat.i32.f64` and its unsigned twin: compiler_builtins'
+    // conversions already saturate to 32, 64 or 128 bits and turn a NaN
+    // into 0, as Rust's `as` asks; narrower ones are clamped after.
+    if (base == "fptosi" || base == "fptoui") && parts.get(2) == Some(&"sat") {
+        let Ty::Int(n) = ret else { return Err(format!("{name} is not supported")) };
+        let (w, _) = int_width(*n)?;
+        let wt = Ty::Int(w);
+        let (op, signed) = if base == "fptosi" { ("fptosi", true) } else { ("fptoui", false) };
+        if w == *n {
+            f.put(
+                Op::Float {
+                    op: op.into(),
+                    ty: args[0].0.clone(),
+                    a: args[0].1.clone(),
+                    b: Val::Const(Const::Undef),
+                    to: wt,
+                },
+                true,
+            );
+            return Ok(true);
+        }
+        let v = f.put(
+            Op::Float {
+                op: op.into(),
+                ty: args[0].0.clone(),
+                a: args[0].1.clone(),
+                b: Val::Const(Const::Undef),
+                to: wt.clone(),
+            },
+            false,
+        );
+        let clamp = |f: &mut FloatOps, which: &str, v: Val, k: i128| {
+            let callee = format!("llvm.{which}.i{w}");
+            f.call(
+                &callee,
+                wt.clone(),
+                vec![(wt.clone(), v), (wt.clone(), Val::Const(Const::Int(k)))],
+                false,
+            )
+        };
+        let v = if signed {
+            let v = clamp(f, "smax", v, -(1i128 << (n - 1)));
+            clamp(f, "smin", v, (1i128 << (n - 1)) - 1)
+        } else {
+            clamp(f, "umin", v, (1i128 << n) - 1)
+        };
+        f.cast("trunc", &wt, v, ret, true);
+        return Ok(true);
+    }
+    let Some(&last) = parts.last() else { return Ok(false) };
+    let ft = match last {
+        "f32" => Ty::Float("float".into()),
+        "f64" => Ty::Float("double".into()),
+        "f16" | "f80" | "f128" | "ppcf128" | "bf16" => {
+            return Err(format!("{name}: only float and double are supported"));
+        }
+        _ => return Ok(false),
+    };
+    let (bits, _) = float_kind(&ft).unwrap_or((64, "df"));
+    let it = Ty::Int(bits);
+    let sign = 1i128 << (bits - 1);
+    let suffix = if bits == 32 { "f" } else { "" };
+    let lib = match base {
+        "floor" | "ceil" | "trunc" | "round" | "sqrt" | "fma" | "rint" | "roundeven" => base,
+        "nearbyint" => "rint",
+        "minnum" => "fmin",
+        "maxnum" => "fmax",
+        "minimumnum" => "fminimum_num",
+        "maximumnum" => "fmaximum_num",
+        "minimum" => "fminimum",
+        "maximum" => "fmaximum",
+        "fmuladd" => "fma",
+        "fabs" => {
+            let x = f.cast("bitcast", &ft, args[0].1.clone(), &it, false);
+            let m = f.bin("and", &it, x, Val::Const(Const::Int(!sign)), false);
+            f.cast("bitcast", &it, m, &ft, true);
+            return Ok(true);
+        }
+        "copysign" => {
+            let x = f.cast("bitcast", &ft, args[0].1.clone(), &it, false);
+            let y = f.cast("bitcast", &ft, args[1].1.clone(), &it, false);
+            let m = f.bin("and", &it, x, Val::Const(Const::Int(!sign)), false);
+            let s = f.bin("and", &it, y, Val::Const(Const::Int(sign)), false);
+            let r = f.bin("or", &it, m, s, false);
+            f.cast("bitcast", &it, r, &ft, true);
+            return Ok(true);
+        }
+        _ => return Err(format!("{name} is not supported")),
+    };
+    f.call(&format!("{lib}{suffix}"), ret.clone(), args.to_vec(), true);
+    Ok(true)
+}
 
 /// An atomic operation as plain ones between [`Op::Lock`] and
 /// [`Op::Unlock`]: the lock is one word for the whole program, taken
@@ -709,6 +1179,7 @@ impl P {
             match self.peek() {
                 Some(Tok::Word(w))
                     if !CONST_EXPRS.contains(&w.as_str())
+                        && !is_float_word(w)
                         && !matches!(
                             w.as_str(),
                             "true" | "false" | "null" | "undef" | "poison" | "zeroinitializer"
@@ -744,6 +1215,7 @@ impl P {
                 "null" => Ok(Const::Null),
                 "undef" | "poison" => Ok(Const::Undef),
                 "zeroinitializer" => Ok(Const::Zero),
+                w if is_float_word(w) => float_const(w),
                 "getelementptr" => {
                     while self.eat_word("inbounds")
                         || self.eat_word("nuw")
@@ -1083,6 +1555,34 @@ impl P {
                 let (ty, v) = self.typed()?;
                 Ok(Op::Freeze { ty, v })
             }
+            "fadd" | "fsub" | "fmul" | "fdiv" | "frem" | "fcmp" | "fneg" => {
+                self.flags(&fast);
+                let op = if w == "fcmp" {
+                    match self.next()? {
+                        Tok::Word(p) => format!("fcmp {p}"),
+                        t => return Err(format!("expected a predicate, found {t:?}")),
+                    }
+                } else {
+                    w
+                };
+                let ty = self.ty()?;
+                let a = self.val()?;
+                let b = if op == "fneg" {
+                    Val::Const(Const::Undef)
+                } else {
+                    self.punct(',')?;
+                    self.val()?
+                };
+                Ok(Op::Float { op, ty: ty.clone(), a, b, to: ty })
+            }
+            "fptosi" | "fptoui" | "sitofp" | "uitofp" | "fpext" | "fptrunc" => {
+                self.flags(&["nneg"]);
+                let from = self.ty()?;
+                let a = self.val()?;
+                self.word("to")?;
+                let to = self.ty()?;
+                Ok(Op::Float { op: w, ty: from, a, b: Val::Const(Const::Undef), to })
+            }
             "fence" => {
                 let none = Val::Const(Const::Undef);
                 Ok(Op::Atomic { op: w, ty: Ty::Void, p: none.clone(), a: none.clone(), b: none })
@@ -1356,7 +1856,9 @@ pub fn parse(text: &str, file: &str, index: usize, m: &mut Module) -> Result<(),
                         Instr { res, op, line: bno }
                     }
                 };
-                cur.instrs.extend(expand_atomic(instr));
+                for i in expand_atomic(instr) {
+                    cur.instrs.extend(expand_float(i));
+                }
             }
             f.blocks.push(cur);
             m.source.insert(('f', name.clone()), lines[no - 1..n].join("\n"));

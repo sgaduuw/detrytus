@@ -7,6 +7,7 @@ use crate::{BAD_INPUT, Fail, NO_INPUT, usage};
 
 pub(crate) fn cmd_ll(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     let (mut files, mut output, mut includes, mut prune) = (Vec::new(), None, Vec::new(), false);
+    let mut roots = Vec::new();
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -17,6 +18,7 @@ pub(crate) fn cmd_ll(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
                 includes.push(args.next().ok_or_else(|| usage("--include needs a file"))?)
             }
             "--prune" => prune = true,
+            "--root" => roots.push(args.next().ok_or_else(|| usage("--root needs a name"))?),
             flag if flag.starts_with('-') => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -32,8 +34,12 @@ pub(crate) fn cmd_ll(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
             .map_err(|e| Fail::new(format!("{path}: {}", crate::program::strerror(&e)), NO_INPUT))
     };
     if prune {
-        let text =
-            detrytus_tc::ll::prune(&paths).map_err(|e| Fail::new(e.to_string(), BAD_INPUT))?;
+        if roots.is_empty() {
+            roots.push("main".to_string());
+        }
+        let roots: Vec<&str> = roots.iter().map(String::as_str).collect();
+        let text = detrytus_tc::ll::prune(&paths, &roots)
+            .map_err(|e| Fail::new(e.to_string(), BAD_INPUT))?;
         match output {
             None => print!("{text}"),
             Some(o) => write(&o, text.as_bytes())?,

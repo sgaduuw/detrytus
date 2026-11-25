@@ -27,7 +27,7 @@
 //! before all this ([`inline`]).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Marks a line from an `asm` block: passed through untouched.
 pub const RAW: &str = "\u{1}";
@@ -576,9 +576,21 @@ fn graph(lines: &[Line], returns: usize) -> Graph {
 /// register merges into a fixed one whenever they do not interfere.
 fn coalesce(lines: &mut [Line], returns: usize) {
     let k = colours().len();
+    let (mut adj, moves) = graph(lines, returns);
+    // What each merged register became, and the graph kept up to date
+    // with the merges (the merged register's neighbours are both
+    // sides'), so the graph is built once.
+    let mut into: HashMap<String, String> = HashMap::new();
+    let find = |into: &HashMap<String, String>, r: &String| {
+        let mut r = r.clone();
+        while let Some(n) = into.get(&r) {
+            r = n.clone();
+        }
+        r
+    };
     loop {
-        let (adj, moves) = graph(lines, returns);
         let pick = moves.iter().find_map(|(a, b)| {
+            let (a, b) = (find(&into, a), find(&into, b));
             if a == b {
                 return None;
             }
@@ -591,11 +603,11 @@ fn coalesce(lines: &mut [Line], returns: usize) {
             if !colours().contains(&keep.as_str()) && !keep.starts_with('%') {
                 return None;
             }
-            if adj[gone].contains(keep) || adj.get(keep).is_some_and(|n| n.contains(gone)) {
+            if adj[&gone].contains(&keep) || adj.get(&keep).is_some_and(|n| n.contains(&gone)) {
                 return None;
             }
             if keep.starts_with('%') {
-                let both: BTreeSet<&String> = adj[keep].iter().chain(adj[gone].iter()).collect();
+                let both: BTreeSet<&String> = adj[&keep].iter().chain(adj[&gone].iter()).collect();
                 let busy = both
                     .iter()
                     .filter(|n| {
@@ -606,11 +618,37 @@ fn coalesce(lines: &mut [Line], returns: usize) {
                     return None;
                 }
             }
-            Some((keep.clone(), gone.clone()))
+            Some((keep, gone))
         });
-        let Some((keep, gone)) = pick else { return };
-        for line in lines.iter_mut() {
-            rename(line, &gone, &keep);
+        let Some((keep, gone)) = pick else { break };
+        let ns = adj.remove(&gone).unwrap_or_default();
+        for n in &ns {
+            if let Some(m) = adj.get_mut(n) {
+                m.remove(&gone);
+                m.insert(keep.clone());
+            }
+        }
+        if let Some(m) = adj.get_mut(&keep) {
+            m.extend(ns);
+        }
+        into.insert(gone, keep);
+    }
+    if into.is_empty() {
+        return;
+    }
+    let to: HashMap<String, String> = into.keys().map(|g| (g.clone(), find(&into, g))).collect();
+    for line in lines.iter_mut() {
+        if let Line::Op { args, .. } = line {
+            for a in args.iter_mut() {
+                if let Some(t) = to.get(a.as_str()) {
+                    *a = t.clone();
+                } else if let Some(b) = base_of(a)
+                    && let Some(t) = to.get(b)
+                {
+                    let open = a.find('(').unwrap();
+                    *a = format!("{}({t})", &a[..open]);
+                }
+            }
         }
     }
 }

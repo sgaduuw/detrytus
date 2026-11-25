@@ -398,6 +398,30 @@ impl Lower<'_> {
         Ok((w, "zero"))
     }
 
+    /// `llvm.ctlz` of a wide integer: the highest limb that is not zero,
+    /// counted as if every limb were 32 bits, less what the last limb
+    /// lacks of 32.
+    pub(super) fn wide_ctlz(&mut self, v: &Val, t: &Ty, bits: u32) -> R<Vec<&'static str>> {
+        let a = self.leaves_of(v, t)?;
+        let n = a.len();
+        let x = self.vreg();
+        self.emit(format!("mv    {x}, {}", a[n - 1]));
+        let base = self.vreg();
+        self.emit(format!("li    {base}, {}", -((MAX_BITS * n as u32 - bits) as i128)));
+        for i in (0..n - 1).rev() {
+            let skip = self.new_label();
+            self.emit(format!("bnez  {x}, {skip}"));
+            self.emit(format!("mv    {x}, {}", a[i]));
+            self.emit(format!("addi  {base}, {base}, {MAX_BITS}"));
+            self.label(&skip);
+        }
+        let c = self.ctlz(x, MAX_BITS);
+        let r = self.op3("add", base, c);
+        let mut out = vec![r];
+        out.resize(n, "zero");
+        Ok(out)
+    }
+
     /// `llvm.abs` of a wide integer.
     pub(super) fn wide_abs(&mut self, v: &Val, t: &Ty, bits: u32) -> R<Vec<&'static str>> {
         let a = self.leaves_of(v, t)?;

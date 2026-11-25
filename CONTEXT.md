@@ -1437,3 +1437,30 @@ Second of the remaining Rust gaps (`docs/rust.md`, Wide integers):
   `a0`..`a3`, a convention only they use; Rust itself returns a `u128`
   through memory. Rejected: compiler_builtins' `__udivti3` and
   friends, which would pull in much more IR for the same result.
+
+### 2026-11-25 · Floating point from compiler_builtins
+
+Last of the three Rust gaps (`docs/rust.md`, Floating point):
+
+- **Software floating point, from Rust's own compiler_builtins.**
+  The emulator does not run the floating-point instructions isa.md
+  specifies, and a ternary FPU is a separate project. rustc already
+  lowers `fadd` and friends to `__adddf3` and the rest on a RISC-V
+  core without an FPU; doing the same reuses tested IEEE 754 code
+  instead of writing it. Rejected: our own soft-float helpers in IR
+  (much more code to get right), and floats in balanced ternary (not
+  what Rust's `f64` means).
+- **The routines live in the repository**, `lower/float.ll`, pruned
+  from the IR rustc emits for compiler_builtins and regenerated with
+  `lower/float.sh`, so translating a program needs no Rust toolchain
+  beyond the one that made its IR. It is third-party code (MIT and
+  Apache-2.0, libm from musl), noted in its header.
+- **Expanded when the IR is read**, as atomics are: calls, integer
+  bit operations for `fneg`/`fabs`/`copysign`, comparisons of the
+  `__cmp` results with zero. A `float` is one word of bits, a `double`
+  two, so loads, stores, phis and calls need nothing new.
+- **The register allocator's coalescing now builds the interference
+  graph once** and keeps it up to date as it merges, instead of
+  rebuilding it after every merge. The float routines and core's
+  float formatting have big functions, and translating the float test
+  took 8.7 s; now 0.8 s, with the same output.
