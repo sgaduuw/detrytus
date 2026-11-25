@@ -105,3 +105,14 @@ fn private_names_of_two_modules_stay_apart() {
     assert!(out.assembly.contains("alloc_0:\n        .tryte 65"), "{}", out.assembly);
     assert!(out.assembly.contains("alloc_0.m1:\n        .tryte 1"), "{}", out.assembly);
 }
+
+#[test]
+fn a_block_may_come_before_the_block_defining_what_it_uses() {
+    // LLVM places blocks freely: here `late` uses %y from `def`, which
+    // dominates it but is written after it.
+    let src = "define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n  br label %def\n\
+               late:\n  %z = add i32 %y, 1\n  ret i32 %z\n\
+               def:\n  %y = add i32 %argc, 1\n  br label %late\n}\n";
+    detrytus_tc::ll::translate_text(src, &[]).unwrap_or_else(|e| panic!("{e}"));
+}

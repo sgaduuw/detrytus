@@ -30,9 +30,13 @@ for src in "$here"/*.rs; do
         RUSTFLAGS="--emit=llvm-ir,link -Zunstable-options -Cpanic=immediate-abort" \
         cargo build --quiet --release -Zbuild-std=core --target riscv32imac-unknown-none-elf)
     # What main reaches of the program and core, as one module.
-    deps="$work"/target/riscv32imac-unknown-none-elf/release/deps
+    # Cargo leaves them in deps/ before 1.100, build/CRATE/HASH/out/ since.
+    release="$work"/target/riscv32imac-unknown-none-elf/release
+    prog=$(ls -t $(find "$release" -name 'prog-*.ll') | head -1)
+    core=$(ls -t $(find "$release" -name 'core-*.ll') | head -1)
     cargo run --quiet --manifest-path "$here/../../../../Cargo.toml" -p detrytus-cli -- \
-        ll --prune "$deps"/prog-*.ll "$deps"/core-*.ll -o "$here/$name.ll"
-    sed -i.bak "s|$deps/||g" "$here/$name.ll" && rm "$here/$name.ll.bak"
+        ll --prune "$prog" "$core" -o "$here/$name.ll"
+    sed -i.bak "s|$(dirname "$prog")/||g; s|$(dirname "$core")/||g" "$here/$name.ll"
+    rm "$here/$name.ll.bak"
     echo "$name.ll"
 done
