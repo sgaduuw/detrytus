@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use detrytus_core::trits::{TRYTE_MAX, TRYTE_TRITS, low, split_high};
-use detrytus_core::{compressed, isa};
+use detrytus_core::{compressed, float, isa};
 
 use crate::error::AsmError;
 use crate::expr::{ExprError, Linear, Relocatable, Symbols, Value, evaluate_linear};
@@ -505,7 +505,7 @@ impl Assembler {
 
     fn word_count(&self, s: &Statement) -> PassResult<i128> {
         Ok(match s.mnemonic.as_str() {
-            ".word" => s.operands.len() as i128,
+            ".word" | ".float" => s.operands.len() as i128,
             ".words" => {
                 let [count] = expect::<1>(s)?;
                 let n = self.constant(&count)?;
@@ -804,6 +804,17 @@ impl Assembler {
         }
         if s.mnemonic == ".words" {
             return Ok(vec![0; s.size as usize]);
+        }
+        if s.mnemonic == ".float" {
+            return s
+                .operands
+                .iter()
+                .map(|op| {
+                    float::from_decimal(op.trim()).ok_or_else(|| {
+                        s.error(format!("not a floating point number: '{}'", op.trim())).into()
+                    })
+                })
+                .collect();
         }
         if let Some(reach) = &s.gp {
             reach.check(ops, pc)?;

@@ -318,3 +318,15 @@ name = ".gp names one value"
 program = ".gp"
 expect.asm_error = ".gp takes 1 operand(s)"
 expect.asm_error_line = 1
+
+[[case]]
+name = "a rounding mode on an instruction that does not round"
+program = "fmin.rup a0, a1, a2"
+expect.asm_error = "fmin takes no suffix .rup"
+expect.asm_error_line = 1
+
+[[case]]
+name = "a float that is not a number"
+program = ".float 1.5, one"
+expect.asm_error = "not a floating point number: 'one'"
+expect.asm_error_line = 1

@@ -97,6 +97,13 @@ fn mnemonic(d: &Decoded) -> String {
             };
             format!("{}{order}", op.name)
         }
+        _ if op.rounds() => {
+            let mode = isa::ROUNDING_SUFFIXES.iter().find(|(_, v)| *v == d.fn_);
+            match mode {
+                Some((suffix, _)) => format!("{}.{suffix}", op.name),
+                None => op.name.to_string(),
+            }
+        }
         _ => op.name.to_string(),
     }
 }
@@ -156,5 +163,18 @@ mod tests {
         let jal = isa::encode(isa::by_name("jal").unwrap(), &[("imm", 2)]).unwrap();
         assert_eq!(disassemble(jal, Some(9)), "jal zero, 15");
         assert_eq!(disassemble(jal, Some(10)), "jal zero, 15");
+    }
+
+    #[test]
+    fn float_rounding_modes_show_as_suffixes() {
+        let op = isa::by_name("fcvt.i.f").unwrap();
+        let word = isa::encode(op, &[("rd", 10), ("rs1", 11), ("fn", 3)]).unwrap();
+        assert_eq!(disassemble(word, None), format!("fcvt.i.f.rtz {}, {}", reg(10), reg(11)));
+        let fma = isa::by_name("fma").unwrap();
+        let word = isa::encode(fma, &[("rd", 10), ("rs1", 11), ("rs2", 12), ("rs3", 13)]).unwrap();
+        assert_eq!(
+            disassemble(word, None),
+            format!("fma {}, {}, {}, {}", reg(10), reg(11), reg(12), reg(13))
+        );
     }
 }

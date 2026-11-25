@@ -57,12 +57,12 @@ says why ([`docs/isa.md`](docs/isa.md) section 2).
 
 ## Status
 
-The instruction set is a draft, version 0.11, specified in
+The instruction set is a draft, version 0.12, specified in
 [`docs/isa.md`](docs/isa.md). It will change until the emulator and the
 operating system written for it have settled.
 
 The `detrytus` command, written in Rust, assembles, runs and debugs
-programs for the integer core. Implemented:
+programs for the machine. Implemented:
 
 - every integer, tritwise, memory, atomic, control and system
   instruction
@@ -75,8 +75,10 @@ programs for the integer core. Implemented:
 - compressed bundles, which the assembler forms by itself under
   `.compress`, and gp-relative addressing under `.gp`
 
-Floating point and debug triggers are specified but not implemented
-yet.
+- the ternary floating point unit: one-word floats with 21-trit
+  significands, every result rounded once
+
+Debug triggers are specified but not implemented yet.
 
 The machine has an operating system being written for it,
 [trylobite](https://github.com/sgaduuw/trylobite): a microkernel with

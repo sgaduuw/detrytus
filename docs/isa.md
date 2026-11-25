@@ -1,6 +1,6 @@
 # detrytus ISA
 
-Version 0.11, **draft**. Everything here may change until the emulator
+Version 0.12, **draft**. Everything here may change until the emulator
 has run real programs against it. Sections marked *sketch* record a
 direction, not a rule.
 
@@ -732,8 +732,9 @@ through a `jal` trampoline.
 
 Arithmetic and conversion instructions take a rounding mode in
 `fn[1:0]`: 0 nearest, +1 toward +∞, −1 toward −∞, +3 toward zero, −3
-dynamic (from `fcsr`), others reserved. The common case, nearest, is the
-all-zero field.
+dynamic (from `fcsr`), others reserved; the trits above must be 0. The
+common case, nearest, is the all-zero field. The assembler writes the
+others as suffixes: `fdiv.rup`, `.rdn`, `.rtz`, `.dyn`.
 
 **Format.** A float is one word: exponent `E = x[26:21]` (6 trits) and
 significand `M = x[20:0]` (21 trits).
@@ -750,12 +751,32 @@ Negation is `fsub rd, zero, rs`. A normalised significand has magnitude
 between ½ and 1½, so the format holds about 9.5 decimal digits over a
 range of about 10^±173.
 
-**Rounding.** Round-to-nearest is truncation of the significand. A tie
-needs a remainder of exactly half a unit in the last place, which has
-an infinite ternary expansion (½ = `0.+++…`), so the exact result of an
-add, subtract, multiply or `fma`, which always has a finite expansion,
-never ties. Only `fdiv` and `fsqrt` can, and they break ties toward
-zero.
+**Rounding.** Every result is the exact one rounded once. Round to
+nearest is truncation of the significand to 21 trits, with one
+exception: just above the bottom of an exponent's range. There, at
+significand ±(3²⁰ + 1)/2, the floats one exponent down are three times
+closer together, and their largest, ±(3²¹ − 1)/2 at `E − 1`, is two of
+their places away. A value that truncates to the bottom significand
+while lying a third of a place or more below it (toward zero) is
+nearer that largest one and rounds to it.
+
+A tie needs a remainder of exactly half a place, which has an infinite
+ternary expansion (½ = `0.+++…`). The exact result of an add,
+subtract, multiply, `fma` or conversion has a finite expansion, so it
+ties only at that exception, exactly a third of a place below the
+bottom. A quotient can tie anywhere; a square root never does, since
+(2k + 1)²/4 is not a whole number. Ties go toward zero.
+
+The directed modes give the nearest float on their side of the exact
+value: toward +∞, toward −∞, or toward zero. A result too large for
+any float is ±∞ when rounding to nearest, and otherwise ±∞ or the
+largest finite float of that sign, whichever the mode points to.
+
+**NaNs.** An operation that makes a NaN, from NaN operands or an
+invalid one such as ∞ − ∞, 0 × ∞, 0/0, ∞/∞ or the root of a negative
+number, returns the default NaN: `E = +364`, `M = 0`. Payloads are not
+carried through. `fmin` and `fmax` with two NaNs return the default
+NaN.
 
 **Comparisons.** IEEE 754 defines four relations between floats (less,
 equal, greater, unordered) and a trit holds three. The two questions
@@ -780,7 +801,21 @@ subnormal, 0 zero, +2 positive subnormal, +3 positive normal, +4 +∞,
 
 **Flags.** `fcsr` (8.2) records invalid, divide-by-zero, overflow,
 underflow and inexact, as `+` trits that stay set until cleared, plus
-the dynamic rounding mode.
+the dynamic rounding mode, encoded as in `fn[1:0]`. An instruction
+asking for the dynamic mode when `fcsr` holds dynamic or a reserved
+mode is an illegal instruction. The flags:
+
+- invalid: an operation that makes a NaN from operands that are not
+  NaNs, `flt` or `fle` with a NaN operand, and `fcvt.i.f` of a NaN or
+  of a value out of range (which raise nothing else);
+- divide-by-zero: a finite nonzero value divided by zero, giving ±∞;
+- overflow: a finite result too large for any float, with inexact;
+- underflow: an inexact result whose exact value is smaller in
+  magnitude than the smallest normal float, ±(3²⁰ + 1)/2 × 3^−383;
+- inexact: the result differs from the exact one.
+
+`fmin`, `fmax`, `fcmp` and `fclass` raise none, and NaN operands alone
+raise nothing.
 
 ### 7.12 System (I, R)
 

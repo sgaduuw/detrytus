@@ -4,8 +4,8 @@
 //! Every integer, logic, memory, atomic, control and system instruction
 //! (docs/isa.md 7), ported from the original Python core, and compressed
 //! bundles (6.1), whose slots run as the full instructions they expand
-//! to. Not yet: floating point, which stops the machine as
-//! [`Stop::Unsupported`] rather than being approximated.
+//! to. Floating point (7.11) is `float.rs`; this file reads the
+//! rounding mode and records the flags in `fcsr`.
 //!
 //! The machine steps harts one instruction at a time with no store
 //! buffering, so memory is sequentially consistent and fences are
@@ -19,9 +19,10 @@ use crate::alu;
 use crate::bus::{Access, Bus, BusError};
 use crate::compressed;
 use crate::entropy::Entropy;
+use crate::float::{self, Rounding};
 use crate::isa::{self, Decoded, Kind};
 use crate::mmu::{self, Mmu, Ptbr};
-use crate::trits::{TRYTE_TRITS, WORD_TRITS, field, low, pow3, wrap};
+use crate::trits::{TRYTE_TRITS, WORD_TRITS, field, low, pow3, set_trit, wrap};
 
 /// Why the hart stopped running.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -380,6 +381,9 @@ impl Hart {
 
     fn run(&mut self, bus: &mut Bus, d: &Decoded) -> Exec {
         let (a, b) = (self.x(d.rs1), self.x(d.rs2));
+        if (40..=54).contains(&d.op.opcode) {
+            return self.float(d, a, b);
+        }
         if let Some(value) = Self::arithmetic(d, a, b) {
             self.set_x(d.rd, value);
             return Ok(());
@@ -404,6 +408,46 @@ impl Hart {
             Kind::Auipc => self.set_x(d.rd, wrap(self.pc + d.imm * pow3(8))),
             _ => return self.memory_or_control(bus, d, a, b),
         }
+        Ok(())
+    }
+
+    /// A floating point instruction: the result in rd, the flags it
+    /// raises added to `fcsr` (7.11, 8.2).
+    fn float(&mut self, d: &Decoded, a: i64, b: i64) -> Exec {
+        let fcsr = self.csrs[&isa::FCSR];
+        let code = if d.fn_ == float::DYNAMIC { field(fcsr, 5, 2) } else { low(d.fn_, 2) };
+        let mode = match Rounding::from_code(code) {
+            Some(mode) => mode,
+            // A dynamic mode in fcsr that is itself dynamic or reserved.
+            None if d.op.rounds() => return Err(trap(isa::ILLEGAL, d.word)),
+            None => Rounding::Nearest,
+        };
+        let mut flags = 0u8;
+        let fl = &mut flags;
+        let value = match d.op.kind {
+            Kind::Fadd => float::add(a, b, mode, fl),
+            Kind::Fsub => float::sub(a, b, mode, fl),
+            Kind::Fmul => float::mul(a, b, mode, fl),
+            Kind::Fdiv => float::div(a, b, mode, fl),
+            Kind::Fsqrt => float::sqrt(a, mode, fl),
+            Kind::Fma => float::fma(a, b, self.x(d.rs3), mode, fl),
+            Kind::Fmin => float::min(a, b),
+            Kind::Fmax => float::max(a, b),
+            Kind::Fcmp => float::cmp(a, b),
+            Kind::Fclass => float::class(a),
+            Kind::FcvtFI => float::from_int(a, mode, fl),
+            Kind::FcvtIF => float::to_int(a, mode, fl),
+            Kind::Feq => float::eq(a, b, fl),
+            Kind::Flt => float::lt(a, b, fl),
+            Kind::Fle => float::le(a, b, fl),
+            _ => unreachable!("opcodes 40..54 are floating point"),
+        };
+        if flags != 0 {
+            let raised = (0..5).filter(|i| flags & 1 << i != 0);
+            let fcsr = raised.fold(fcsr, |v, i| set_trit(v, i, 1));
+            self.csrs.insert(isa::FCSR, fcsr);
+        }
+        self.set_x(d.rd, value);
         Ok(())
     }
 

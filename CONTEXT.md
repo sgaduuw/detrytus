@@ -1464,3 +1464,35 @@ Last of the three Rust gaps (`docs/rust.md`, Floating point):
   rebuilding it after every merge. The float routines and core's
   float formatting have big functions, and translating the float test
   took 8.7 s; now 0.8 s, with the same output.
+
+### 2026-11-25 · The ternary floating point unit (ISA 0.12)
+
+The emulator now runs isa.md 7.11, the first step of hardware floating
+point; binary IEEE 754 for Rust comes next, as a memory-mapped
+coprocessor rather than more instructions, so the core stays ternary.
+
+- **Exact, then rounded once.** Every finite float is an integer times
+  a power of three, so each operation works out its exact result as
+  such a pair (128-bit integers suffice), or keeps enough trits that
+  what it drops only decides the direction, and one function rounds.
+  The directed modes step one float from the nearest. Checked against
+  an exact rational reference on 200,000 random operations.
+- **Round to nearest is not quite truncation** (spec change, hence
+  0.12). Just above the bottom of an exponent's range the grid below
+  is three times finer and its largest value is closer to a value
+  that truncates to the bottom significand when that value lies a
+  third of a place or more below it. 0.11 said truncation was nearest
+  and that only `fdiv` and `fsqrt` could tie; in fact everything can
+  tie at that boundary, and `fsqrt` never does. Rejected: keeping
+  plain truncation and calling it nearest, which would make the
+  format's rounding differ from IEEE's meaning of the word and break
+  error bounds at every power of three.
+- **NaNs are not propagated**: every NaN result is the default one,
+  `E = +364`, `M = 0`, as RISC-V does. There are no signalling NaNs.
+- **Underflow is tininess before rounding**, inexact results below the
+  smallest normal float.
+- **A dynamic rounding mode when `fcsr` holds dynamic or a reserved
+  mode is an illegal instruction**, as in RISC-V.
+- **`.float` takes decimal literals and rounds them exactly**, with a
+  small big-number division, so a constant in a program is the float
+  nearest what was written.
