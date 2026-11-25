@@ -1,15 +1,40 @@
-//! Integers of 33 to 64 bits, held in two words: the low 32 bits and
-//! the rest, each as its unsigned value (docs/rust.md). A word holds
-//! about 42 bits, so a half has room for a carry, or for the product of
-//! two 16-bit pieces with a few added, but not for a shift of a whole
-//! half: each is masked before it moves left.
+//! Integers wider than 32 bits, held in limbs of a word each: 32 bits
+//! apiece, low first, the last holding what is left, each as its
+//! unsigned value (docs/rust.md). A 64-bit integer is two limbs, a
+//! 128-bit one four. A word holds about 42 bits, so a limb has room for
+//! a carry, or for the sum of a few products of two 16-bit pieces, but
+//! not for a shift of a whole limb: each is masked before it moves left.
 
 use super::*;
 
-type Pair = (&'static str, &'static str);
-
-/// The 64-bit helper functions, as LLVM IR (docs/rust.md).
+/// The helper functions, as LLVM IR (docs/rust.md).
 pub const WIDE_IR: &str = include_str!("wide.ll");
+
+/// The limbs of a `bits`-bit integer.
+pub(super) fn limbs(bits: u32) -> usize {
+    bits.div_ceil(MAX_BITS) as usize
+}
+
+/// The width of the last limb.
+fn top(bits: u32) -> u32 {
+    bits - MAX_BITS * (limbs(bits) as u32 - 1)
+}
+
+/// The width of limb `i` of `n`.
+fn width(i: usize, n: usize, bits: u32) -> u32 {
+    if i + 1 == n { top(bits) } else { MAX_BITS }
+}
+
+/// Bits `at..at + n` of a constant, sign-extended past its 128.
+fn bits_of(k: i128, at: u32, n: u32) -> i128 {
+    (k >> at.min(127)) & mask(n)
+}
+
+/// A constant's limbs as values.
+pub(super) fn const_limbs(k: i128, bits: u32) -> Vec<i128> {
+    let n = limbs(bits);
+    (0..n).map(|i| bits_of(k, MAX_BITS * i as u32, width(i, n, bits))).collect()
+}
 
 impl Lower<'_> {
     fn and_mask(&mut self, r: &'static str, bits: u32) -> &'static str {
@@ -46,107 +71,127 @@ impl Lower<'_> {
 
     pub(super) fn wide_sub(
         &mut self,
-        alo: &'static str,
-        ahi: &'static str,
-        blo: &'static str,
-        bhi: &'static str,
+        a: &[&'static str],
+        b: &[&'static str],
         bits: u32,
-    ) -> Pair {
-        // The low halves' difference is negative when a borrow is due.
-        if blo == "zero" {
-            let hi = self.pure("sub", ahi, bhi);
-            return (alo, self.and_mask(hi, bits - MAX_BITS));
-        }
-        let lo = self.op3("sub", alo, blo);
-        let c = self.op3("cmp", lo, "zero");
-        let borrow = self.op3("min", c, "zero");
-        let lo = self.and_mask(lo, MAX_BITS);
-        let hi = self.pure("sub", ahi, bhi);
-        let hi = self.op3("add", hi, borrow);
-        (lo, self.and_mask(hi, bits - MAX_BITS))
-    }
-
-    fn wide_add(&mut self, a: Pair, b: Pair, bits: u32) -> Pair {
-        if a.0 == "zero" || b.0 == "zero" {
-            let hi = self.pure("add", a.1, b.1);
-            return (self.pure("add", a.0, b.0), self.and_mask(hi, bits - MAX_BITS));
-        }
-        let lo = self.op3("add", a.0, b.0);
-        let m = self.li(M32);
-        let c = self.op3("cmp", lo, m);
-        let carry = self.op3("max", c, "zero");
-        let lo = self.op3("band", lo, m);
-        let hi = self.pure("add", a.1, b.1);
-        let hi = self.op3("add", hi, carry);
-        (lo, self.and_mask(hi, bits - MAX_BITS))
-    }
-
-    /// The four 16-bit pieces of a value, low first ("zero" where known).
-    fn pieces(&mut self, v: Pair, k: Option<i128>) -> [&'static str; 4] {
-        if let Some(k) = k {
-            return [0, 1, 2, 3].map(|i| self.li((k >> (16 * i)) & 0xffff));
-        }
-        let mut out = ["zero"; 4];
-        for (i, half) in [v.0, v.1].into_iter().enumerate() {
-            if half != "zero" {
-                out[2 * i] = self.and_mask(half, 16);
-                out[2 * i + 1] = self.shift(half, -16);
+    ) -> Vec<&'static str> {
+        let n = a.len();
+        let mut out = Vec::new();
+        let mut borrow = "zero";
+        for i in 0..n {
+            if i + 1 == n {
+                let d = self.pure("sub", a[i], b[i]);
+                let d = self.pure("add", d, borrow);
+                out.push(self.and_mask(d, top(bits)));
+            } else if b[i] == "zero" && borrow == "zero" {
+                out.push(a[i]);
+            } else {
+                // The difference is negative when a borrow is due.
+                let d = self.pure("sub", a[i], b[i]);
+                let d = self.pure("add", d, borrow);
+                let c = self.op3("cmp", d, "zero");
+                borrow = self.op3("min", c, "zero");
+                out.push(self.and_mask(d, MAX_BITS));
             }
         }
         out
     }
 
-    /// The low 64 bits of a product, from columns of 16-bit pieces:
-    /// each piece product is below 2^32, and four of them with a carry
+    fn wide_add(&mut self, a: &[&'static str], b: &[&'static str], bits: u32) -> Vec<&'static str> {
+        let n = a.len();
+        let mut out = Vec::new();
+        let mut carry = "zero";
+        for i in 0..n {
+            let s = self.pure("add", a[i], b[i]);
+            let s = self.pure("add", s, carry);
+            if i + 1 == n {
+                out.push(self.and_mask(s, top(bits)));
+            } else if [a[i], b[i], carry].iter().filter(|r| **r != "zero").count() < 2 {
+                carry = "zero";
+                out.push(s);
+            } else {
+                let m = self.li(M32);
+                let c = self.op3("cmp", s, m);
+                carry = self.op3("max", c, "zero");
+                out.push(self.op3("band", s, m));
+            }
+        }
+        out
+    }
+
+    /// The 16-bit pieces of a value, low first ("zero" where known).
+    fn pieces(&mut self, v: &[&'static str], k: Option<i128>) -> Vec<&'static str> {
+        if let Some(k) = k {
+            return (0..2 * v.len() as u32).map(|i| self.li(bits_of(k, 16 * i, 16))).collect();
+        }
+        let mut out = Vec::new();
+        for &limb in v {
+            out.push(self.and_mask(limb, 16));
+            out.push(self.shift(limb, -16));
+        }
+        out
+    }
+
+    /// The low limbs of a product, from columns of 16-bit pieces: each
+    /// piece product is below 2^32, and sixteen of them with a carry
     /// still fit a word.
     fn wide_mul(
         &mut self,
-        a: Pair,
+        a: &[&'static str],
         ka: Option<i128>,
-        b: Pair,
+        b: &[&'static str],
         kb: Option<i128>,
         bits: u32,
-    ) -> Pair {
+    ) -> Vec<&'static str> {
+        let n = a.len();
         let pa = self.pieces(a, ka);
         let pb = self.pieces(b, kb);
-        let mut col = ["zero"; 4];
+        let mut col = vec!["zero"; 2 * n];
         for (i, x) in pa.iter().enumerate() {
             for (j, y) in pb.iter().enumerate() {
-                if i + j > 3 || *x == "zero" || *y == "zero" {
+                if i + j >= 2 * n || *x == "zero" || *y == "zero" {
                     continue;
                 }
                 let p = self.op3("mul", x, y);
-                col[i + j] = if col[i + j] == "zero" { p } else { self.op3("add", col[i + j], p) };
+                col[i + j] = self.pure("add", col[i + j], p);
             }
         }
-        // lo = c0 + (c1 mod 2^16) 2^16, its carry and the rest go up.
-        let c1lo = self.and_mask(col[1], 16);
-        let c1lo = self.shift(c1lo, 16);
-        let lo =
-            if col[0] == "zero" && c1lo == "zero" { "zero" } else { self.op3("add", col[0], c1lo) };
-        let carry = self.shift(lo, -32);
-        let lo = self.and_mask(lo, 32);
-        let c1hi = self.shift(col[1], -16);
-        let c3lo = self.and_mask(col[3], 16);
-        let c3lo = self.shift(c3lo, 16);
-        let mut hi = "zero";
-        for t in [carry, c1hi, col[2], c3lo] {
-            if t != "zero" {
-                hi = if hi == "zero" { t } else { self.op3("add", hi, t) };
+        // Limb i is column 2i and the low half of column 2i + 1 above
+        // it, with the carry from below; what passes 32 bits, and the
+        // high half of column 2i + 1, go up.
+        let mut out = Vec::new();
+        let mut carry = "zero";
+        for i in 0..n {
+            let up = self.and_mask(col[2 * i + 1], 16);
+            let up = self.shift(up, 16);
+            let s = self.pure("add", col[2 * i], up);
+            let s = self.pure("add", s, carry);
+            if i + 1 == n {
+                out.push(self.and_mask(s, top(bits)));
+                break;
             }
+            let over = self.shift(s, -32);
+            let high = self.shift(col[2 * i + 1], -16);
+            carry = self.pure("add", over, high);
+            out.push(self.and_mask(s, MAX_BITS));
         }
-        let hi = self.and_mask(hi, bits - MAX_BITS);
-        (lo, hi)
+        out
     }
 
     /// Division by a constant below 2^25, a 16-bit digit at a time from
     /// the top, so that a remainder and a digit always fit a word.
-    fn wide_divmod(&mut self, a: Pair, d: i128, bits: u32) -> (Pair, Pair) {
+    fn wide_divmod(
+        &mut self,
+        a: &[&'static str],
+        d: i128,
+        bits: u32,
+    ) -> (Vec<&'static str>, Vec<&'static str>) {
+        let n = a.len();
         let p = self.pieces(a, None);
         let k = self.li(d);
         let mut rem = "zero";
-        let mut q = ["zero"; 4];
-        for i in (0..4).rev() {
+        let mut q = vec!["zero"; 2 * n];
+        for i in (0..2 * n).rev() {
             let up = self.shift(rem, 16);
             let cur = self.or2(up, p[i]);
             if cur == "zero" {
@@ -155,12 +200,50 @@ impl Lower<'_> {
             q[i] = self.op3("div", cur, k);
             rem = self.op3("rem", cur, k);
         }
-        let q1 = self.shift(q[1], 16);
-        let qlo = self.or2(q1, q[0]);
-        let q3 = self.shift(q[3], 16);
-        let qhi = self.or2(q3, q[2]);
-        let qhi = self.and_mask(qhi, bits - MAX_BITS);
-        ((qlo, qhi), (rem, "zero"))
+        let mut quot = Vec::new();
+        for i in 0..n {
+            let h = self.shift(q[2 * i + 1], 16);
+            let l = self.or2(h, q[2 * i]);
+            quot.push(if i + 1 == n { self.and_mask(l, top(bits)) } else { l });
+        }
+        let mut r = vec!["zero"; n];
+        r[0] = rem;
+        (quot, r)
+    }
+
+    /// The helper function for `op` on `bits`-bit integers, if one does
+    /// it.
+    fn wide_helper(
+        &self,
+        op: &str,
+        bits: u32,
+        ka: Option<i128>,
+        kb: Option<i128>,
+    ) -> Option<&'static str> {
+        if self.inline_wide {
+            return None;
+        }
+        let small_divisor = kb.is_some_and(|d| d > 0 && d < 1 << 25);
+        let unknown = ka.is_none() && kb.is_none();
+        match (bits, op) {
+            (64, "mul") if self.mul_helper && unknown => Some("ll$mul64"),
+            (64, "udiv") if !small_divisor => Some("ll$udiv64"),
+            (64, "urem") if !small_divisor => Some("ll$urem64"),
+            (64, "sdiv") => Some("ll$sdiv64"),
+            (64, "srem") => Some("ll$srem64"),
+            (64, "shl") if kb.is_none() => Some("ll$shl64"),
+            (64, "lshr") if kb.is_none() => Some("ll$lshr64"),
+            (64, "ashr") if kb.is_none() => Some("ll$ashr64"),
+            (128, "mul") if unknown => Some("ll$mul128"),
+            (128, "udiv") if !small_divisor => Some("ll$udiv128"),
+            (128, "urem") if !small_divisor => Some("ll$urem128"),
+            (128, "sdiv") => Some("ll$sdiv128"),
+            (128, "srem") => Some("ll$srem128"),
+            (128, "shl") if kb.is_none() => Some("ll$shl128"),
+            (128, "lshr") if kb.is_none() => Some("ll$lshr128"),
+            (128, "ashr") if kb.is_none() => Some("ll$ashr128"),
+            _ => None,
+        }
     }
 
     pub(super) fn wide_bin(
@@ -174,110 +257,113 @@ impl Lower<'_> {
         let ka = self.wide_const(a, bits);
         let kb = self.wide_const(b, bits);
         // What is too big to repeat goes to a helper function.
-        let small_divisor = kb.is_some_and(|d| d > 0 && d < 1 << 25);
-        let helper = match op {
-            _ if self.inline_wide || bits != 64 => None,
-            "mul" if self.mul_helper && ka.is_none() && kb.is_none() => Some("ll$mul64"),
-            "udiv" if !small_divisor => Some("ll$udiv64"),
-            "urem" if !small_divisor => Some("ll$urem64"),
-            "sdiv" => Some("ll$sdiv64"),
-            "srem" => Some("ll$srem64"),
-            "shl" if kb.is_none() => Some("ll$shl64"),
-            "lshr" if kb.is_none() => Some("ll$lshr64"),
-            "ashr" if kb.is_none() => Some("ll$ashr64"),
-            _ => None,
-        };
-        if let Some(h) = helper {
+        if let Some(h) = self.wide_helper(op, bits, ka, kb) {
             self.wide_calls.insert(h);
             let args = [(t.clone(), a.clone()), (t.clone(), b.clone())];
             return self.call_named(h, &args, t);
         }
-        let pa = self.pair(a, t)?;
-        let pb = self.pair(b, t)?;
-        let (lo, hi) = match op {
-            "add" => self.wide_add(pa, pb, bits),
-            "sub" => self.wide_sub(pa.0, pa.1, pb.0, pb.1, bits),
+        let pa = self.leaves_of(a, t)?;
+        let pb = self.leaves_of(b, t)?;
+        Ok(match op {
+            "add" => self.wide_add(&pa, &pb, bits),
+            "sub" => self.wide_sub(&pa, &pb, bits),
             "and" | "or" | "xor" => {
                 let op = format!("b{op}");
-                (self.pure(&op, pa.0, pb.0), self.pure(&op, pa.1, pb.1))
+                pa.iter().zip(&pb).map(|(x, y)| self.pure(&op, x, y)).collect()
             }
-            "mul" => self.wide_mul(pa, ka, pb, kb, bits),
+            "mul" => self.wide_mul(&pa, ka, &pb, kb, bits),
             "udiv" | "urem" => {
                 let Some(d) = kb.filter(|&d| d > 0 && d < 1 << 25) else {
                     return Err(format!(
                         "{op} of {bits}-bit integers is supported only by a constant below 2^25"
                     ));
                 };
-                let (q, r) = self.wide_divmod(pa, d, bits);
+                let (q, r) = self.wide_divmod(&pa, d, bits);
                 if op == "udiv" { q } else { r }
             }
             "shl" | "lshr" | "ashr" => {
-                let Some(k) = kb.filter(|&k| k < bits as i128) else {
+                let Some(k) = kb.filter(|&k| (0..bits as i128).contains(&k)) else {
                     return Err(format!(
                         "{op} of {bits}-bit integers by a variable amount is not supported yet"
                     ));
                 };
-                self.wide_shift(op, pa, k, bits)
+                self.wide_shift(op, &pa, k as u32, bits)
             }
             _ => {
                 return Err(format!("{op} of {bits}-bit integers is not supported yet"));
             }
-        };
-        Ok(vec![lo, hi])
+        })
     }
 
-    fn wide_shift(&mut self, op: &str, (lo, hi): Pair, k: i128, bits: u32) -> Pair {
-        let hb = (bits - MAX_BITS) as i128;
+    /// Fill limbs for a signed value whose last limb is `hi`, `hb` bits
+    /// wide: the last limb widened to 32 bits, and a limb of its sign
+    /// (all ones or zero).
+    fn sign_limbs(&mut self, hi: &'static str, hb: u32) -> (&'static str, &'static str) {
+        let s = self.signed(hi, hb);
+        if s == "zero" {
+            return ("zero", "zero");
+        }
+        let c = self.op3("cmp", s, "zero");
+        let n = self.op3("min", c, "zero");
+        (self.and_mask(s, MAX_BITS), self.and_mask(n, MAX_BITS))
+    }
+
+    fn wide_shift(&mut self, op: &str, a: &[&'static str], k: u32, bits: u32) -> Vec<&'static str> {
         if k == 0 {
-            return (lo, hi);
+            return a.to_vec();
         }
-        match op {
-            "shl" if k >= 32 => {
-                let h = self.and_mask(lo, (hb - (k - 32)) as u32);
-                (("zero"), self.shift(h, k - 32))
-            }
-            "shl" => {
-                let l = self.and_mask(lo, (32 - k) as u32);
-                let l = self.shift(l, k);
-                let up = self.shift(lo, -(32 - k));
-                let h = if hb > k {
-                    let h = self.and_mask(hi, (hb - k) as u32);
-                    self.shift(h, k)
-                } else {
-                    "zero"
-                };
-                let h = self.or2(h, up);
-                let h = self.and_mask(h, hb as u32);
-                (l, h)
-            }
-            "lshr" if k >= 32 => (self.shift(hi, -(k - 32)), "zero"),
-            "lshr" => {
-                let l = self.shift(lo, -k);
-                let down = self.and_mask(hi, k as u32);
-                let down = self.shift(down, 32 - k);
-                (self.or2(l, down), self.shift(hi, -k))
-            }
-            _ => {
-                // ashr: the high half signed, so that bsh fills with its sign.
-                let sh = self.signed(hi, hb as u32);
-                if k >= 32 {
-                    let l = self.shift(sh, -(k - 32));
-                    let l = self.and_mask(l, 32);
-                    let h = self.shift(sh, -hb);
-                    (l, self.and_mask(h, hb as u32))
-                } else {
-                    let l = self.shift(lo, -k);
-                    let down = self.and_mask(hi, k as u32);
-                    let down = self.shift(down, 32 - k);
-                    let h = self.shift(sh, -k);
-                    (self.or2(l, down), self.and_mask(h, hb as u32))
+        let n = a.len();
+        let (q, r) = ((k / MAX_BITS) as usize, k % MAX_BITS);
+        let mut out = Vec::new();
+        if op == "shl" {
+            for i in 0..n {
+                let w = width(i, n, bits);
+                let this = if i >= q { a[i - q] } else { "zero" };
+                let below = if i > q { a[i - q - 1] } else { "zero" };
+                if r == 0 {
+                    // A whole limb moved into the last, narrower one.
+                    out.push(if i + 1 == n && q > 0 { self.and_mask(this, w) } else { this });
+                    continue;
                 }
+                // Masked first, so that it never grows past the word.
+                let h = if w > r { self.and_mask(this, w - r) } else { "zero" };
+                let h = self.shift(h, r as i128);
+                let up = self.shift(below, -((MAX_BITS - r) as i128));
+                let up = if w < r { self.and_mask(up, w) } else { up };
+                out.push(self.or2(h, up));
             }
+            return out;
         }
+        // Right shifts. For ashr the last limb is taken signed, so that
+        // bsh brings in its sign, and the sign fills what is above it.
+        let signed = op == "ashr";
+        let s = if signed { self.signed(a[n - 1], top(bits)) } else { a[n - 1] };
+        for i in 0..n {
+            let w = width(i, n, bits);
+            let j = i + q;
+            let l = if j >= n - 1 {
+                if !signed && j > n - 1 {
+                    "zero"
+                } else {
+                    let by = if j > n - 1 { top(bits) } else { r };
+                    let d = self.shift(s, -(by as i128));
+                    if signed { self.and_mask(d, w) } else { d }
+                }
+            } else {
+                let d = self.shift(a[j], -(r as i128));
+                let next = if j + 1 == n - 1 { s } else { a[j + 1] };
+                let above = if r == 0 { "zero" } else { self.and_mask(next, r) };
+                let above = self.shift(above, (MAX_BITS - r) as i128);
+                self.or2(d, above)
+            };
+            out.push(l);
+        }
+        out
     }
 
-    /// A comparison of two-word integers as one of a word with zero: the
-    /// halves' -1/0/+1 weighed 3 to 1 has the sign of the comparison.
+    /// A comparison of wide integers as one of a word with zero: the
+    /// limbs' -1/0/+1 weighed by powers of 3 have the sign of the
+    /// comparison.
     pub(super) fn wide_cmp_operands(
         &mut self,
         pred: &str,
@@ -285,26 +371,51 @@ impl Lower<'_> {
         t: &Ty,
         a: &Val,
         b: &Val,
-    ) -> R<Pair> {
-        let (alo, ahi) = self.pair(a, t)?;
-        let (blo, bhi) = self.pair(b, t)?;
+    ) -> R<(&'static str, &'static str)> {
+        let mut pa = self.leaves_of(a, t)?;
+        let mut pb = self.leaves_of(b, t)?;
+        let n = pa.len();
         if pred == "eq" || pred == "ne" {
-            let l = self.pure("bxor", alo, blo);
-            let h = self.pure("bxor", ahi, bhi);
-            return Ok((self.pure("bor", l, h), "zero"));
+            let mut w = "zero";
+            for (x, y) in pa.iter().zip(&pb) {
+                let d = self.pure("bxor", x, y);
+                w = self.pure("bor", w, d);
+            }
+            return Ok((w, "zero"));
         }
-        let (ahi, bhi) = if Self::signed_pred(pred) {
-            let hb = bits - MAX_BITS;
-            (self.signed(ahi, hb), self.signed(bhi, hb))
-        } else {
-            (ahi, bhi)
-        };
-        let ch = self.op3("cmp", ahi, bhi);
-        let cl = self.op3("cmp", alo, blo);
-        let w = self.op3("add", ch, ch);
-        self.emit(format!("add   {w}, {w}, {ch}"));
-        self.emit(format!("add   {w}, {w}, {cl}"));
+        if Self::signed_pred(pred) {
+            pa[n - 1] = self.signed(pa[n - 1], top(bits));
+            pb[n - 1] = self.signed(pb[n - 1], top(bits));
+        }
+        let mut w = self.op3("cmp", pa[n - 1], pb[n - 1]);
+        for i in (0..n - 1).rev() {
+            let c = self.op3("cmp", pa[i], pb[i]);
+            let w3 = self.op3("add", w, w);
+            self.emit(format!("add   {w3}, {w3}, {w}"));
+            self.emit(format!("add   {w3}, {w3}, {c}"));
+            w = w3;
+        }
         Ok((w, "zero"))
+    }
+
+    /// `llvm.abs` of a wide integer.
+    pub(super) fn wide_abs(&mut self, v: &Val, t: &Ty, bits: u32) -> R<Vec<&'static str>> {
+        let a = self.leaves_of(v, t)?;
+        let n = a.len();
+        let zeros = vec!["zero"; n];
+        let neg = self.wide_sub(&zeros, &a, bits);
+        let out: Vec<&'static str> = (0..n).map(|_| self.vreg()).collect();
+        for (d, s) in out.iter().zip(&a) {
+            self.emit(format!("mv    {d}, {s}"));
+        }
+        let sign = self.li(1i128 << (top(bits) - 1));
+        let skip = self.new_label();
+        self.emit(format!("blt   {}, {sign}, {skip}", a[n - 1]));
+        for (d, s) in out.iter().zip(&neg) {
+            self.emit(format!("mv    {d}, {s}"));
+        }
+        self.label(&skip);
+        Ok(out)
     }
 
     pub(super) fn wide_cast(
@@ -317,51 +428,42 @@ impl Lower<'_> {
     ) -> R<Vec<&'static str>> {
         let fw = self.wide(from)?;
         let tw = self.wide(to)?;
-        match (fw, tw) {
-            // Into two words.
-            (None, Some(tb)) => {
-                let fb = self.bits(from)?;
-                let r = self.scalar(v, from)?;
-                match op {
-                    "zext" | "ptrtoint" | "bitcast" => Ok(vec![r, "zero"]),
-                    "sext" => {
-                        let s = self.signed(r, fb);
-                        let lo = self.and_mask(s, MAX_BITS);
-                        let c = self.op3("cmp", s, "zero");
-                        let n = self.op3("min", c, "zero");
-                        Ok(vec![lo, self.and_mask(n, tb - MAX_BITS)])
-                    }
-                    op => Err(format!("the {op} cast to {tb} bits is not supported")),
+        // The source as limbs, and its width.
+        let (src, fb) = match fw {
+            Some(fb) => (self.leaves_of(v, from)?, fb),
+            None => (vec![self.scalar(v, from)?], self.bits(from)?),
+        };
+        let tb = match tw {
+            Some(tb) => tb,
+            None => self.bits(to)?,
+        };
+        let (fnl, tnl) = (src.len(), limbs(tb));
+        match op {
+            "zext" | "ptrtoint" | "inttoptr" | "bitcast" | "trunc" => {
+                let mut out: Vec<&'static str> = src.into_iter().take(tnl).collect();
+                out.resize(tnl, "zero");
+                // A trunc drops the bits above the narrower width, unless
+                // `nuw` says there are none.
+                let from_w = if tnl <= fnl { width(tnl - 1, fnl, fb) } else { 0 };
+                if op == "trunc" && top(tb) < from_w && !flags.iter().any(|f| f == "nuw") {
+                    let last = out[tnl - 1];
+                    out[tnl - 1] = self.and_mask(last, top(tb));
                 }
+                Ok(out)
             }
-            // Out of two words.
-            (Some(_), None) => {
-                let (lo, _) = self.pair(v, from)?;
-                match op {
-                    "trunc" | "inttoptr" | "bitcast" => {
-                        let tb = self.bits(to)?;
-                        if tb < MAX_BITS && !flags.iter().any(|f| f == "nuw") {
-                            return Ok(vec![self.and_mask(lo, tb)]);
-                        }
-                        Ok(vec![lo])
-                    }
-                    op => Err(format!("the {op} cast is not supported")),
+            "sext" => {
+                if tb <= fb {
+                    return Err(format!("sext from {fb} to {tb} bits"));
                 }
+                let mut out = src;
+                let (hi, fill) = self.sign_limbs(out[fnl - 1], top(fb));
+                out[fnl - 1] = hi;
+                out.resize(tnl, fill);
+                let last = out[tnl - 1];
+                out[tnl - 1] = self.and_mask(last, top(tb));
+                Ok(out)
             }
-            // Between two two-word widths.
-            (Some(fb), Some(tb)) => {
-                let (lo, hi) = self.pair(v, from)?;
-                match op {
-                    "zext" | "bitcast" => Ok(vec![lo, hi]),
-                    "trunc" => Ok(vec![lo, self.and_mask(hi, tb - MAX_BITS)]),
-                    "sext" => {
-                        let s = self.signed(hi, fb - MAX_BITS);
-                        Ok(vec![lo, self.and_mask(s, tb - MAX_BITS)])
-                    }
-                    op => Err(format!("the {op} cast is not supported")),
-                }
-            }
-            (None, None) => unreachable!(),
+            op => Err(format!("the {op} cast to {tb} bits is not supported")),
         }
     }
 }

@@ -71,7 +71,7 @@ and the included assembly provides:
 | a byte (`u8`, `i8`, `bool`) in memory | one tryte holding 0..255, as devices use (isa.md 11) |
 | `u16`, `u32`, a pointer in memory | 2 or 4 trytes, low byte first, each 0..255 |
 | an N-bit integer in a register | a word holding its unsigned value, 0 .. 2ᴺ − 1 |
-| a 33- to 64-bit integer in registers | two words: the low 32 bits, then the rest |
+| a 33- to 256-bit integer in registers | a word per 32 bits, low first (Wide integers) |
 | `i1` (a comparison) | 0 or 1 |
 | a pointer in a register | the address |
 
@@ -101,24 +101,27 @@ A shift left first drops the bits that would go past the type,
 `(x mod 2^(N − k)) << k`, since a word holds only about 42 bits and
 `bsh` would otherwise wrap in ternary.
 
-### 64-bit integers
+### Wide integers
 
-A `u64` or `i64` does not fit a word, so it is held as two, low half
-first, each a 32-bit unsigned value; in memory it is the eight bytes
-LLVM expects, the two halves one after the other. Everywhere values are
-only moved (phis, selects, loads and stores, arguments, results,
-struct fields) a 64-bit integer is just two scalars, as a slice is.
-The operations are worked out on the halves:
+An integer wider than 32 bits does not fit a word, so it is held in
+limbs of a word each, low first: 32 bits apiece, the last holding what
+is left, each as its unsigned value. A `u64` is two limbs, a `u128`
+four. In memory it is the bytes LLVM expects, the limbs one after the
+other. Everywhere values are only moved (phis, selects, loads and
+stores, arguments, results, struct fields) a wide integer is just its
+limbs, as a slice is two scalars. The operations are worked out on the
+limbs:
 
-- `add` and `sub` carry or borrow between them, found by comparing the
-  low result with 2³² − 1 or with 0;
-- `and`, `or`, `xor` work on each half;
-- shifts by a constant move bits across the halves, masking a half
-  first so that it never grows past what a word holds;
+- `add` and `sub` carry or borrow from one limb to the next, found by
+  comparing the limb's result with 2³² − 1 or with 0;
+- `and`, `or`, `xor` work on each limb;
+- shifts by a constant move whole limbs and then bits across them,
+  masking a limb first so that it never grows past what a word holds;
+  `ashr` takes the last limb signed, so that `bsh` brings in its sign;
 - `mul` works in 16-bit pieces, adding up the pieces of each column
-  of the product (four products of two 16-bit pieces and a carry still
-  fit a word), and leaves out the pieces a constant or a zero-extended
-  value has none of;
+  of the product (sixteen products of two 16-bit pieces and a carry
+  still fit a word), and leaves out the pieces a constant or a
+  zero-extended value has none of;
 - `udiv` and `urem` by a constant below 2²⁵ go a 16-bit digit at a
   time from the top, as long division does by hand, which is what
   core's formatting needs (it divides by 10 000 and by 100);
@@ -126,15 +129,20 @@ The operations are worked out on the halves:
   written in LLVM IR (`rust/tc/src/ll/lower/wide.ll`) and lowered like
   the program, only those it uses: division by anything else a bit at
   a time, signed division, shifts by an amount known at run time, and
-  multiplication when a program multiplies two unknown values more
-  than once;
-- comparisons weigh the halves' −1/0/+1 three to one, which gives a
-  word with the comparison's sign: `eq` and `ne` test the halves'
-  `bxor` instead;
-- `zext`, `sext` and `trunc` take or make the high half.
+  multiplication of two unknown values (for 64 bits, only when a
+  program does it more than once). The 128-bit shifts are made of the
+  64-bit ones. A helper returns its four limbs in `a0`..`a3`, which
+  only these helpers do: Rust returns a `u128` through memory
+  (abi.md 2.3);
+- comparisons weigh the limbs' −1/0/+1 by powers of three, the last
+  limb the heaviest, which gives a word with the comparison's sign:
+  `eq` and `ne` test the limbs' `bxor` instead;
+- `zext`, `sext` and `trunc` add, fill or drop limbs.
 
-Integers of 33 to 63 bits get the operations done on the halves, not
-the helpers; 128-bit integers are refused for now.
+Widths in between (33 to 63 bits, 65 to 127, up to 256) get the
+operations done on the limbs, not the helpers. Core formats a `u128`
+by multiplying it as a 256-bit integer by a constant and shifting,
+which is how it divides by 10¹⁹, so 256 bits are needed too.
 
 ## Calls and frames
 
@@ -160,6 +168,30 @@ alignment of 2 or more is placed against a base register made at the
 function's start, `s0` plus an offset rounded down with `band` against
 −A, since the frame pointer itself may be anywhere; the frame has A − 1
 trytes to spare for it.
+
+## Atomics
+
+The target, `riscv32imac`, has atomics up to 32 bits, so core's
+`AtomicU32`, `AtomicBool` and the rest come out as LLVM's `load atomic`,
+`store atomic`, `atomicrmw` and `cmpxchg`. Bytes in memory are trytes,
+four to a `u32`, while detrytus's atomic instructions work on whole
+words (isa.md 7.9), so an atomic `u32` cannot be one `amoadd`. Instead
+the program has one lock, a word `ll$held`, and every atomic
+operation becomes its plain operations between taking it and giving it
+back: `atomicrmw max` is a load, a comparison, a select and a store,
+`cmpxchg` a load, an `eq`, a select and a store. Taking the lock is a
+call to `ll$lock`, which spins on `amoswap.aq` until the word was 0;
+`ll$unlock` puts 0 back with `amoswap.rl`. Both are `jal t6` helpers
+that change only `t2`..`t6` (`hcall` in alloc.rs), as the load and
+store helpers do. A `fence` becomes nothing, since a hart sees its own
+accesses in order and the lock orders those of others.
+
+So atomic operations are atomic against each other on any number of
+harts, which is what Rust promises; a plain access racing an atomic
+one is undefined behaviour in Rust anyway. A thread preempted while it
+holds the lock makes others spin until it runs again, which is slow but
+correct. `atomicrmw` on floats and the wrapping increments
+(`uinc_wrap`) are refused.
 
 ## Size
 
@@ -194,10 +226,11 @@ trytes on the bare machine.
 The translator refuses these with an error that names the function and
 the line:
 
-- 128-bit integers; for integers of 33 to 63 bits, shifts by a
-  variable amount and division by anything but a constant below 2²⁵;
-- floating point, atomics, vectors, varargs;
-- results of more than two words;
+- integers wider than 256 bits; for widths other than 64 and 128,
+  shifts by a variable amount and division by anything but a constant
+  below 2²⁵;
+- floating point, vectors, varargs;
+- results of more than four words;
 - variable-sized `alloca`;
 - the intrinsics for counting bits other than `llvm.ctlz`, swapping
   bytes and rotating (`llvm.ctpop`, `llvm.cttz`, `llvm.bswap`,

@@ -21,7 +21,7 @@ const ARGS: [&str; 6] = ["a0", "a1", "a2", "a3", "a4", "a5"];
 /// The widest integer held in one word. Wider ones, up to WIDE_BITS,
 /// are held as two: the low 32 bits and the rest (docs/rust.md).
 const MAX_BITS: u32 = 32;
-const WIDE_BITS: u32 = 64;
+const WIDE_BITS: u32 = 256;
 /// 2^32 - 1, the mask of a low half.
 const M32: i128 = (1 << 32) - 1;
 /// How many times a function makes a large constant before it is made
@@ -80,7 +80,7 @@ pub struct Lower<'m> {
 /// byte first: called with `jal t6`, the address in t5 and the value in
 /// t4, changing only t2..t6 (alloc.rs, `hload` and `hstore`). One call
 /// takes the place of up to eleven instructions at every load or store.
-const HELPERS: [(&str, &str); 4] = [
+const HELPERS: [(&str, &str); 6] = [
     (
         "ll$ld2",
         "lt    t4, 1(t5)\nli    t3, 256\nmul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2",
@@ -101,6 +101,14 @@ const HELPERS: [(&str, &str); 4] = [
          rem   t2, t4, t3\nst    t2, 1(t5)\ndiv   t4, t4, t3\n\
          rem   t2, t4, t3\nst    t2, 2(t5)\ndiv   t4, t4, t3\nst    t4, 3(t5)",
     ),
+    // Take and give back the lock around an atomic operation (ir.rs,
+    // `expand_atomic`): a word that is 1 while held.
+    (
+        "ll$lock",
+        "la    t5, ll$held\nli    t3, 1\nll$lock.again:\n\
+         amoswap.aq t2, t3, (t5)\nbne   t2, zero, ll$lock.again",
+    ),
+    ("ll$unlock", "la    t5, ll$held\namoswap.rl t2, zero, (t5)"),
 ];
 
 /// The assembly of the helpers in `used`.
@@ -110,11 +118,15 @@ pub fn helpers(used: &BTreeSet<&'static str>) -> Vec<String> {
         if used.contains(name) {
             out.push(String::new());
             out.push(format!("{name}:"));
-            for l in body.lines() {
-                out.push(format!("        {}", l.trim()));
+            for l in body.lines().map(str::trim) {
+                out.push(if l.ends_with(':') { l.to_string() } else { format!("        {l}") });
             }
             out.push("        jalr  zero, 0(t6)".into());
         }
+    }
+    if used.contains("ll$lock") {
+        out.push("ll$held:".into());
+        out.push("        .words 1".into());
     }
     out
 }
@@ -398,8 +410,11 @@ impl<'m> Lower<'m> {
     fn leaves(&self, t: &Ty, base: u64, out: &mut Vec<(u64, Ty)>) -> R<()> {
         match self.resolve(t)? {
             Ty::Int(b) if b > MAX_BITS && b <= WIDE_BITS => {
-                out.push((base, Ty::Int(MAX_BITS)));
-                out.push((base + 4, Ty::Int(b - MAX_BITS)));
+                let n = wide::limbs(b);
+                for i in 0..n {
+                    let w = if i + 1 == n { b - MAX_BITS * (n as u32 - 1) } else { MAX_BITS };
+                    out.push((base + 4 * i as u64, Ty::Int(w)));
+                }
             }
             Ty::Int(b) => out.push((base, Ty::Int(self.bits(&Ty::Int(b))?))),
             Ty::Ptr => out.push((base, Ty::Ptr)),
@@ -672,8 +687,7 @@ impl<'m> Lower<'m> {
             }
             (Const::Bytes(bs), _) => Ok(bs.iter().map(|&b| self.li(b as i128)).collect()),
             (Const::Int(v), Ty::Int(b)) if self.wide(&t)?.is_some() => {
-                let v = Self::canon(*v, *b);
-                Ok(vec![self.li(v & M32), self.li(v >> 32)])
+                Ok(wide::const_limbs(*v, *b).into_iter().map(|k| self.li(k)).collect())
             }
             _ => Ok(vec![self.const_reg(c, &t)?]),
         }
@@ -710,16 +724,12 @@ impl<'m> Lower<'m> {
         Ok(l[0])
     }
 
-    /// A two-word integer's halves: low 32 bits, then the rest.
-    fn pair(&mut self, v: &Val, t: &Ty) -> R<(&'static str, &'static str)> {
-        let l = self.leaves_of(v, t)?;
-        Ok((l[0], l[1]))
-    }
-
-    /// A two-word integer constant's value, if `v` is one.
+    /// A wide integer constant's value, if `v` is one: unsigned below
+    /// 127 bits, as written (sign-extended) from there.
     fn wide_const(&self, v: &Val, bits: u32) -> Option<i128> {
         match v {
-            Val::Const(Const::Int(k)) => Some(Self::canon(*k, bits)),
+            Val::Const(Const::Int(k)) if bits < 127 => Some(Self::canon(*k, bits)),
+            Val::Const(Const::Int(k)) => Some(*k),
             Val::Const(Const::Zero | Const::Null | Const::Undef) => Some(0),
             _ => None,
         }
@@ -1090,19 +1100,7 @@ impl<'m> Lower<'m> {
             }
             "llvm.abs" if self.wide(&t)?.is_some() => {
                 let bits = self.wide(&t)?.unwrap_or(WIDE_BITS);
-                let (lo, hi) = self.pair(&args[0].1, &t)?;
-                let (nlo, nhi) = self.wide_sub("zero", "zero", lo, hi, bits);
-                let dl = self.vreg();
-                let dh = self.vreg();
-                self.emit(format!("mv    {dl}, {lo}"));
-                self.emit(format!("mv    {dh}, {hi}"));
-                let sign = self.li(1i128 << (bits - MAX_BITS - 1));
-                let skip = self.new_label();
-                self.emit(format!("blt   {hi}, {sign}, {skip}"));
-                self.emit(format!("mv    {dl}, {nlo}"));
-                self.emit(format!("mv    {dh}, {nhi}"));
-                self.label(&skip);
-                vec![dl, dh]
+                self.wide_abs(&args[0].1, &t, bits)?
             }
             "llvm.ctlz" => {
                 let bits = self.bits(&t)?;
@@ -1225,8 +1223,8 @@ impl<'m> Lower<'m> {
             self.emit(format!("addi  sp, sp, {}", 3 * extra));
         }
         let n = self.leaf_types(ret)?.len();
-        if n > 2 {
-            return Err("a result of more than two words is not supported yet".into());
+        if n > 4 {
+            return Err("a result of more than four words is not supported yet".into());
         }
         let mut out = Vec::new();
         for a in ARGS.iter().take(n) {
@@ -1346,8 +1344,8 @@ impl<'m> Lower<'m> {
             Op::Ret(v) => {
                 if let Some((t, v)) = v {
                     let regs = self.leaves_of(v, t)?;
-                    if regs.len() > 2 {
-                        return Err("a result of more than two words is not supported yet".into());
+                    if regs.len() > 4 {
+                        return Err("a result of more than four words is not supported yet".into());
                     }
                     for (k, r) in regs.iter().enumerate() {
                         self.emit(format!("mv    {}, {r}", ARGS[k]));
@@ -1529,6 +1527,12 @@ impl<'m> Lower<'m> {
                 }
                 self.set(res, out);
             }
+            Op::Lock | Op::Unlock => {
+                let name = if matches!(ins.op, Op::Lock) { "ll$lock" } else { "ll$unlock" };
+                self.emit(format!("hcall {name}"));
+                self.helpers.insert(name);
+            }
+            Op::Atomic { op, .. } => return Err(format!("atomic {op} was not expanded")),
             Op::Other(what) => return Err(format!("{what} is not supported")),
             Op::Br { .. } | Op::Jump(_) | Op::Switch { .. } | Op::Ret(_) | Op::Unreachable => {
                 self.terminator(&ins.op)?
@@ -1648,10 +1652,10 @@ impl<'m> Lower<'m> {
         }
         self.align_allocas(f).map_err(|e| fail(f.line, e))?;
         let results = self.leaf_types(&f.ret).map_err(|e| fail(f.line, e))?.len();
-        if results > 2 {
+        if results > 4 {
             return Err(fail(
                 f.line,
-                "a result of more than two words is not supported yet".into(),
+                "a result of more than four words is not supported yet".into(),
             ));
         }
         // Blocks are lowered so that each comes after the blocks that
@@ -1719,14 +1723,10 @@ impl<'m> Lower<'m> {
                     self.bytes(ec, et, out)?;
                 }
             }
-            (Const::Int(v), Ty::Int(b)) => {
-                if *b > 64 {
-                    return Err(format!("{b}-bit constants are not supported"));
-                }
-                let mut v = Self::canon(*v, *b);
-                for _ in 0..size {
-                    out.push((v % 256).to_string());
-                    v /= 256;
+            (Const::Int(v), Ty::Int(_)) => {
+                // Two's complement, sign-extended past 128 bits.
+                for k in 0..size as u32 {
+                    out.push(((v >> (8 * k).min(127)) & 255).to_string());
                 }
             }
             _ => {

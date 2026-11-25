@@ -1398,3 +1398,42 @@ The owner approved making Rust programs smaller next, suggesting a
   overflow the word before its result was masked, since `bsh` wraps
   in ternary. A shift now drops the bits that would leave the type
   first.
+
+### 2026-11-25 · Atomics through one lock
+
+The owner asked for the remaining Rust gaps: atomics, 128-bit integers
+and floating point. Atomics first (`docs/rust.md`, Atomics):
+
+- **One lock word per program, every atomic operation done plainly
+  under it.** An atomic `u32` is four trytes in memory, a byte a
+  tryte, while `amoswap`, `amoadd` and `cas` work on aligned words,
+  so the native instructions cannot do a 32-bit atomic add. The lock
+  makes atomics atomic against each other on any number of harts,
+  which is all Rust promises. Rejected: keeping atomics in words
+  (the same objection as for keeping a `u32` in a word: code reads
+  their bytes, `AtomicU32::as_ptr` and `from_ptr` hand them out), and
+  ignoring atomicity on the grounds that trylobite runs one hart
+  (true today, but kernel code and future SMP would break quietly).
+- **The expansion happens when the IR is read**, into loads, stores,
+  `icmp`, `select` and `insertvalue` between two new operations, lock
+  and unlock, so the lowering already handles everything else.
+- **A `fence` is nothing**: a hart sees its own accesses in order,
+  and the lock orders those of others.
+
+### 2026-11-25 · 128-bit integers as limbs
+
+Second of the remaining Rust gaps (`docs/rust.md`, Wide integers):
+
+- **The two-word code became N-limb code** rather than a separate
+  128-bit path: one limb per 32 bits, the same carry, borrow, column
+  multiply, digit division and limb-weighted comparison for any width
+  up to 256 bits. 64-bit code comes out the same size as before
+  (rfact still 3 960 trytes).
+- **256 bits, not 128**, because core formats a `u128` by a 256-bit
+  multiply by a constant and a shift, its way of dividing by 10¹⁹.
+- **128-bit helpers in LLVM IR beside the 64-bit ones**: division a bit
+  at a time and `mul` of two unknowns done in line, variable shifts
+  built from the 64-bit shift helpers. They return four words in
+  `a0`..`a3`, a convention only they use; Rust itself returns a `u128`
+  through memory. Rejected: compiler_builtins' `__udivti3` and
+  friends, which would pull in much more IR for the same result.

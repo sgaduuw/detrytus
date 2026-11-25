@@ -44,6 +44,22 @@ fn integers_of_64_bits_and_long_calls() {
 }
 
 #[test]
+fn integers_of_128_bits() {
+    let (code, text) = run("wide128");
+    assert_eq!(
+        text,
+        "1512366075204170947332355369683137040 -170141183460469231731687303715884105728 \
+         ffffffffffffffff0000000000000001\n"
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn atomics() {
+    assert_eq!(run("atomics"), (0, String::new()));
+}
+
+#[test]
 fn core_fmt_formats() {
     let (code, text) = run("fmt");
     assert_eq!(
@@ -72,8 +88,12 @@ fn refused(body: &str) -> String {
 #[test]
 fn what_is_not_supported_yet_is_refused_by_name() {
     assert_eq!(
-        refused("  %x = zext i32 %argc to i128\n  %y = trunc i128 %x to i32\n  ret i32 %y"),
-        "input.ll:3: @main: 128-bit integers are not supported yet"
+        refused("  %x = zext i32 %argc to i512\n  %y = trunc i512 %x to i32\n  ret i32 %y"),
+        "input.ll:3: @main: 512-bit integers are not supported yet"
+    );
+    assert_eq!(
+        refused("  %x = zext i32 %argc to i96\n  %y = udiv i96 %x, %x\n  ret i32 0"),
+        "input.ll:4: @main: udiv of 96-bit integers is supported only by a constant below 2^25"
     );
     assert_eq!(
         refused("  %x = zext i32 %argc to i48\n  %y = udiv i48 %x, %x\n  ret i32 0"),
@@ -84,8 +104,8 @@ fn what_is_not_supported_yet_is_refused_by_name() {
         "input.ll:3: @main: the sitofp instruction is not supported"
     );
     assert_eq!(
-        refused("  %x = atomicrmw add ptr %argv, i32 1 seq_cst\n  ret i32 0"),
-        "input.ll:3: @main: the atomicrmw instruction is not supported"
+        refused("  %x = atomicrmw uinc_wrap ptr %argv, i32 1 seq_cst\n  ret i32 0"),
+        "input.ll:3: @main: atomicrmw uinc_wrap is not supported"
     );
 }
 
