@@ -445,7 +445,13 @@ machine's TCP itself: its SYN is answered once the host's connect
 succeeds, and reset if that fails. Packets to 10.0.0.1 go to the host's
 127.0.0.1, so the machine reaches the host's own servers there. The
 machine takes any address on 10.0.0.0/24 (10.0.0.2 by convention); the
-gateway answers whichever it uses. Nothing outside can open a
+gateway answers whichever it uses. A name server, 10.0.0.3 (same
+MAC), answers ARP and pings too, and DNS queries on UDP port 53: a
+standard query for one name's A records is looked up with the host's
+own resolver (its hosts file and DNS, on a thread so the machine never
+waits) and answered with every IPv4 address found, TTL 60, or with
+NXDOMAIN (rcode 3) if the lookup fails; a query for any other type is
+answered with no records. Other traffic to it is dropped. Nothing outside can open a
 connection to the machine. The host keeps real time, so a machine on
 this link wants `--live`; without it, its idle time is skipped and its
 timeouts run out before the host answers.

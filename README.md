@@ -166,7 +166,8 @@ puts the machine on a small network of its own behind a gateway at
 user networking does: pings, UDP and TCP connections go out to
 wherever the host can reach, with no root and no TAP device, and
 10.0.0.1 itself stands for the host, so a server on the host's
-127.0.0.1 answers there. Use it with `--live`, since the far end keeps
+127.0.0.1 answers there. A name server at 10.0.0.3 answers DNS
+queries for addresses from the host's own resolver. Use it with `--live`, since the far end keeps
 real time. `--mac` sets the interface's address.
 
 ```bash
