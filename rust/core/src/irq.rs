@@ -13,9 +13,10 @@ pub const IRQ_PAGE: i64 = -13;
 const CENTRE: i64 = IRQ_PAGE * PAGE;
 
 /// The highest source number on this platform.
-pub const SOURCES: i64 = 2;
+pub const SOURCES: i64 = 3;
 pub const CONSOLE_SOURCE: i64 = 1;
 pub const BLOCK_SOURCE: i64 = 2;
+pub const NET_SOURCE: i64 = 3;
 
 // Group 0's registers, as offsets from the page's centre.
 const CLAIM: i64 = -3;
@@ -111,9 +112,9 @@ impl InterruptController {
 mod tests {
     use super::*;
 
-    const NONE: Lines = [false; 3];
-    const CONSOLE: Lines = [false, true, false];
-    const BOTH: Lines = [false, true, true];
+    const NONE: Lines = [false; 4];
+    const CONSOLE: Lines = [false, true, false, false];
+    const BOTH: Lines = [false, true, true, false];
 
     #[test]
     fn groups_tile_the_page_from_its_centre() {
@@ -157,11 +158,11 @@ mod tests {
         let mut c = InterruptController::default();
         c.write(irq_addr(2, ENABLE), 5); // not +1: stored as 0
         c.write(irq_addr(2, ROUTE), -4);
-        c.write(irq_addr(3, ENABLE), 1);
+        c.write(irq_addr(4, ENABLE), 1);
         assert_eq!(c.read(irq_addr(2, ENABLE), 0, &NONE), 0);
         assert_eq!(c.read(irq_addr(2, ROUTE), 0, &NONE), -4);
         assert_eq!(c.read(irq_addr(1, PENDING), 0, &CONSOLE), 1);
-        assert_eq!(c.read(irq_addr(3, ENABLE), 0, &NONE), 0);
-        assert_eq!(c.read(irq_addr(0, SOURCES_REG), 0, &NONE), 2);
+        assert_eq!(c.read(irq_addr(4, ENABLE), 0, &NONE), 0);
+        assert_eq!(c.read(irq_addr(0, SOURCES_REG), 0, &NONE), 3);
     }
 }

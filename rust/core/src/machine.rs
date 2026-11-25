@@ -56,6 +56,10 @@ pub struct Machine {
     pace: Option<i64>,
     /// Set when a skip stopped at that limit, short of the wake-up.
     paced: bool,
+    /// Ticks skipped since the last skip stopped at the limit: short
+    /// skips add up to a paced one, so a link polled every few ticks is
+    /// paced too.
+    skipped: i64,
 }
 
 /// Whether hart `h`, waiting, may run: an interrupt pending and enabled
@@ -102,6 +106,7 @@ impl Machine {
             stalled: false,
             pace: None,
             paced: false,
+            skipped: 0,
         }
     }
 
@@ -210,7 +215,8 @@ impl Machine {
 
     /// Whether, since the last call, every running hart has waited with
     /// nothing inside the machine to wake one (no timer set, no block
-    /// command in flight, no hot-plug change due): only the world outside,
+    /// command or send in flight, no frame that could arrive, no hot-plug
+    /// change due): only the world outside,
     /// such as console input, could. A live console uses this to sleep
     /// until something is typed rather than spin.
     pub fn take_stalled(&mut self) -> bool {
@@ -301,9 +307,9 @@ impl Machine {
     }
 
     /// When every running hart waits, move the clock to just before the
-    /// first thing that could wake one: a timer, a hot-plug change or a
-    /// block command finishing. If
-    /// nothing could, wake them all, as `wfi` is allowed to return early.
+    /// first thing that could wake one: a timer, a hot-plug change, a
+    /// block command or a send finishing, or the link being looked at for
+    /// a frame that could arrive. If nothing could, wake them all, as `wfi` is allowed to return early.
     /// (Stopped harts never wait: a hart is replaced when it starts.)
     fn skip_idle_time(&mut self, running: &[i64]) {
         let bus = &self.bus;
@@ -323,13 +329,22 @@ impl Machine {
         let deadlines = waiting.iter().filter_map(|(_, hart)| hart.deadline).filter(|&d| d > now);
         let plugs = self.schedule.iter().map(|(t, _)| t - 1).filter(|&t| t > now);
         let disk = self.bus.block.done_at().map(|t| t - 1).filter(|&t| t > now);
-        match timers.chain(deadlines).chain(plugs).chain(disk).min() {
+        let net = self.bus.net_wake(now);
+        if net == Some(now) {
+            return; // the next round moves a frame
+        }
+        match timers.chain(deadlines).chain(plugs).chain(disk).chain(net).min() {
             Some(t) => match self.pace {
-                Some(limit) if t - now > limit => {
-                    self.time = now + limit;
+                Some(limit) if t - now > limit - self.skipped => {
+                    self.time = now + limit - self.skipped;
+                    self.skipped = 0;
                     self.paced = true;
                 }
-                _ => self.time = t,
+                Some(_) => {
+                    self.skipped += t - now;
+                    self.time = t;
+                }
+                None => self.time = t,
             },
             None => {
                 for (_, hart) in waiting {

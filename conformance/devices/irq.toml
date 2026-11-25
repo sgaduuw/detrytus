@@ -15,7 +15,7 @@ prelude = '''
         .equ  PENDING2, 15
         .equ  ENABLE2, 18
         .equ  ROUTE2, 21
-        .equ  ENABLE3, 27
+        .equ  ENABLE4, 36
         .equ  CONSOLE_IN, -19680
         .equ  CONSOLE_EMPTY, -1
         .equ  CONSOLE_CLOSED, -2
@@ -75,8 +75,8 @@ program = '''
         sw    t0, ROUTE2(s1)
         lw    s7, ROUTE2(s1)
         li    t0, 1
-        sw    t0, ENABLE3(s1)     # no source 3
-        lw    s8, ENABLE3(s1)
+        sw    t0, ENABLE4(s1)     # no source 4
+        lw    s8, ENABLE4(s1)
         lw    a1, CLAIM(s1)       # enabled and pending, but no interrupt needed to claim
         lw    a2, CLAIM(s1)       # in service now
         li    t0, CONSOLE_IN
@@ -86,7 +86,7 @@ program = '''
 '''
 postlude = "li t6, POWER\nsw a0, 0(t6)"
 expect.exit_code = 0
-expect.registers = { s2 = 2, s3 = 1, s4 = 0, s5 = 1, s6 = 0, s7 = -4, s8 = 0, a1 = 1, a2 = 0, a3 = 0 }
+expect.registers = { s2 = 3, s3 = 1, s4 = 0, s5 = 1, s6 = 0, s7 = -4, s8 = 0, a1 = 1, a2 = 0, a3 = 0 }
 
 [[case]]
 name = "a masked source does not interrupt"

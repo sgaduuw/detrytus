@@ -5,8 +5,8 @@
 //! are RAM, negative pages are devices. The platform's devices are built
 //! in: the console at page −1, power control at page −2, the hart
 //! controller at pages −3 and −4, the interrupt controller at page −13,
-//! the block device at page −14 and the binary floating point
-//! coprocessor at page −15.
+//! the block device at page −14, the binary floating point
+//! coprocessor at page −15 and the network device at page −16.
 //!
 //! The bus also keeps each hart's `lr` reservation, so that a store by
 //! one hart breaks another's.
@@ -17,7 +17,9 @@ use crate::block::{BLOCK_PAGE, BLOCK_READ, BLOCK_TRYTES, BlockDevice, Request, T
 use crate::block::{ROUNDS_PER_BLOCK, SETUP_ROUNDS};
 use crate::fpu::{FPU_PAGE, Fpu};
 use crate::harts::{HartController, LOCAL_PAGE, SLOTS_PAGE};
-use crate::irq::{BLOCK_SOURCE, CONSOLE_SOURCE, IRQ_PAGE, InterruptController, Lines};
+use crate::irq::{BLOCK_SOURCE, CONSOLE_SOURCE, IRQ_PAGE, InterruptController, Lines, NET_SOURCE};
+use crate::net::{self, Buffer, FRAME_MAX, FRAME_MIN, NET_PAGE, NetDevice, POLL_ROUNDS};
+use crate::net::{Sending, TX_SETUP_ROUNDS};
 use crate::trits::{TRYTE_MOD, TRYTE_TRITS, low, split_high};
 
 pub const PAGE_TRITS: u32 = 9;
@@ -99,6 +101,7 @@ enum Region {
     Irq,
     Block,
     Fpu,
+    Net,
 }
 
 pub fn page_of(addr: i64) -> i64 {
@@ -115,6 +118,7 @@ pub struct Bus {
     pub irq: InterruptController,
     pub block: BlockDevice,
     pub fpu: Fpu,
+    pub net: NetDevice,
     /// The machine's clock, set each round, for devices that take time.
     pub now: i64,
     /// The hart whose access this is: the machine sets it before each
@@ -140,6 +144,7 @@ impl Bus {
             irq: InterruptController::default(),
             block: BlockDevice::default(),
             fpu: Fpu::default(),
+            net: NetDevice::default(),
             now: 0,
             current: 0,
             reservations: HashMap::new(),
@@ -151,6 +156,7 @@ impl Bus {
         let mut lines = Lines::default();
         lines[CONSOLE_SOURCE as usize] = self.console.wants_attention();
         lines[BLOCK_SOURCE as usize] = self.block.finished;
+        lines[NET_SOURCE as usize] = self.net.wants_attention();
         lines
     }
 
@@ -192,9 +198,91 @@ impl Bus {
         self.get(addr - 1) + self.get(addr) * TRYTE_MOD + self.get(addr + 1) * TRYTE_MOD * TRYTE_MOD
     }
 
+    /// Whether `len` trytes from `addr` are all RAM. RAM is one run of
+    /// pages, so the two ends tell.
+    fn in_ram(&self, addr: i64, len: i64) -> bool {
+        let ram = 1..=self.ram_pages;
+        len >= 1 && ram.contains(&page_of(addr)) && ram.contains(&page_of(addr + len - 1))
+    }
+
+    /// Take a send: read the frame, one octet per tryte, and start it, or
+    /// fail it at once.
+    fn start_send(&mut self, addr: i64, len: i64) {
+        let fits = (FRAME_MIN as i64..=FRAME_MAX as i64).contains(&len);
+        let frame = if self.net.link.is_some() && fits && self.in_ram(addr, len) {
+            (0..len).map(|i| u8::try_from(self.get(addr + i)).ok()).collect()
+        } else {
+            None
+        };
+        match frame {
+            Some(frame) => {
+                self.net.begin_send(Sending { frame, done_at: self.now + TX_SETUP_ROUNDS + len })
+            }
+            None => self.net.fail_send(),
+        }
+    }
+
+    fn start_receive(&mut self, buffer: Buffer) {
+        if self.in_ram(buffer.addr, buffer.size) {
+            self.net.arm(buffer);
+        } else {
+            self.net.fail_receive();
+        }
+    }
+
+    /// When the network device next needs a round, for a machine whose
+    /// harts all wait: the round before its send finishes, the round
+    /// before the link is next looked at if a frame could come, or now if
+    /// a frame is ready for the armed buffer.
+    pub fn net_wake(&self, now: i64) -> Option<i64> {
+        if self.net.armed.is_some() && !self.net.arrived.is_empty() {
+            return Some(now);
+        }
+        let poll = self.net.link.as_ref().filter(|l| l.may_receive()).map(|_| {
+            let next = now + 1;
+            next + (POLL_ROUNDS - next.rem_euclid(POLL_ROUNDS)) % POLL_ROUNDS - 1
+        });
+        let send = self.net.done_at().map(|t| (t - 1).max(now));
+        poll.into_iter().chain(send).min()
+    }
+
+    /// Move frames: finish the send in flight onto the link, take what
+    /// has arrived from the link, and fill the armed buffer.
+    fn advance_net(&mut self) {
+        if let Some(frame) = self.net.end_send(self.now)
+            && let Some(link) = &mut self.net.link
+        {
+            link.send(&frame);
+        }
+        if self.now.rem_euclid(POLL_ROUNDS) == 0
+            && let Some(link) = &mut self.net.link
+        {
+            let mut frames = Vec::new();
+            while let Some(frame) = link.receive() {
+                frames.push(frame);
+            }
+            for frame in frames {
+                self.net.arrive(frame);
+            }
+        }
+        if let Some((buffer, frame)) = self.net.next_delivery() {
+            for (i, &octet) in frame.iter().enumerate() {
+                self.poke(buffer.addr + i as i64, octet as i64);
+            }
+            let (lo, hi) = (buffer.addr, buffer.addr + frame.len() as i64 - 1);
+            self.reservations.retain(|_, r| *r + 1 < lo || *r - 1 > hi);
+        }
+    }
+
+    /// Let the devices that take time move on to `now`.
+    pub fn advance(&mut self) {
+        self.advance_block();
+        self.advance_net();
+    }
+
     /// Finish the block command in flight if its time has come: copy its
     /// blocks into its pages, or its pages to its blocks.
-    pub fn advance(&mut self) {
+    fn advance_block(&mut self) {
         if !self.block.done_at().is_some_and(|t| t <= self.now) {
             return;
         }
@@ -263,6 +351,7 @@ impl Bus {
             IRQ_PAGE if !device => Ok(Region::Irq),
             BLOCK_PAGE if !device => Ok(Region::Block),
             FPU_PAGE if !device => Ok(Region::Fpu),
+            NET_PAGE if !device => Ok(Region::Net),
             _ => Err(BusError::Fault(addr)),
         }
     }
@@ -314,6 +403,7 @@ impl Bus {
             }
             Region::Block => Ok(self.block.read(addr)),
             Region::Fpu => Ok(self.fpu.read(addr, self.current)),
+            Region::Net => Ok(self.net.read(addr)),
             Region::Console | Region::Power => Ok(0),
             Region::Boot | Region::Ram if width == 1 => Ok(self.get(addr)),
             Region::Boot | Region::Ram => Ok(self.word(addr)),
@@ -338,6 +428,11 @@ impl Bus {
                 }
             }
             Region::Fpu => self.fpu.write(addr, self.current, value),
+            Region::Net => match self.net.write(addr, value) {
+                net::Request::Send { addr, len } => self.start_send(addr, len),
+                net::Request::Receive(buffer) => self.start_receive(buffer),
+                net::Request::Nothing => {}
+            },
             Region::Power | Region::Boot => {}
             Region::Ram if width == 1 => {
                 self.break_reservations(addr, 1);

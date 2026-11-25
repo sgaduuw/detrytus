@@ -1557,3 +1557,47 @@ Eelco asked to replace what was left of compiler_builtins in
 - `lower/float.sh` is gone, and `ir.rs` no longer names functions
   nothing reaches (`fma`, `fmin`, `fminimum_num` and kin, which the
   coprocessor does).
+
+### 2026-11-25 · A network device
+
+Eelco asked for a network driver as the first step toward TCP/IP in
+trylobite. The machine needed an interface first (`docs/platform.md`,
+page −16):
+
+- **Ethernet frames, not packets.** The device moves whole frames and
+  knows nothing of IP, as a real NIC, so the whole stack (ARP, IP, TCP)
+  is trylobite's to write, which is the point of the exercise. Rejected:
+  an IP-level device (a TUN), which would hide ARP and make the frames
+  incompatible with every bridge and capture tool.
+- **One octet per tryte.** Frames cross to a binary world, so their
+  bytes stay bytes, as the coprocessor's values stay bits. A tryte holds
+  0..255 with room to spare and software indexes octets directly.
+  Rejected: packing octets into trits, which saves memory but makes every
+  header field a conversion, for frames that rarely matter in size.
+- **Two DMA channels, one buffer each, nine frames waiting in the
+  device.** Like the block device: registers, a command, a status, a
+  finished state that raises an interrupt until acknowledged. A
+  descriptor ring would let a driver queue many buffers, but costs a
+  format to specify and a driver to match; the device's nine-frame queue
+  covers the bursts a driver will see, and a ring can come later behind
+  a new `NET_VERSION`. One interrupt source for both channels, since the
+  driver handles both in one place.
+- **The send reads the frame at once**, so a failed send says why at
+  the command, and the buffer is free straight away. It finishes 100 +
+  length rounds later, so a driver has a real wait to fill.
+- **The link is looked at every 1,000 rounds**, not every step, so a
+  socket costs one system call per thousand steps. While every hart
+  waits, time moves to the next look instead of stalling, and with a
+  live console those short skips add up to its paced ones, so a kernel
+  waiting for packets idles in real time rather than spinning.
+- **The outside world over UDP, one datagram per frame.** It needs no
+  privileges, works on Linux and macOS, connects two emulators with a
+  port each, and is the framing QEMU's `-netdev dgram` and
+  `socket,udp=` use, so a QEMU guest (Linux, say) can be the peer that
+  answers pings and TCP. A bridge to a host TAP device or a userspace
+  NAT can sit at the other end later without changing the emulator.
+  Rejected: a TAP device in the emulator (root or a capability on Linux,
+  a kernel extension on macOS, and a dependency for the ioctl), and an
+  emulator-side NAT like QEMU's slirp (a TCP/IP stack in the emulator,
+  which is the thing trylobite is to build). A loopback link keeps runs
+  deterministic for tests.

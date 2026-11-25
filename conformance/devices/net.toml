@@ -1,0 +1,242 @@
+# The network device (docs/platform.md, The network device). It is page
+# -16, centred on NET. A frame is octets, one per tryte; a send reads
+# TX_LEN trytes from TX_ADDR and takes 100 + TX_LEN rounds; a receive
+# buffer (RX_ADDR, RX_SIZE) is filled by the next frame. The link is looked
+# at every 1,000 rounds. `net_loopback` attaches a link that hands every
+# frame sent straight back. RAM page p is centred on p*19683.
+
+[defaults]
+ram_pages = 20
+prelude = '''
+        .equ  NET, -314928
+        .equ  PRESENT, -27
+        .equ  LINK, -24
+        .equ  MAC_HI, -21
+        .equ  MAC_LO, -18
+        .equ  DROPPED, -15
+        .equ  TX_ADDR, -12
+        .equ  TX_LEN, -9
+        .equ  TX_COMMAND, -6
+        .equ  TX_STATUS, -3
+        .equ  TX_ACK, 0
+        .equ  RX_ADDR, 3
+        .equ  RX_SIZE, 6
+        .equ  RX_COMMAND, 9
+        .equ  RX_STATUS, 12
+        .equ  RX_LEN, 15
+        .equ  RX_ACK, 18
+        .equ  NET_SEND, 1
+        .equ  NET_RECEIVE, 1
+        .equ  NET_BUSY, 1
+        .equ  NET_DONE, 0
+        .equ  NET_FAILED, -1
+        .equ  FRAME_MAX, 1514
+        .equ  IRQ, -255879
+        .equ  CLAIM, -3
+        .equ  COMPLETE, 0
+        .equ  PENDING3, 24
+        .equ  ENABLE3, 27
+        .equ  POWER, -39366
+        .equ  PAGE, 19683
+'''
+postlude = '''
+        li    t6, POWER
+        sw    a0, 0(t6)
+'''
+
+[[case]]
+name = "with no link the device is present, and a send fails at once"
+program = '''
+        li    s1, NET
+        lw    s2, PRESENT(s1)
+        lw    s3, LINK(s1)
+        lw    s4, MAC_HI(s1)      # 02:00:00
+        lw    s5, MAC_LO(s1)      # 00:00:01
+        li    t0, PAGE
+        sw    t0, TX_ADDR(s1)
+        li    t0, 60
+        sw    t0, TX_LEN(s1)
+        li    t0, NET_SEND
+        sw    t0, TX_COMMAND(s1)
+        lw    s6, TX_STATUS(s1)
+        li    s0, IRQ
+        lw    s7, PENDING3(s0)    # finished: source 3 wants attention
+        sw    zero, TX_ACK(s1)
+        lw    s8, PENDING3(s0)
+        li    a0, 0
+'''
+expect.exit_code = 0
+expect.registers = { s2 = 1, s3 = 0, s4 = 131072, s5 = 1, s6 = -1, s7 = 1, s8 = 0 }
+
+[[case]]
+name = "a frame sent on a loopback link comes back into the receive buffer"
+net_loopback = true
+program = '''
+        li    s1, NET
+        lw    s2, LINK(s1)
+        li    a1, PAGE * 2        # the frame: octets 0, 7, 14, ... mod 256
+        li    t0, 0
+        li    t1, 20
+        li    t3, 256
+fill:   li    t2, 7
+        mul   t2, t0, t2
+        rem   t2, t2, t3
+        add   t4, a1, t0
+        st    t2, 0(t4)
+        addi  t0, t0, 1
+        blt   t0, t1, fill
+        li    a2, PAGE * 3        # the receive buffer
+        sw    a2, RX_ADDR(s1)
+        li    t0, FRAME_MAX
+        sw    t0, RX_SIZE(s1)
+        li    t0, NET_RECEIVE
+        sw    t0, RX_COMMAND(s1)
+        lw    s3, RX_STATUS(s1)   # busy: armed
+        sw    a1, TX_ADDR(s1)
+        sw    t1, TX_LEN(s1)
+        csrr  s4, time
+        li    t0, NET_SEND
+        sw    t0, TX_COMMAND(s1)
+        lw    s5, TX_STATUS(s1)   # busy
+wait:   lw    t0, TX_STATUS(s1)
+        bnez  t0, wait
+        csrr  t0, time
+        sub   s4, t0, s4          # rounds the send took
+wait2:  lw    t0, RX_STATUS(s1)
+        bnez  t0, wait2
+        lw    s6, RX_LEN(s1)
+        lt    s7, 19(a2)          # 133
+        lt    s8, 1(a2)           # 7
+        lt    a3, 20(a2)          # past the frame: untouched
+        li    a0, 0
+'''
+expect.exit_code = 0
+# s4: 120 rounds for 20 octets, plus the instructions around it
+expect.registers = { s2 = 1, s3 = 1, s4 = 124, s5 = 1, s6 = 20, s7 = 133, s8 = 7, a3 = 0 }
+
+[[case]]
+name = "a send fails at once for a bad length, octet or buffer, and so does a receive"
+net_loopback = true
+program = '''
+        li    s1, NET
+        li    a1, PAGE
+        sw    a1, TX_ADDR(s1)
+        li    t2, NET_SEND
+        li    t0, 13              # shorter than a header
+        sw    t0, TX_LEN(s1)
+        sw    t2, TX_COMMAND(s1)
+        lw    s2, TX_STATUS(s1)
+        li    t0, FRAME_MAX + 1
+        sw    t0, TX_LEN(s1)
+        sw    t2, TX_COMMAND(s1)
+        lw    s3, TX_STATUS(s1)
+        li    t0, 14
+        sw    t0, TX_LEN(s1)
+        li    t0, 256             # not an octet
+        st    t0, 5(a1)
+        sw    t2, TX_COMMAND(s1)
+        lw    s4, TX_STATUS(s1)
+        li    t0, -1
+        st    t0, 5(a1)
+        sw    t2, TX_COMMAND(s1)
+        lw    s5, TX_STATUS(s1)
+        st    zero, 5(a1)
+        li    t0, PAGE * 20 + 9830  # runs past the end of RAM
+        sw    t0, TX_ADDR(s1)
+        sw    t2, TX_COMMAND(s1)
+        lw    s6, TX_STATUS(s1)
+        sw    zero, RX_ADDR(s1)   # the boot page is no RAM
+        li    t0, 100
+        sw    t0, RX_SIZE(s1)
+        li    t0, NET_RECEIVE
+        sw    t0, RX_COMMAND(s1)
+        lw    s7, RX_STATUS(s1)
+        sw    a1, TX_ADDR(s1)
+        sw    t2, TX_COMMAND(s1)
+        lw    a0, TX_STATUS(s1)   # and a good one is busy
+'''
+expect.exit_code = 1
+expect.registers = { s2 = -1, s3 = -1, s4 = -1, s5 = -1, s6 = -1, s7 = -1 }
+
+[[case]]
+name = "frames wait in the device for a buffer, and those past nine are dropped"
+net_loopback = true
+max_steps = 20000
+program = '''
+        li    s1, NET
+        li    t0, PAGE
+        sw    t0, TX_ADDR(s1)
+        li    t0, 14
+        sw    t0, TX_LEN(s1)
+        li    s2, 11
+        li    t2, NET_SEND
+send:   sw    t2, TX_COMMAND(s1)
+wait:   lw    t0, TX_STATUS(s1)
+        bnez  t0, wait
+        addi  s2, s2, -1
+        bnez  s2, send
+        li    t1, 2000            # long enough for the link to be looked at
+idle:   addi  t1, t1, -1
+        bnez  t1, idle
+        lw    s3, DROPPED(s1)
+        li    t0, PAGE * 2
+        sw    t0, RX_ADDR(s1)
+        li    t0, 14              # room for exactly one
+        sw    t0, RX_SIZE(s1)
+        li    t0, NET_RECEIVE
+        sw    t0, RX_COMMAND(s1)
+wait2:  lw    t0, RX_STATUS(s1)
+        bnez  t0, wait2
+        lw    s4, RX_LEN(s1)
+        li    a0, 0
+'''
+expect.exit_code = 0
+expect.registers = { s3 = 2, s4 = 14 }
+
+[[case]]
+name = "a finished send and a received frame interrupt, and wfi skips to each"
+net_loopback = true
+max_steps = 300
+program = '''
+        la    t0, handler
+        csrw  mtvec, t0
+        li    t0, 0t+00           # ie trit 2: external
+        csrw  mie, t0
+        li    s0, IRQ
+        li    t0, 1
+        sw    t0, ENABLE3(s0)
+        li    s1, NET
+        li    t0, PAGE * 2
+        sw    t0, RX_ADDR(s1)
+        li    t0, FRAME_MAX
+        sw    t0, RX_SIZE(s1)
+        li    t0, NET_RECEIVE
+        sw    t0, RX_COMMAND(s1)
+        li    t0, PAGE
+        sw    t0, TX_ADDR(s1)
+        li    t0, 60
+        sw    t0, TX_LEN(s1)
+        li    t0, NET_SEND
+        sw    t0, TX_COMMAND(s1)
+        li    t0, 0t+0
+        csrw  mtstatus, t0
+idle:   wfi
+        j     idle
+handler:
+        lw    t1, CLAIM(s0)
+        lw    t0, RX_STATUS(s1)
+        beqz  t0, 1f              # the buffer is filled: this is the frame
+        lw    s2, TX_STATUS(s1)
+        sw    zero, TX_ACK(s1)
+        sw    t1, COMPLETE(s0)
+        csrr  s3, time            # 160: the send's rounds
+        tret
+1:      mv    s4, t1
+        lw    s5, RX_LEN(s1)
+        csrr  s6, time            # just past 1000: the link is looked at
+        li    a0, 0
+        j     end
+end:
+'''
+expect.exit_code = 0
+expect.registers = { s2 = 0, s4 = 3, s5 = 60 }
