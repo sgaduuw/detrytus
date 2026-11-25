@@ -193,24 +193,28 @@ integer operations where the coprocessor has no operation:
   narrower integers; 128 bits call `__fixdfti` and kin; `fpext` and
   `fptrunc` are `FPU_CVT`;
 - Rust's `as` casts are `llvm.fptosi.sat` and `llvm.fptoui.sat`; the
-  coprocessor's conversions (and compiler_builtins' for 128 bits)
+  coprocessor's conversions (and `__fixdfti` and kin for 128 bits)
   already saturate and turn a NaN into 0, so 32 bits and wider is one
   operation, and narrower ones are clamped after;
 - `fneg`, `llvm.fabs` and `llvm.copysign` work on the sign bit;
 - `llvm.sqrt`, `fma`, `fmuladd`, `minnum`, `maxnum`, `minimumnum` and
   `maximumnum` are coprocessor operations; `floor`, `ceil`, `trunc`,
-  `round`, `rint`, `minimum`, `maximum` and kin call compiler_builtins'
-  libm (`floorf`, `fminimum`, ...).
+  `round`, `rint`, `roundeven`, `nearbyint`, `minimum` and `maximum`
+  call library functions (`floorf`, `fminimum`, ...).
 
-The library functions come from `rust/tc/src/ll/lower/float.ll`: the part of
-compiler_builtins (and the bits of core it uses) that those calls
-reach, pruned from the IR that rustc emits when it builds core, by
-`lower/float.sh`. It is translated with the program; only what the
-program calls is lowered, so a program without floating point pays
-nothing. compiler_builtins is MIT and Apache-2.0 licensed (its libm
-part comes from musl, MIT), as the file's header says.
+The library functions are our own, in `rust/tc/src/ll/lower/float.ll`,
+written in LLVM IR as `lower/wide.ll` is, and translated with the
+program; only what the program calls is lowered, so a program without
+floating point pays nothing. They do their arithmetic on the
+coprocessor: rounding to an integer cuts fraction bits off, or adds and
+takes away 2^52 for ties to even; `fmod` is long division of the
+significands, which is exact; conversions from 128 bits convert the top
+64 bits with a sticky bit and scale by a power of two, so they round
+once. The `float` versions widen to `double` and narrow the answer,
+which is exact for all but those conversions, which have their own.
+`rust/tc/tests/float_lib.rs` runs each against the host's answers.
 
-Floating point brought in what these functions need: `llvm.ctlz`,
+Floating point brought in what core's float code needs: `llvm.ctlz`,
 `llvm.umin` and the like on 64- and 128-bit integers, `llvm.ctpop`,
 `llvm.fshl`/`fshr` (funnel shifts) and `llvm.ucmp`/`scmp`. Core's
 formatting of floats (`{}`, `{:.3}`, `{:e}`) works: Grisu with Dragon

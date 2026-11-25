@@ -16,7 +16,8 @@ use crate::alloc;
 mod wide;
 pub use wide::WIDE_IR;
 
-/// Software floating point, from compiler_builtins (docs/rust.md).
+/// The floating-point functions the coprocessor does not do
+/// (docs/rust.md, Floating point).
 pub const FLOAT_IR: &str = include_str!("lower/float.ll");
 
 const ARGS: [&str; 6] = ["a0", "a1", "a2", "a3", "a4", "a5"];

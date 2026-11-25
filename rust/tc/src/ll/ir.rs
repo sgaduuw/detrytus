@@ -476,8 +476,8 @@ fn shown(t: &Ty) -> String {
     }
 }
 
-/// The integer type as wide as a float type, and the suffix of
-/// compiler_builtins' functions for it, if it is one done in software.
+/// The integer type as wide as a float type, and the suffix of the
+/// conversion functions for it (`__fixdfti`), if it is one supported.
 fn float_kind(t: &Ty) -> Option<(u32, &'static str)> {
     match t {
         Ty::Float(f) if f == "float" => Some((32, "sf")),
@@ -534,8 +534,8 @@ impl FloatOps {
     }
 }
 
-/// A floating-point operation as calls to compiler_builtins' software
-/// floating point (lower/float.ll) and integer operations on the bits
+/// A floating-point operation as coprocessor operations, calls to the
+/// functions of lower/float.ll and integer operations on the bits
 /// (docs/rust.md, Floating point). `float` and `double` are held as the
 /// integers of their bits. Anything else is itself.
 fn expand_float(i: Instr) -> Vec<Instr> {
@@ -797,7 +797,7 @@ fn float_intrinsic(f: &mut FloatOps, name: &str, ret: &Ty, args: &[(Ty, Val)]) -
         }
         return Ok(true);
     }
-    // Funnel shifts, which compiler_builtins uses: shifts and an or,
+    // Funnel shifts, which core uses: shifts and an or,
     // the amount mod the width, folded when it is a constant.
     if let ("fshl" | "fshr", Ty::Int(w)) = (base, ret) {
         let k = |v: i128| Val::Const(Const::Int(v));
@@ -823,8 +823,8 @@ fn float_intrinsic(f: &mut FloatOps, name: &str, ret: &Ty, args: &[(Ty, Val)]) -
         f.bin("or", ret, hi, lo, true);
         return Ok(true);
     }
-    // `llvm.fptosi.sat.i32.f64` and its unsigned twin: compiler_builtins'
-    // conversions already saturate to 32, 64 or 128 bits and turn a NaN
+    // `llvm.fptosi.sat.i32.f64` and its unsigned twin: the coprocessor's
+    // conversions and lower/float.ll's already saturate to 32, 64 or 128 bits and turn a NaN
     // into 0, as Rust's `as` asks; narrower ones are clamped after.
     if (base == "fptosi" || base == "fptoui") && parts.get(2) == Some(&"sat") {
         let Ty::Int(n) = ret else { return Err(format!("{name} is not supported")) };
@@ -897,15 +897,10 @@ fn float_intrinsic(f: &mut FloatOps, name: &str, ret: &Ty, args: &[(Ty, Val)]) -
         return Ok(true);
     }
     let lib = match base {
-        "floor" | "ceil" | "trunc" | "round" | "fma" | "rint" | "roundeven" => base,
+        "floor" | "ceil" | "trunc" | "round" | "rint" | "roundeven" => base,
         "nearbyint" => "rint",
-        "minnum" => "fmin",
-        "maxnum" => "fmax",
-        "minimumnum" => "fminimum_num",
-        "maximumnum" => "fmaximum_num",
         "minimum" => "fminimum",
         "maximum" => "fmaximum",
-        "fmuladd" => "fma",
         "fabs" => {
             let x = f.cast("bitcast", &ft, args[0].1.clone(), &it, false);
             let m = f.bin("and", &it, x, Val::Const(Const::Int(!sign)), false);
