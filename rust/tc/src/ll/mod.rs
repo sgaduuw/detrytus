@@ -53,6 +53,21 @@ pub fn prune(paths: &[&Path]) -> Result<String, Error> {
         body.push(m.source[&('f', f.clone())].clone());
     }
     let mut text = body.join("\n");
+    // The aliases the text names.
+    let mut aliases: Vec<&String> = m.aliases.keys().collect();
+    aliases.sort();
+    let mut lines = Vec::new();
+    for a in aliases {
+        let at = format!("@{a}");
+        if text.match_indices(&at).any(|(i, _)| {
+            !text[i + at.len()..].starts_with(|c: char| c.is_alphanumeric() || "._$-".contains(c))
+        }) {
+            lines.push(m.source[&('a', a.clone())].clone());
+        }
+    }
+    if !lines.is_empty() {
+        text = format!("{}\n{text}", lines.join("\n"));
+    }
     // Declarations of what is used but not defined, intrinsics included.
     let mut decls: Vec<&String> = m
         .decls

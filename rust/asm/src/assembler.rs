@@ -296,6 +296,26 @@ impl Assembler {
                     *align = (*align).max(power as u32);
                 }
             }
+            ".balign" => {
+                // Binary alignment, for what is laid out as binary data
+                // (docs/rust.md): the next tryte at a multiple of N.
+                stmts[i].kind = Kind::None;
+                let s = &stmts[i];
+                let [n] = expect::<1>(s)?;
+                let n = self.constant(&n)?;
+                if n < 1 {
+                    let message = format!(".balign takes a positive number, not {n}");
+                    return Err(s.error(message).into());
+                }
+                if self.floating() && n > 1 {
+                    return Err(s
+                        .error(
+                            ".balign in a section the linker places: give the section an address",
+                        )
+                        .into());
+                }
+                self.loc = -((-self.loc).div_euclid(n)) * n;
+            }
             ".section" => {
                 stmts[i].kind = Kind::None;
                 self.lay_section(stmts, i)?;
@@ -1050,4 +1070,18 @@ fn unlinked(ops: &Operands, s: &Statement) -> PassResult<()> {
     }
     let message = format!("{} is finished by the linker, so it cannot go in a slot", s.mnemonic);
     Err(OperandError::Message(message).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assemble;
+
+    #[test]
+    fn balign_puts_the_next_tryte_at_a_multiple() {
+        let src = "        .org 30\n        .tryte 1\n        .balign 8\nx:      .tryte 2\n        .balign 4\ny:      .tryte 3\n";
+        let image = assemble(src, None).unwrap();
+        assert_eq!(image.labels["x"], 32);
+        assert_eq!(image.labels["y"], 36);
+        assert!(assemble("        .balign 0\n", None).is_err());
+    }
 }

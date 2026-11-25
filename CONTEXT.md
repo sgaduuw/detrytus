@@ -1346,3 +1346,30 @@ The owner wants Rust programs on detrytus. A first step runs a
   output is a whole program rather than an object.
 - **Not yet:** integers over 32 bits (and so `core::fmt`), floats,
   atomics, more than six argument words. Each is refused by name.
+  (64-bit integers and long calls came on 2026-11-25, below.)
+
+### 2026-11-25 · 64-bit integers, and with them core::fmt
+
+The owner approved 64-bit integers next, since `core::fmt` needs them
+(`docs/rust.md`, "64-bit integers"). Choices:
+
+- **Two words, low 32 bits first.** A word holds about 42 bits, not
+  64. A `u64` becomes two scalars, so everything that only moves
+  values (phis, loads, stores, calls, struct fields) already works,
+  and only the operations need code of their own. Rejected: one word
+  plus an overflow word of other widths, which would make every
+  operation a special case.
+- **Only what core::fmt needs, refused by name otherwise.** Division
+  is by a constant below 2²⁶ (core divides by 10 000 and 100), a
+  16-bit digit at a time; shifts are by a constant. A general 64-bit
+  divide and variable shifts wait for a program that needs them.
+- **Binary alignment where LLVM asks for it.** `fmt::Arguments` keeps
+  a flag in a pointer's low bit, so alignment is not a nicety: static
+  data gets the assembler's new `.balign N` and aligned allocas a
+  base register rounded down at run time with `band`, since the frame
+  pointer's value is not known to be aligned. Rejected: keeping every
+  frame aligned to 24 trytes, which would touch Trice's frames too and
+  waste stack in every function.
+- **More than six argument words** go on the stack as abi.md 2.2 says
+  (core calls `pad_integral` with eight), and an `alias` is another
+  name for what it aliases.

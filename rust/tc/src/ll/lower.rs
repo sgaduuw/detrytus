@@ -13,11 +13,16 @@ use super::ir::*;
 use crate::Error;
 use crate::alloc;
 
+mod wide;
+
 const ARGS: [&str; 6] = ["a0", "a1", "a2", "a3", "a4", "a5"];
 
-/// The widest integer handled: wider ones (u64, u128) need more than a
-/// word, which comes later.
+/// The widest integer held in one word. Wider ones, up to WIDE_BITS,
+/// are held as two: the low 32 bits and the rest (docs/rust.md).
 const MAX_BITS: u32 = 32;
+const WIDE_BITS: u32 = 64;
+/// 2^32 - 1, the mask of a low half.
+const M32: i128 = (1 << 32) - 1;
 
 type R<T> = Result<T, String>;
 
@@ -51,6 +56,9 @@ pub struct Lower<'m> {
     stub_labels: HashMap<(String, String), String>,
     local_labels: usize,
     block: String,
+    /// Allocas that ask for an alignment, by their offset from a base
+    /// register made aligned at the function's start.
+    aligned: HashMap<String, (&'static str, i128)>,
 }
 
 fn mask(bits: u32) -> i128 {
@@ -221,13 +229,26 @@ impl<'m> Lower<'m> {
             phis: HashMap::new(),
             fused: HashMap::new(),
             stubs: Vec::new(),
+            aligned: HashMap::new(),
             stub_labels: HashMap::new(),
             local_labels: 0,
             block: String::new(),
         }
     }
 
+    /// What `name` names, through any aliases.
+    fn aliased<'a>(&'a self, mut name: &'a str) -> &'a str {
+        for _ in 0..16 {
+            match self.m.aliases.get(name) {
+                Some(t) => name = t,
+                None => break,
+            }
+        }
+        name
+    }
+
     fn sym(&mut self, name: &str) -> String {
+        let name = &self.aliased(name).to_string();
         if let Some(s) = self.syms.get(name) {
             return s.clone();
         }
@@ -313,6 +334,10 @@ impl<'m> Lower<'m> {
     /// The scalars of a type, with their byte offsets.
     fn leaves(&self, t: &Ty, base: u64, out: &mut Vec<(u64, Ty)>) -> R<()> {
         match self.resolve(t)? {
+            Ty::Int(b) if b > MAX_BITS && b <= WIDE_BITS => {
+                out.push((base, Ty::Int(MAX_BITS)));
+                out.push((base + 4, Ty::Int(b - MAX_BITS)));
+            }
             Ty::Int(b) => out.push((base, Ty::Int(self.bits(&Ty::Int(b))?))),
             Ty::Ptr => out.push((base, Ty::Ptr)),
             Ty::Array(n, e) => {
@@ -368,9 +393,21 @@ impl<'m> Lower<'m> {
     fn bits(&self, t: &Ty) -> R<u32> {
         match self.resolve(t)? {
             Ty::Int(b) if b <= MAX_BITS => Ok(b),
+            Ty::Int(b) if b <= WIDE_BITS => {
+                Err(format!("this operation on {b}-bit integers is not supported yet"))
+            }
             Ty::Int(b) => Err(format!("{b}-bit integers are not supported yet")),
             Ty::Ptr => Ok(32),
             t => Err(format!("{t:?} is not an integer")),
+        }
+    }
+
+    /// The width of an integer held in two words, if `t` is one.
+    fn wide(&self, t: &Ty) -> R<Option<u32>> {
+        match self.resolve(t)? {
+            Ty::Int(b) if b > MAX_BITS && b <= WIDE_BITS => Ok(Some(b)),
+            Ty::Int(b) if b > WIDE_BITS => Err(format!("{b}-bit integers are not supported yet")),
+            _ => Ok(None),
         }
     }
 
@@ -492,6 +529,14 @@ impl<'m> Lower<'m> {
         Ok(match c {
             Const::Int(v) => Some(Self::canon(*v, self.bits(t)?)),
             Const::Null | Const::Undef | Const::Zero => Some(0),
+            // A pointer made from a number (a dangling NonNull, say).
+            Const::Cast { op, from, .. }
+                if matches!(op.as_str(), "inttoptr" | "ptrtoint" | "bitcast")
+                    && matches!(from.1, Const::Int(_)) =>
+            {
+                let bits = self.bits(t)?;
+                self.const_int(&from.1, &from.0)?.map(|v| Self::canon(v, bits))
+            }
             _ => None,
         })
     }
@@ -522,6 +567,10 @@ impl<'m> Lower<'m> {
                 Ok(out)
             }
             (Const::Bytes(bs), _) => Ok(bs.iter().map(|&b| self.li(b as i128)).collect()),
+            (Const::Int(v), Ty::Int(b)) if self.wide(&t)?.is_some() => {
+                let v = Self::canon(*v, *b);
+                Ok(vec![self.li(v & M32), self.li(v >> 32)])
+            }
             _ => Ok(vec![self.const_reg(c, &t)?]),
         }
     }
@@ -555,6 +604,21 @@ impl<'m> Lower<'m> {
             return Err(format!("expected a single value, found {} parts", l.len()));
         }
         Ok(l[0])
+    }
+
+    /// A two-word integer's halves: low 32 bits, then the rest.
+    fn pair(&mut self, v: &Val, t: &Ty) -> R<(&'static str, &'static str)> {
+        let l = self.leaves_of(v, t)?;
+        Ok((l[0], l[1]))
+    }
+
+    /// A two-word integer constant's value, if `v` is one.
+    fn wide_const(&self, v: &Val, bits: u32) -> Option<i128> {
+        match v {
+            Val::Const(Const::Int(k)) => Some(Self::canon(*k, bits)),
+            Val::Const(Const::Zero | Const::Null | Const::Undef) => Some(0),
+            _ => None,
+        }
     }
 
     /// A pointer as base and offset.
@@ -743,6 +807,9 @@ impl<'m> Lower<'m> {
         a: &Val,
         b: &Val,
     ) -> R<(&'static str, &'static str)> {
+        if let Some(bits) = self.wide(t)? {
+            return self.wide_cmp_operands(pred, bits, t, a, b);
+        }
         let bits = self.bits(t)?;
         let mut ra = self.scalar(a, t)?;
         let mut rb = self.scalar(b, t)?;
@@ -790,7 +857,28 @@ impl<'m> Lower<'m> {
         Ok(d)
     }
 
-    fn cast(&mut self, op: &str, flags: &[String], from: &Ty, v: &Val, to: &Ty) -> R<&'static str> {
+    fn cast(
+        &mut self,
+        op: &str,
+        flags: &[String],
+        from: &Ty,
+        v: &Val,
+        to: &Ty,
+    ) -> R<Vec<&'static str>> {
+        if self.wide(from)?.is_some() || self.wide(to)?.is_some() {
+            return self.wide_cast(op, flags, from, v, to);
+        }
+        Ok(vec![self.narrow_cast(op, flags, from, v, to)?])
+    }
+
+    fn narrow_cast(
+        &mut self,
+        op: &str,
+        flags: &[String],
+        from: &Ty,
+        v: &Val,
+        to: &Ty,
+    ) -> R<&'static str> {
         self.bits(from)?;
         self.bits(to)?;
         let r = self.scalar(v, from)?;
@@ -853,6 +941,27 @@ impl<'m> Lower<'m> {
                 self.wrap(d, bits);
                 vec![d]
             }
+            "llvm.abs" if self.wide(&t)?.is_some() => {
+                let bits = self.wide(&t)?.unwrap_or(WIDE_BITS);
+                let (lo, hi) = self.pair(&args[0].1, &t)?;
+                let (nlo, nhi) = self.wide_sub("zero", "zero", lo, hi, bits);
+                let dl = self.vreg();
+                let dh = self.vreg();
+                self.emit(format!("mv    {dl}, {lo}"));
+                self.emit(format!("mv    {dh}, {hi}"));
+                let sign = self.li(1i128 << (bits - MAX_BITS - 1));
+                let skip = self.new_label();
+                self.emit(format!("blt   {hi}, {sign}, {skip}"));
+                self.emit(format!("mv    {dl}, {nlo}"));
+                self.emit(format!("mv    {dh}, {nhi}"));
+                self.label(&skip);
+                vec![dl, dh]
+            }
+            "llvm.ctlz" => {
+                let bits = self.bits(&t)?;
+                let x0 = arg(self, 0)?;
+                vec![self.ctlz(x0, bits)]
+            }
             "llvm.abs" => {
                 let bits = self.bits(&t)?;
                 let a = arg(self, 0)?;
@@ -908,6 +1017,31 @@ impl<'m> Lower<'m> {
         }))
     }
 
+    /// Leading zeros of the `bits`-bit value in `x0`, by halving:
+    /// whenever `x >> s` is not zero, `s` fewer leading zeros and keep
+    /// that; what is left is 0 or 1.
+    fn ctlz(&mut self, x0: &'static str, bits: u32) -> &'static str {
+        let x = self.vreg();
+        self.emit(format!("mv    {x}, {x0}"));
+        let n = self.vreg();
+        self.emit(format!("li    {n}, {bits}"));
+        let mut step = 1;
+        while step * 2 < bits {
+            step *= 2;
+        }
+        while step >= 1 {
+            let back = self.li(-(step as i128));
+            let t = self.op3("bsh", x, back);
+            let skip = self.new_label();
+            self.emit(format!("beqz  {t}, {skip}"));
+            self.emit(format!("addi  {n}, {n}, {}", -(step as i128)));
+            self.emit(format!("mv    {x}, {t}"));
+            self.label(&skip);
+            step /= 2;
+        }
+        self.op3("sub", n, x)
+    }
+
     /// A call to `sym`, or through the register `via`.
     fn call_named(&mut self, sym: &str, args: &[(Ty, Val)], ret: &Ty) -> R<Vec<&'static str>> {
         self.call_to(Ok(sym), args, ret)
@@ -923,18 +1057,25 @@ impl<'m> Lower<'m> {
         for (t, v) in args {
             regs.extend(self.leaves_of(v, t)?);
         }
-        if regs.len() > ARGS.len() {
-            return Err(format!(
-                "a call with {} argument words (more than 6) is not supported yet",
-                regs.len()
-            ));
+        // Words after the sixth go on the stack, the seventh at 0(sp)
+        // (abi.md 2.2), in room the caller makes for the call.
+        let extra = regs.len().saturating_sub(ARGS.len()) as i128;
+        if extra > 0 {
+            self.emit(format!("addi  sp, sp, {}", -3 * extra));
+            for (k, r) in regs[ARGS.len()..].iter().enumerate() {
+                self.emit(format!("sw    {r}, {}(sp)", 3 * k));
+            }
         }
-        for (k, r) in regs.iter().enumerate() {
+        for (k, r) in regs.iter().take(ARGS.len()).enumerate() {
             self.emit(format!("mv    {}, {r}", ARGS[k]));
         }
+        let n = regs.len().min(ARGS.len());
         match callee {
-            Ok(sym) => self.emit(format!("call  {sym}, {}", regs.len())),
-            Err(via) => self.emit(format!("callr {via}, {}", regs.len())),
+            Ok(sym) => self.emit(format!("call  {sym}, {n}")),
+            Err(via) => self.emit(format!("callr {via}, {n}")),
+        }
+        if extra > 0 {
+            self.emit(format!("addi  sp, sp, {}", 3 * extra));
         }
         let n = self.leaf_types(ret)?.len();
         if n > 2 {
@@ -1077,6 +1218,11 @@ impl<'m> Lower<'m> {
         let res = &ins.res;
         match &ins.op {
             Op::Bin { op, flags, ty, a, b } => {
+                if let Some(bits) = self.wide(ty)? {
+                    let d = self.wide_bin(op, bits, ty, a, b)?;
+                    self.set(res, d);
+                    return Ok(());
+                }
                 let d = self.bin(op, flags, ty, a, b)?;
                 self.set(res, vec![d]);
             }
@@ -1099,7 +1245,7 @@ impl<'m> Lower<'m> {
                     }
                 }
                 let d = self.cast(op, flags, from, v, to)?;
-                self.set(res, vec![d]);
+                self.set(res, d);
             }
             Op::Select { c, ty, a, b } => {
                 let rc = self.scalar(c, &Ty::Int(1))?;
@@ -1133,7 +1279,12 @@ impl<'m> Lower<'m> {
                     self.store_scalar(&lt, r, base, off + loff as i128)?;
                 }
             }
-            Op::Alloca { ty, n } => {
+            Op::Alloca { .. } if res.as_ref().is_some_and(|r| self.aligned.contains_key(r)) => {
+                let r = res.clone().unwrap_or_default();
+                let (b, o) = self.aligned[&r];
+                self.env.insert(r, V::Addr(b, o));
+            }
+            Op::Alloca { ty, n, .. } => {
                 let count = match n {
                     None => 1,
                     Some((nt, Val::Const(c))) => match self.const_int(c, nt)? {
@@ -1239,6 +1390,45 @@ impl<'m> Lower<'m> {
         Ok(())
     }
 
+    /// Room for the allocas that ask for an alignment of 2 or more, and
+    /// a base register for them. The frame pointer's value is not known
+    /// to be aligned, so the base is rounded down at run time, `band`
+    /// with -A, in an area with A - 1 trytes to spare. Core relies on
+    /// this: `fmt::Arguments` tells a pointer from a length by its low
+    /// bit.
+    fn align_allocas(&mut self, f: &Function) -> R<()> {
+        let mut at: Vec<(String, u64)> = Vec::new();
+        let mut end: u64 = 0;
+        let mut most: u64 = 1;
+        for b in &f.blocks {
+            for i in &b.instrs {
+                if let (Op::Alloca { ty, n: None, align }, Some(r)) = (&i.op, &i.res)
+                    && *align >= 2
+                {
+                    let a = (*align).max(self.align(ty)?);
+                    let off = end.next_multiple_of(a);
+                    end = off + self.size(ty)?.max(1);
+                    most = most.max(a);
+                    at.push((r.clone(), off));
+                }
+            }
+        }
+        if at.is_empty() {
+            return Ok(());
+        }
+        let words = (end + most - 1).div_ceil(3) as i128;
+        self.slots += words;
+        let start = -3 * (2 + self.slots) - 1;
+        let base = self.vreg();
+        self.emit(format!("addi  {base}, s0, {}", start + most as i128 - 1));
+        let m = self.li(-(most as i128));
+        self.emit(format!("band  {base}, {base}, {m}"));
+        for (r, off) in at {
+            self.aligned.insert(r, (base, off as i128));
+        }
+        Ok(())
+    }
+
     pub fn function(&mut self, f: &Function) -> Result<Vec<String>, Error> {
         let fail =
             |line: usize, msg: String| Error::new(&f.file, line, format!("@{}: {msg}", f.name));
@@ -1252,6 +1442,7 @@ impl<'m> Lower<'m> {
         self.stubs.clear();
         self.stub_labels.clear();
         self.local_labels = 0;
+        self.aligned.clear();
         if f.varargs {
             return Err(fail(f.line, "functions with varargs are not supported".into()));
         }
@@ -1295,19 +1486,20 @@ impl<'m> Lower<'m> {
             let n = self.leaf_types(t).map_err(|e| fail(f.line, e))?.len();
             let mut regs = Vec::new();
             for _ in 0..n {
-                if k >= ARGS.len() {
-                    return Err(fail(
-                        f.line,
-                        "more than 6 parameter words are not supported yet".into(),
-                    ));
-                }
                 let r = self.vreg();
-                self.emit(format!("mv    {r}, {}", ARGS[k]));
+                if k < ARGS.len() {
+                    self.emit(format!("mv    {r}, {}", ARGS[k]));
+                } else {
+                    // The caller's words at 0(sp), 3(sp), ... on entry,
+                    // where s0 points (abi.md 2.2).
+                    self.emit(format!("lw    {r}, {}(s0)", 3 * (k - ARGS.len())));
+                }
                 regs.push(r);
                 k += 1;
             }
             self.env.insert(name.clone(), V::Regs(regs));
         }
+        self.align_allocas(f).map_err(|e| fail(f.line, e))?;
         let results = self.leaf_types(&f.ret).map_err(|e| fail(f.line, e))?.len();
         if results > 2 {
             return Err(fail(
@@ -1342,7 +1534,7 @@ impl<'m> Lower<'m> {
             name: &self.fsym.clone(),
             results,
             slots: self.slots,
-            stack_params: false,
+            stack_params: k > ARGS.len(),
             body,
         })
         .map_err(|m| fail(f.line, m))?;
@@ -1415,7 +1607,11 @@ impl<'m> Lower<'m> {
         let init = init.clone().map_err(fail)?;
         let mut bytes = Vec::new();
         self.bytes(&init, &g.ty, &mut bytes).map_err(fail)?;
-        let mut out = vec![format!("{}:", self.sym(&g.name))];
+        let mut out = Vec::new();
+        if g.align >= 2 {
+            out.push(format!("        .balign {}", g.align));
+        }
+        out.push(format!("{}:", self.sym(&g.name)));
         if bytes.is_empty() {
             return Ok(out);
         }
@@ -1434,6 +1630,7 @@ impl<'m> Lower<'m> {
         let mut external = BTreeMap::new();
         let mut todo: Vec<String> = roots.iter().rev().map(|s| s.to_string()).collect();
         while let Some(n) = todo.pop() {
+            let n = self.aliased(&n).to_string();
             if !seen.insert(n.clone()) {
                 continue;
             }

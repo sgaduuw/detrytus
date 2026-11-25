@@ -39,6 +39,24 @@ fn memory_slices_and_control_flow() {
 }
 
 #[test]
+fn integers_of_64_bits_and_long_calls() {
+    assert_eq!(run("wide"), (0, String::new()));
+}
+
+#[test]
+fn core_fmt_formats() {
+    let (code, text) = run("fmt");
+    assert_eq!(
+        text,
+        "2 -42 4000000000\n\
+         12345678901234567890 -9876543210 deadbeef 0b101\n\
+         [    ab] [7   ] [  mid  ] [-0003]\n\
+         Point { x: 1, y: -2 } \"q\\\"s\" Some(3)\n"
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn trait_objects_and_function_pointers() {
     assert_eq!(run("dyn"), (0, "square rect square \n".into()));
 }
@@ -54,8 +72,16 @@ fn refused(body: &str) -> String {
 #[test]
 fn what_is_not_supported_yet_is_refused_by_name() {
     assert_eq!(
-        refused("  %x = zext i32 %argc to i64\n  %y = trunc i64 %x to i32\n  ret i32 %y"),
-        "input.ll:3: @main: 64-bit integers are not supported yet"
+        refused("  %x = zext i32 %argc to i128\n  %y = trunc i128 %x to i32\n  ret i32 %y"),
+        "input.ll:3: @main: 128-bit integers are not supported yet"
+    );
+    assert_eq!(
+        refused("  %x = zext i32 %argc to i64\n  %y = udiv i64 %x, %x\n  ret i32 0"),
+        "input.ll:4: @main: udiv of 64-bit integers is supported only by a constant below 2^26"
+    );
+    assert_eq!(
+        refused("  %x = zext i32 %argc to i64\n  %y = shl i64 %x, %x\n  ret i32 0"),
+        "input.ll:4: @main: shl of 64-bit integers by a variable amount is not supported yet"
     );
     assert_eq!(
         refused("  %x = sitofp i32 %argc to float\n  ret i32 0"),

@@ -105,6 +105,8 @@ pub enum Op {
     Alloca {
         ty: Ty,
         n: Option<(Ty, Val)>,
+        /// The alignment asked for, 1 when none is.
+        align: u64,
     },
     Gep {
         flags: Vec<String>,
@@ -183,6 +185,8 @@ pub struct Global {
     /// None for an external one; an error for an initialiser that could
     /// not be read.
     pub init: Option<Result<Const, String>>,
+    /// The alignment asked for, 1 when none is.
+    pub align: u64,
     pub file: String,
     pub line: usize,
 }
@@ -194,6 +198,8 @@ pub struct Module {
     pub funcs: HashMap<String, Function>,
     /// Functions declared but not defined.
     pub decls: HashSet<String>,
+    /// Aliases: another name for a function or global.
+    pub aliases: HashMap<String, String>,
     /// The text of each definition, keyed by kind ('f' function, 'g'
     /// global, 't' type, 'd' declaration) and name, for [`prune`].
     pub source: HashMap<(char, String), String>,
@@ -391,6 +397,17 @@ const CONST_EXPRS: [&str; 20] = [
 const NUMBERED_ATTRS: [&str; 3] = ["align", "addrspace", "cc"];
 
 impl P {
+    /// The `align N` among the tokens still to read, or 1.
+    fn align_after(&self) -> u64 {
+        let rest = &self.t[self.i.min(self.t.len())..];
+        rest.windows(2)
+            .find_map(|w| match w {
+                [Tok::Word(a), Tok::Int(k)] if a == "align" => Some(*k as u64),
+                _ => None,
+            })
+            .unwrap_or(1)
+    }
+
     fn peek(&self) -> Option<&Tok> {
         self.t.get(self.i)
     }
@@ -825,7 +842,8 @@ impl P {
                 if self.eat_punct(',') && !self.is_word("align") && !self.is_word("addrspace") {
                     n = Some(self.typed()?);
                 }
-                Ok(Op::Alloca { ty, n })
+                let align = self.align_after();
+                Ok(Op::Alloca { ty, n, align })
             }
             "getelementptr" => {
                 let flags = self.flags(&["inbounds", "nuw", "nusw"]);
@@ -1004,7 +1022,10 @@ fn header(p: &mut P) -> R<Header> {
     Ok((ret, name, params, varargs))
 }
 
-fn global(p: &mut P, name: String) -> R<(Ty, Option<Result<Const, String>>)> {
+/// A global's type, initialiser (None when external) and alignment.
+type GlobalParts = (Ty, Option<Result<Const, String>>, u64);
+
+fn global(p: &mut P, name: String) -> R<GlobalParts> {
     let mut external = false;
     loop {
         match p.next()? {
@@ -1023,8 +1044,8 @@ fn global(p: &mut P, name: String) -> R<(Ty, Option<Result<Const, String>>)> {
     let ty = p.ty()?;
     let init =
         if external || p.peek().is_none() || p.is_punct(',') { None } else { Some(p.konst()) };
-    // Alignment and the rest are not needed: see docs/rust.md.
-    Ok((ty, init))
+    let align = p.align_after();
+    Ok((ty, init, align))
 }
 
 /// The names a module keeps to itself (`private` and `internal`).
@@ -1209,12 +1230,28 @@ pub fn parse(text: &str, file: &str, index: usize, m: &mut Module) -> Result<(),
                 _ => return Err(err(no, "expected a global".into())),
             };
             p.punct('=').map_err(|e| err(no, e))?;
+            if let Some(k) = p.t.iter().position(|t| *t == Tok::Word("alias".into())) {
+                // `@a = ... alias TYPE, ptr @target`
+                m.source.insert(('a', name.clone()), line.to_string());
+                match p.t.get(k + 1..).and_then(|ts| {
+                    ts.iter().rev().find_map(|t| match t {
+                        Tok::Global(n) => Some(n.clone()),
+                        _ => None,
+                    })
+                }) {
+                    Some(target) => {
+                        m.aliases.insert(name, target);
+                    }
+                    None => return Err(err(no, format!("@{name}: an alias of what?"))),
+                }
+                continue;
+            }
             m.source.insert(('g', name.clone()), line.to_string());
             match global(&mut p, name.clone()) {
-                Ok((ty, init)) => {
+                Ok((ty, init, align)) => {
                     m.globals.insert(
                         name.clone(),
-                        Global { name, ty, init, file: file.to_string(), line: no },
+                        Global { name, ty, init, align, file: file.to_string(), line: no },
                     );
                 }
                 Err(e) => {
@@ -1224,6 +1261,7 @@ pub fn parse(text: &str, file: &str, index: usize, m: &mut Module) -> Result<(),
                             name,
                             ty: Ty::Int(8),
                             init: Some(Err(e)),
+                            align: 1,
                             file: file.to_string(),
                             line: no,
                         },
