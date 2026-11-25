@@ -1419,3 +1419,21 @@ and floating point. Atomics first (`docs/rust.md`, Atomics):
   and unlock, so the lowering already handles everything else.
 - **A `fence` is nothing**: a hart sees its own accesses in order,
   and the lock orders those of others.
+
+### 2026-11-25 · 128-bit integers as limbs
+
+Second of the remaining Rust gaps (`docs/rust.md`, Wide integers):
+
+- **The two-word code became N-limb code** rather than a separate
+  128-bit path: one limb per 32 bits, the same carry, borrow, column
+  multiply, digit division and limb-weighted comparison for any width
+  up to 256 bits. 64-bit code comes out the same size as before
+  (rfact still 3 960 trytes).
+- **256 bits, not 128**, because core formats a `u128` by a 256-bit
+  multiply by a constant and a shift, its way of dividing by 10¹⁹.
+- **128-bit helpers in LLVM IR beside the 64-bit ones**: division a bit
+  at a time and `mul` of two unknowns done in line, variable shifts
+  built from the 64-bit shift helpers. They return four words in
+  `a0`..`a3`, a convention only they use; Rust itself returns a `u128`
+  through memory. Rejected: compiler_builtins' `__udivti3` and
+  friends, which would pull in much more IR for the same result.
