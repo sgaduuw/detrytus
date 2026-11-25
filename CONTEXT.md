@@ -1631,3 +1631,19 @@ translation in user space over a TAP device, which needs root.
 - **The connect runs on a thread,** one per connection, so a slow
   connect never stalls the machine; everything else is non-blocking
   sockets polled when the device polls the link.
+
+### 2026-11-25 · A name server on `--net user`
+
+Eelco wanted names on trylobite's network. Like slirp's 10.0.2.3, the
+link now plays a name server at 10.0.0.3.
+
+- **Answers come from the host's resolver** (`ToSocketAddrs`), not from
+  forwarding the query to a DNS server: that honours the host's hosts
+  file and works wherever the host resolves, with no server address to
+  find per platform. Each lookup runs on a thread; the answer goes back
+  when the link is next polled.
+- **A records only.** Any other type gets an empty answer, a failed
+  lookup gets NXDOMAIN. The answer echoes the question and uses a
+  compression pointer to it, TTL 60.
+- **10.0.0.3, not the gateway,** so the name server is a separate
+  setting in trylobite, as on a real network.

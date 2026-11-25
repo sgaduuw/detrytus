@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ use detrytus_core::net::Link;
 
 /// The network the link plays, and the gateway's place on it.
 pub const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
+/// The name server the link plays, answering from the host's resolver.
+pub const NAMESERVER: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 3);
 const GATEWAY_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0xfe];
 
 const ETH_ARP: u16 = 0x0806;
@@ -73,7 +75,16 @@ pub struct UserLink {
     pings: HashMap<(Ipv4Addr, u16), (u16, Instant)>,
     udp: HashMap<u16, UdpFlow>,
     tcp: HashMap<FlowKey, TcpFlow>,
+    /// Name lookups under way on the host: each query's answer comes
+    /// back on its channel, for the machine's port.
+    lookups: Vec<Lookup>,
     ident: u16,
+}
+
+struct Lookup {
+    port: u16,
+    query: Vec<u8>,
+    answer: Receiver<Option<Vec<Ipv4Addr>>>,
 }
 
 struct PingSocket {
@@ -140,6 +151,7 @@ impl UserLink {
             pings: HashMap::new(),
             udp: HashMap::new(),
             tcp: HashMap::new(),
+            lookups: Vec::new(),
             ident: 0,
         }
     }
@@ -151,7 +163,7 @@ impl UserLink {
             return;
         }
         let (sha, spa, tpa) = (&f[22..28], ip_at(&f[28..]), ip_at(&f[38..]));
-        if tpa != GATEWAY || spa == GATEWAY {
+        if (tpa != GATEWAY && tpa != NAMESERVER) || spa == tpa {
             return;
         }
         let mut r = Vec::with_capacity(42);
@@ -160,7 +172,7 @@ impl UserLink {
         r.extend_from_slice(&ETH_ARP.to_be_bytes());
         r.extend_from_slice(&[0, 1, 8, 0, 6, 4, 0, 2]);
         r.extend_from_slice(&GATEWAY_MAC);
-        r.extend_from_slice(&GATEWAY.octets());
+        r.extend_from_slice(&tpa.octets());
         r.extend_from_slice(sha);
         r.extend_from_slice(&spa.octets());
         self.out.push_back(r);
@@ -195,11 +207,11 @@ impl UserLink {
         if m.len() < 8 || m[0] != 8 || checksum(m, 0) != 0 {
             return;
         }
-        if dst == GATEWAY {
+        if dst == GATEWAY || dst == NAMESERVER {
             let mut reply = m.to_vec();
             reply[0] = 0;
             set_checksum(&mut reply, 2, 0);
-            self.send_ip(GATEWAY, ICMP, &reply);
+            self.send_ip(dst, ICMP, &reply);
             return;
         }
         let Some(ping) = &self.ping else { return };
@@ -222,6 +234,12 @@ impl UserLink {
         if dst.is_broadcast() || dst.octets()[3] == 255 {
             return;
         }
+        if dst == NAMESERVER {
+            if dport == 53 {
+                self.dns_query(sport, &d[8..len]);
+            }
+            return;
+        }
         let now = Instant::now();
         let flow = match self.udp.entry(sport) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
@@ -235,6 +253,38 @@ impl UserLink {
         };
         flow.used = now;
         let _ = flow.socket.send_to(&d[8..len], SocketAddrV4::new(host_side(dst), dport));
+    }
+
+    /// A DNS query from the machine's port `port`. A question for an
+    /// address (type A, class IN) is looked up with the host's resolver,
+    /// on a thread, since that may wait on the network; any other is
+    /// answered at once with no answers.
+    fn dns_query(&mut self, port: u16, q: &[u8]) {
+        let Some((name, end)) = dns_question(q) else { return };
+        let query = q[..end].to_vec();
+        if be16(&q[end - 4..]) != 1 || be16(&q[end - 2..]) != 1 {
+            let reply = dns_reply(&query, Some(&[]));
+            self.send_udp(NAMESERVER, 53, port, &reply);
+            return;
+        }
+        let (tell, told) = channel();
+        std::thread::spawn(move || {
+            let found = (name.as_str(), 0).to_socket_addrs().ok().map(|addrs| {
+                let mut v4: Vec<Ipv4Addr> = Vec::new();
+                for a in addrs {
+                    if let SocketAddr::V4(a) = a
+                        && !v4.contains(a.ip())
+                    {
+                        v4.push(*a.ip());
+                    }
+                }
+                v4
+            });
+            let _ = tell.send(found);
+        });
+        if self.lookups.len() < 16 {
+            self.lookups.push(Lookup { port, query, answer: told });
+        }
     }
 
     fn tcp_in(&mut self, src: Ipv4Addr, dst: Ipv4Addr, s: &[u8]) {
@@ -364,6 +414,24 @@ impl UserLink {
         self.poll_ping();
         self.poll_udp();
         self.poll_tcp();
+        self.poll_dns();
+    }
+
+    fn poll_dns(&mut self) {
+        let mut i = 0;
+        while i < self.lookups.len() {
+            let found = match self.lookups[i].answer.try_recv() {
+                Err(TryRecvError::Empty) => {
+                    i += 1;
+                    continue;
+                }
+                Ok(found) => found,
+                Err(TryRecvError::Disconnected) => None,
+            };
+            let lookup = self.lookups.swap_remove(i);
+            let reply = dns_reply(&lookup.query, found.as_deref());
+            self.send_udp(NAMESERVER, 53, lookup.port, &reply);
+        }
     }
 
     fn poll_ping(&mut self) {
@@ -406,19 +474,7 @@ impl UserLink {
             }
         }
         for (port, from, data) in got {
-            let src = guest_side(*from.ip());
-            let mut d = Vec::with_capacity(8 + data.len());
-            d.extend_from_slice(&from.port().to_be_bytes());
-            d.extend_from_slice(&port.to_be_bytes());
-            d.extend_from_slice(&((8 + data.len()) as u16).to_be_bytes());
-            d.extend_from_slice(&[0, 0]);
-            d.extend_from_slice(&data);
-            let sum = pseudo(src, self.guest_ip, UDP, d.len());
-            set_checksum(&mut d, 6, sum);
-            if be16(&d[6..]) == 0 {
-                d[6..8].copy_from_slice(&[0xff, 0xff]);
-            }
-            self.send_ip(src, UDP, &d);
+            self.send_udp(guest_side(*from.ip()), from.port(), port, &data);
         }
     }
 
@@ -563,6 +619,21 @@ impl UserLink {
         self.send_ip(key.to, TCP, &s);
     }
 
+    fn send_udp(&mut self, src: Ipv4Addr, sport: u16, port: u16, data: &[u8]) {
+        let mut d = Vec::with_capacity(8 + data.len());
+        d.extend_from_slice(&sport.to_be_bytes());
+        d.extend_from_slice(&port.to_be_bytes());
+        d.extend_from_slice(&((8 + data.len()) as u16).to_be_bytes());
+        d.extend_from_slice(&[0, 0]);
+        d.extend_from_slice(data);
+        let sum = pseudo(src, self.guest_ip, UDP, d.len());
+        set_checksum(&mut d, 6, sum);
+        if be16(&d[6..]) == 0 {
+            d[6..8].copy_from_slice(&[0xff, 0xff]);
+        }
+        self.send_ip(src, UDP, &d);
+    }
+
     fn send_ip(&mut self, src: Ipv4Addr, proto: u8, body: &[u8]) {
         let mut f = Vec::with_capacity(34 + body.len());
         f.extend_from_slice(&self.guest_mac);
@@ -664,6 +735,52 @@ fn set_checksum(b: &mut [u8], at: usize, start: u32) {
 fn pseudo(src: Ipv4Addr, dst: Ipv4Addr, proto: u8, len: usize) -> u32 {
     let (s, d) = (u32::from(src), u32::from(dst));
     (s >> 16) + (s & 0xffff) + (d >> 16) + (d & 0xffff) + proto as u32 + len as u32
+}
+
+/// A DNS query's one question: its name, dotted, and where the question
+/// ends (past its type and class). None for anything but a standard
+/// query with one question.
+fn dns_question(q: &[u8]) -> Option<(String, usize)> {
+    if q.len() < 12 || q[2] & 0xf8 != 0 || be16(&q[4..]) != 1 {
+        return None; // a response, not QUERY, or not one question
+    }
+    let mut name = String::new();
+    let mut at = 12;
+    loop {
+        let len = *q.get(at)? as usize;
+        at += 1;
+        if len == 0 {
+            break;
+        }
+        if len > 63 || at + len > q.len() {
+            return None; // a pointer, which a question does not use
+        }
+        if !name.is_empty() {
+            name.push('.');
+        }
+        name.push_str(std::str::from_utf8(&q[at..at + len]).ok()?);
+        at += len;
+    }
+    if name.is_empty() || at + 4 > q.len() || name.len() > 253 {
+        return None;
+    }
+    Some((name, at + 4))
+}
+
+/// The response to `query` (header and question): these addresses, or
+/// with None, no such name.
+fn dns_reply(query: &[u8], found: Option<&[Ipv4Addr]>) -> Vec<u8> {
+    let addrs = found.unwrap_or(&[]);
+    let mut r = query.to_vec();
+    r[2] = 0x80 | (query[2] & 0x01); // a response, RD as asked
+    r[3] = 0x80 | if found.is_none() { 3 } else { 0 }; // RA; NXDOMAIN
+    r[6..8].copy_from_slice(&(addrs.len() as u16).to_be_bytes());
+    r[8..12].fill(0);
+    for a in addrs {
+        r.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
+        r.extend_from_slice(&a.octets());
+    }
+    r
 }
 
 /// The MSS a SYN's options give, or TCP's default.
@@ -875,6 +992,41 @@ mod tests {
         assert_eq!((last[13], be32(&last[8..])), (ACK, 106));
         link.receive();
         assert!(link.tcp.is_empty(), "closed both ways");
+    }
+
+    #[test]
+    fn the_name_server_answers_from_the_host() {
+        let mut link = UserLink::new();
+        let query = |id: u8, name: &[&str], qtype: u8| {
+            let mut q = vec![0, id, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+            for label in name {
+                q.push(label.len() as u8);
+                q.extend_from_slice(label.as_bytes());
+            }
+            q.extend_from_slice(&[0, 0, qtype, 0, 1]);
+            let mut d = vec![0xc0, 0x01, 0, 53, 0, (8 + q.len()) as u8, 0, 0];
+            d.extend_from_slice(&q);
+            let sum = pseudo(GUEST, NAMESERVER, UDP, d.len());
+            set_checksum(&mut d, 6, sum);
+            ip_frame(NAMESERVER, UDP, &d)
+        };
+        link.send(&query(1, &["localhost"], 1));
+        let (src, proto, body) = payload(&next(&mut link));
+        assert_eq!((src, proto, be16(&body), be16(&body[2..])), (NAMESERVER, UDP, 53, 0xc001));
+        let r = &body[8..];
+        assert_eq!((r[1], r[2] & 0x80, r[3] & 15), (1, 0x80, 0), "a response, no error");
+        assert!(be16(&r[6..]) >= 1, "an answer");
+        let answer = 12 + 11 + 4; // header, question
+        assert_eq!(&r[answer..answer + 12], &[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
+        assert_eq!(ip_at(&r[answer + 12..]), Ipv4Addr::LOCALHOST);
+
+        link.send(&query(2, &["localhost"], 28)); // AAAA: none given
+        let (_, _, body) = payload(&next(&mut link));
+        assert_eq!((body[9], be16(&body[14..])), (2, 0));
+
+        link.send(&query(3, &["no-such-name", "invalid"], 1));
+        let (_, _, body) = payload(&next(&mut link));
+        assert_eq!((body[9], body[11] & 15), (3, 3), "NXDOMAIN");
     }
 
     #[test]
