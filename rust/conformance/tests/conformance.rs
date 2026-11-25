@@ -15,6 +15,7 @@ use detrytus_asm::{AsmError, assemble, assemble_object};
 use detrytus_core::block::MemoryDisk;
 use detrytus_core::bus::Access;
 use detrytus_core::image;
+use detrytus_core::net::Loopback;
 use detrytus_core::{Hotplug, Machine, Outcome};
 use toml::{Table, Value};
 
@@ -55,6 +56,7 @@ struct Case {
     input: String,
     console_open: bool,
     disk_blocks: Option<i64>,
+    net_loopback: bool,
     harts: i64,
     hotplug: Vec<(i64, Hotplug)>,
     expect: Table,
@@ -69,7 +71,7 @@ fn text_of(raw: &Table, defaults: &Table, key: &str) -> String {
     setting(raw, defaults, key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-const CASE_KEYS: [&str; 14] = [
+const CASE_KEYS: [&str; 15] = [
     "name",
     "program",
     "objects",
@@ -82,6 +84,7 @@ const CASE_KEYS: [&str; 14] = [
     "input",
     "console_open",
     "disk_blocks",
+    "net_loopback",
     "harts",
     "hotplug",
 ];
@@ -224,6 +227,7 @@ fn load(file: &Path) -> Vec<Case> {
                 input: text_of(raw, defaults, "input"),
                 console_open: setting("console_open").is_some_and(|v| v.as_bool().unwrap()),
                 disk_blocks: setting("disk_blocks").map(|v| v.as_integer().unwrap()),
+                net_loopback: setting("net_loopback").is_some_and(|v| v.as_bool().unwrap()),
                 harts: setting("harts").map_or(1, |v| v.as_integer().unwrap()),
                 hotplug: setting("hotplug").map_or_else(Vec::new, |v| hotplug(v).unwrap()),
                 expect: raw.get("expect").and_then(Value::as_table).cloned().unwrap_or_default(),
@@ -384,6 +388,9 @@ fn run(case: &Case) -> Vec<String> {
     machine.bus.console.closed = !case.console_open;
     if let Some(blocks) = case.disk_blocks.filter(|&b| b > 0) {
         machine.bus.block.disk = Some(Box::new(MemoryDisk::new(blocks)));
+    }
+    if case.net_loopback {
+        machine.bus.net.link = Some(Box::new(Loopback::default()));
     }
     let outcome = machine.run(case.max_steps as u64);
     let mut failures: Vec<String> = outcome_failure(e, &outcome).into_iter().collect();

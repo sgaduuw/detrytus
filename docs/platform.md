@@ -17,6 +17,7 @@ the platform (`isa.md` 8.5 and 12.3).
 | -13 | interrupt controller (Device interrupts, below) |
 | -14 | block device (The block device, below) |
 | -15 | binary floating point coprocessor (below) |
+| -16 | network device (The network device, below) |
 
 A page is 19,683 trytes centred on a multiple of 19,683, so page `p`
 spans `p·19683 − 9841` .. `p·19683 + 9841`. The loader may place data in
@@ -176,6 +177,7 @@ because no device is source 0.
 |--------|--------|---------------|
 | 1 | console input | a read of console in would not return `CONSOLE_EMPTY` |
 | 2 | block device | a finished command has not been acknowledged |
+| 3 | network device | a finished send or receive has not been acknowledged |
 
 Page −13 is centred on `I = −255879`. Source `s` has a three-word group
 centred on `I + 9·s`; group 0, at `I`, holds the per-hart registers.
@@ -185,7 +187,7 @@ Every register is one word, centred on the address given.
 |---------|----------|--------|-----------|
 | I−3 | CLAIM | ro, per hart | takes the lowest-numbered source that is pending, enabled, routed to the reading hart and not in service; marks it in service and returns its number, or 0 if there is none |
 | I | COMPLETE | wo, per hart | ends service of the source written; if it is still pending it can be claimed again. Writing a source not in service does nothing |
-| I+3 | SOURCES | ro | the highest source number on this platform: 2 |
+| I+3 | SOURCES | ro | the highest source number on this platform: 3 |
 | I+9·s−3 | PENDING(s) | ro | +1 while source `s` wants attention, else 0 |
 | I+9·s | ENABLE(s) | rw | +1 lets source `s` interrupt, 0 masks it; 0 at reset. Other values are stored as 0 |
 | I+9·s+3 | ROUTE(s) | rw | the hart source `s` interrupts; 0 at reset |
@@ -352,6 +354,82 @@ one word.
   lets several processes use the coprocessor saves and restores A, B,
   C and R, eight words, when it switches between them, since a process
   can be interrupted between writing OP and reading R.
+
+## The network device (page −16)
+
+An Ethernet interface that moves whole frames between itself and RAM on
+its own, then raises source 3. It is the wire under a network stack:
+the kernel's driver sends and receives frames, and everything above
+Ethernet (ARP, IP, TCP) is software. CONTEXT.md gives the reasoning.
+
+**A frame is octets, one per tryte.** Each tryte of a frame in RAM holds
+one octet, 0 to 255, in wire order: destination address, source address,
+type, payload. There is no preamble and no frame check sequence, which
+the device adds and checks itself, as real interfaces do. A frame is
+`FRAME_MIN` (14, the header) to `FRAME_MAX` (1,514) octets.
+
+Page −16 is centred on `N = −314928`. Every register is one word.
+
+| Address | Register | Access | Behaviour |
+|---------|----------|--------|-----------|
+| N−27 | PRESENT | ro | `NET_VERSION`, 1: the device is here |
+| N−24 | LINK | ro | +1 with a link attached (`--net`), 0 without |
+| N−21, N−18 | MAC_HI, MAC_LO | ro | the interface's address, 24 bits each, high half first: `02:00:00:00:00:01` (MAC_HI 131072, MAC_LO 1) unless `--mac` sets another |
+| N−15 | DROPPED | ro | frames dropped on arrival since reset (below) |
+| N−12 | TX_ADDR | rw | the physical address of the frame to send |
+| N−9 | TX_LEN | rw | its length in octets |
+| N−6 | TX_COMMAND | wo | `NET_SEND` (+1) sends the frame; ignored while a send is busy, and other values are ignored |
+| N−3 | TX_STATUS | ro | `NET_BUSY` (+1), `NET_DONE` (0) or `NET_FAILED` (−1) |
+| N | TX_ACK | wo | any write clears the send's finished state |
+| N+3 | RX_ADDR | rw | the physical address of a receive buffer |
+| N+6 | RX_SIZE | rw | its size in trytes |
+| N+9 | RX_COMMAND | wo | `NET_RECEIVE` (+1) gives the buffer to the device for the next frame; ignored while a buffer is given, and other values are ignored |
+| N+12 | RX_STATUS | ro | `NET_BUSY` (+1) while the buffer waits for a frame, `NET_DONE` (0) once one is in it, `NET_FAILED` (−1) |
+| N+15 | RX_LEN | ro | the length of the frame received |
+| N+18 | RX_ACK | wo | any write clears the receive's finished state |
+
+- **Two channels.** Sending and receiving are independent, each with
+  its own command, status and finished state, so a driver keeps a
+  buffer given for the next frame while it sends.
+- **Sending.** TX_COMMAND reads the frame at once, without
+  translation, so the buffer may be reused as soon as the command is
+  written.
+  The send fails, and is finished at once, when there is no link,
+  TX_LEN is outside `FRAME_MIN`..`FRAME_MAX`, a tryte of the frame is
+  not RAM, or a tryte is not an octet. Otherwise it finishes 100 +
+  TX_LEN rounds later, when the frame leaves on the link.
+- **Receiving.** RX_COMMAND checks the buffer: if any of its RX_SIZE
+  trytes is not RAM, or RX_SIZE is below 1, the receive fails at once.
+  The next frame to arrive is then written into it, RX_LEN is set and
+  the receive is finished; trytes past the frame are left alone. One
+  frame per buffer: the driver gives a buffer again for the next.
+- **Waiting frames.** Frames that arrive while no buffer is given wait
+  in the device, up to `RX_QUEUE` (9), and fill the next buffers in the
+  order they came. A frame that arrives when nine wait, is not a frame
+  (shorter than `FRAME_MIN` or longer than `FRAME_MAX`), or is longer
+  than the buffer it would fill, is dropped and counted in DROPPED; a
+  too-long frame leaves the buffer given for the one after.
+- **The link** is looked at for arriving frames every 1,000 rounds
+  (when `time` is a multiple of 1,000), so a socket is not asked on
+  every step. When every hart waits and a frame could arrive, time
+  moves to the next look rather than skipping further.
+- **Finished state.** A send or receive that finishes, by success or
+  failure, sets its channel's finished state; source 3 is pending while
+  either channel's is set. The status keeps the outcome until the
+  channel's next command.
+
+**The link.** `run --net loop` attaches a loopback link, which hands
+every frame sent straight back, as a cable from the interface to
+itself; a run with it stays deterministic. `run --net udp:LOCAL,PEER`
+carries each frame as one UDP datagram, sent from the local address to
+the peer and received from the peer alone. LOCAL and PEER are
+`HOST:PORT`, or a bare port on 127.0.0.1. The framing is QEMU's
+(`-netdev dgram` and `-netdev socket,udp=`), so the peer can be another
+detrytus, a QEMU guest, or a small bridge to a host TAP device. A
+datagram that cannot be sent is lost, as on a wire with nothing at the
+other end. Frames come from outside the machine at no particular step,
+so a run with a UDP link is not deterministic. `--mac` sets MAC_HI and
+MAC_LO, for two machines on one wire.
 
 ## Emulator behaviour outside the ISA
 

@@ -72,6 +72,8 @@ programs for the machine. Implemented:
   hot-plug
 - an interrupt controller, a console and a block device backed by a
   file on the host
+- an Ethernet network device, looped back or carried over UDP to
+  another machine
 - compressed bundles, which the assembler forms by itself under
   `.compress`, and gp-relative addressing under `.gp`
 
@@ -154,6 +156,17 @@ detrytus run --harts 3 examples/harts.s
 `--disk FILE` attaches a block device whose blocks live in FILE, two
 bytes per tryte; `--disk-blocks N` sets its size and creates the file if
 it is missing. What a program writes stays in the file for the next run.
+
+`--net loop` attaches a network device whose frames come straight back,
+and `--net udp:LOCAL,PEER` carries each Ethernet frame as one UDP
+datagram between a local port and a peer: another detrytus, a QEMU
+`-netdev dgram` backend, or a bridge to the host's network. `--mac`
+sets the interface's address.
+
+```bash
+detrytus run --net loop examples/net.s
+detrytus run --net udp:5555,5556 kernel.dti   # and the other end: udp:5556,5555
+```
 
 `--mix` counts instructions by mnemonic and how many of each a
 compressed form (docs/isa.md 6.1) could stand for: `run --mix` counts

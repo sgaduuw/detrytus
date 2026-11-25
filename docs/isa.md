@@ -1225,8 +1225,9 @@ sequence, whose 18 trits cover every code point with room to spare.
 
 `platform.md` fixes the reference platform's MMIO devices: a console,
 power control, the hart controller (5.6), an interrupt controller for
-devices (page −13) and a block device (page −14), at negative page
-numbers like the rest.
+devices (page −13), a block device (page −14), a binary floating point
+coprocessor (page −15) and a network device (page −16), at negative
+page numbers like the rest.
 
 ## 13. Open questions
 

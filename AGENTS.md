@@ -69,6 +69,7 @@ and hides a failure.
 | `rust/core/src/bus.rs` | physical memory and the built-in devices, wired to their registers |
 | `rust/core/src/irq.rs` | the interrupt controller: enables, routes, sources in service |
 | `rust/core/src/block.rs` | the block device: its registers and the command in flight |
+| `rust/core/src/net.rs` | the network device: its registers, the frame in flight, frames waiting for a buffer, and the `Link` trait with the loopback link |
 | `rust/core/src/harts.rs` | the hart controller: hart states, mailboxes, group sends, hot-plug events |
 | `rust/core/src/image.rs` | the `.dti` image format: reading and writing |
 | `rust/core/src/entropy.rs` | the seeded entropy source |
@@ -77,7 +78,7 @@ and hides a failure.
 | `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm`; `error`, `text` and `pyrepr` keep messages and splitting as the Python assembler had them; `object` (the object format) and `link` (the linker) |
 | `rust/tc/src/` | the Trice compiler: `lex`, `parse` (into `ast`), `codegen` (types are checked as code is made, on virtual registers), `alloc` (the back end: registers, redundancy, inlining, frames); `lib.rs` loads imports, reading `.equ` constants from imported assembly, whole or for one file on its own (`tc -c`); `ll/` reads LLVM IR (`ir.rs`) and lowers it to the same back end (`lower.rs`) |
 | `rust/tc/tests/` | Trice programs compiled and run on the bare machine (`bare.s`), and refused ones; `ll/` holds Rust programs, their pruned IR (rebuild with `ll/regenerate.sh`) and a bare-machine runtime, which `ll.rs` translates and runs; `float_lib.rs` checks `lower/float.ll`'s functions against the host |
-| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files, linking objects), `link.rs` (`link`), `disk.rs` (`--disk`), `mix.rs` (`--mix`), `tc.rs` (`tc`), `ll.rs` (`ll`), `debug/` (engine and shell) |
+| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files, linking objects), `link.rs` (`link`), `disk.rs` (`--disk`), `net.rs` (`--net`, the UDP link), `mix.rs` (`--mix`), `tc.rs` (`tc`), `ll.rs` (`ll`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
 | `rust/cli/tests/pace.rs` | pacing the clock over idle time, as a live console does |
 | `rust/conformance/` | the conformance runner (tests only) |

@@ -4,8 +4,8 @@
 //! Status: the integer core, traps, delegation, interrupts, the timer,
 //! single step, paged virtual memory, up to 729 harts with the hart
 //! controller, the interrupt controller for devices, the block device
-//! compressed bundles, the ternary floating point unit and the binary
-//! floating point coprocessor. Debug
+//! compressed bundles, the ternary floating point unit, the binary
+//! floating point coprocessor and the network device. Debug
 //! triggers are specified but not implemented yet.
 
 pub mod alu;
@@ -22,6 +22,7 @@ pub mod irq;
 pub mod isa;
 pub mod machine;
 pub mod mmu;
+pub mod net;
 mod privileged;
 pub mod trits;
 

@@ -19,6 +19,7 @@ mod link;
 mod live;
 mod ll;
 mod mix;
+mod net;
 mod program;
 mod tc;
 
@@ -30,7 +31,8 @@ const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] FILE...
+                    [--disk FILE [--disk-blocks N]] [--net loop|udp:LOCAL,PEER [--mac MAC]]
+                    FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
@@ -71,6 +73,8 @@ struct RunArgs {
     input: Option<String>,
     live: bool,
     disk: Option<DiskSpec>,
+    net: Option<net::NetSpec>,
+    mac: Option<u64>,
 }
 
 /// A failure that ends the command: its message and exit status.
@@ -88,7 +92,7 @@ impl Fail {
     }
 }
 
-fn usage(problem: &str) -> Fail {
+pub(crate) fn usage(problem: &str) -> Fail {
     Fail(format!("{USAGE}\ndetrytus: {problem}"), USAGE_ERROR)
 }
 
@@ -109,6 +113,8 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         input: None,
         live: false,
         disk: None,
+        net: None,
+        mac: None,
     };
     let mut disk = DiskArgs::default();
     let mut args = args.peekable();
@@ -127,6 +133,8 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
                 hart_option(&arg, args.next(), &mut run.harts, &mut run.hotplug)?
             }
             "--disk" | "--disk-blocks" => disk.option(&arg, args.next())?,
+            "--net" => run.net = Some(net::NetSpec::parse(args.next())?),
+            "--mac" => run.mac = Some(net::parse_mac(args.next())?),
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -134,6 +142,9 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         }
     }
     run.disk = disk.spec()?;
+    if run.mac.is_some() && run.net.is_none() {
+        return Err(usage("--mac needs --net"));
+    }
     if run.files.is_empty() {
         return Err(usage("run needs at least one file"));
     }
@@ -346,6 +357,12 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     let max_steps = args.max_steps.unwrap_or(if args.live { u64::MAX } else { 10_000_000 });
     if let Some(spec) = &args.disk {
         machine.bus.block.disk = Some(Box::new(spec.open()?));
+    }
+    if let Some(spec) = &args.net {
+        machine.bus.net.link = Some(spec.open()?);
+    }
+    if let Some(mac) = args.mac {
+        machine.bus.net.mac = mac;
     }
     // With more than one hart, trace lines say which ran each instruction.
     let several = args.harts > 1 || !args.hotplug.is_empty();

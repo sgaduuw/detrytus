@@ -68,6 +68,7 @@ expect.registers = { a1 = 7, a2 = -3 }
 | `input` | text queued on the console's input |
 | `console_open` | `true` leaves the console open once `input` is read, as the debugger does: reads give `CONSOLE_EMPTY` (−1) rather than `CONSOLE_CLOSED` (−2); default false, as `run` |
 | `disk_blocks` | attach a block device with this many blocks, all zeros, held in memory; default 0, no disk |
+| `net_loopback` | `true` attaches the network device to a loopback link, which hands every frame sent straight back; default false, no link |
 | `harts` | harts present at reset, numbered outward from 0; default 1 |
 | `hotplug` | a list of `{ time = T, add = H }` or `{ time = T, remove = H }` |
 
