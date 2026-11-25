@@ -61,6 +61,16 @@ pub extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
         check(b"lshr 36", a >> 36, KA >> 36);
         check(b"ashr 4", (c >> 4) as u64, (KC >> 4) as u64);
         check(b"ashr 40", (c >> 40) as u64, (KC >> 40) as u64);
+        check(b"udiv any", a / b, KA / KB);
+        check(b"urem any", a % b, KA % KB);
+        check(b"udiv top", a / (a - 1), KA / (KA - 1));
+        check(b"sdiv", (c / (s as i64)) as u64, (KC / 7) as u64);
+        check(b"srem", (c % (s as i64)) as u64, (KC % 7) as u64);
+        check(b"shl var", a << s, KA << 7);
+        check(b"shl var 39", a << (s + 32), KA << 39);
+        check(b"lshr var", a >> (s + 30), KA >> 37);
+        check(b"ashr var", (c >> s) as u64, (KC >> 7) as u64);
+        check(b"ashr var 40", (c >> (s + 33)) as u64, (KC >> 40) as u64);
         check(b"and", a & b, KA & KB);
         check(b"or", a | b, KA | KB);
         check(b"xor", a ^ b, KA ^ KB);

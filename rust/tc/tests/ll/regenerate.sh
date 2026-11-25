@@ -22,7 +22,7 @@ opt-level = "s"
 panic = "abort"
 codegen-units = 1
 TOML
-for src in "$here"/*.rs; do
+for src in ${ONLY:-"$here"/*.rs}; do
     name=$(basename "$src" .rs)
     cp "$src" "$work/src/lib.rs"
     rm -f "$work"/target/riscv32imac-unknown-none-elf/release/deps/prog-*.ll

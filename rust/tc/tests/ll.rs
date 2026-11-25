@@ -76,12 +76,8 @@ fn what_is_not_supported_yet_is_refused_by_name() {
         "input.ll:3: @main: 128-bit integers are not supported yet"
     );
     assert_eq!(
-        refused("  %x = zext i32 %argc to i64\n  %y = udiv i64 %x, %x\n  ret i32 0"),
-        "input.ll:4: @main: udiv of 64-bit integers is supported only by a constant below 2^26"
-    );
-    assert_eq!(
-        refused("  %x = zext i32 %argc to i64\n  %y = shl i64 %x, %x\n  ret i32 0"),
-        "input.ll:4: @main: shl of 64-bit integers by a variable amount is not supported yet"
+        refused("  %x = zext i32 %argc to i48\n  %y = udiv i48 %x, %x\n  ret i32 0"),
+        "input.ll:4: @main: udiv of 48-bit integers is supported only by a constant below 2^25"
     );
     assert_eq!(
         refused("  %x = sitofp i32 %argc to float\n  ret i32 0"),
