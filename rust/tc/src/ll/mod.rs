@@ -31,19 +31,56 @@ fn read(paths: &[&Path]) -> Result<(ir::Module, String), Error> {
 /// Translate the LLVM IR modules at `paths` into one assembly file that
 /// includes `includes` first (paths as `.include` should name them).
 pub fn translate(paths: &[&Path], includes: &[String]) -> Result<Output, Error> {
-    let (m, shown) = read(paths)?;
+    let (mut m, shown) = read(paths)?;
+    with_float(&mut m)?;
     translate_module(&m, &shown, includes)
 }
 
-/// The part of the modules at `paths` that `main` reaches, as one LLVM
-/// IR module: what a test needs of core, without the rest of it.
-pub fn prune(paths: &[&Path]) -> Result<String, Error> {
+/// Add the software floating point (lower/float.ll) to a module: what
+/// it defines and the module does not. Only what the program calls is
+/// lowered, so a program without floating point pays nothing.
+fn with_float(m: &mut ir::Module) -> Result<(), Error> {
+    let mut fm = ir::Module::default();
+    // Its own private names get a suffix of their own (ir::parse).
+    ir::parse(lower::FLOAT_IR, "lower/float.ll", 999, &mut fm)?;
+    for (k, v) in fm.funcs {
+        if !m.funcs.contains_key(&k) && !m.aliases.contains_key(&k) {
+            m.decls.remove(&k);
+            m.funcs.insert(k, v);
+        }
+    }
+    for (k, v) in fm.aliases {
+        if !m.funcs.contains_key(&k) && !m.aliases.contains_key(&k) {
+            m.decls.remove(&k);
+            m.aliases.insert(k, v);
+        }
+    }
+    for (k, v) in fm.globals {
+        m.globals.entry(k).or_insert(v);
+    }
+    for (k, v) in fm.types {
+        m.types.entry(k).or_insert(v);
+    }
+    for d in fm.decls {
+        if !m.funcs.contains_key(&d) && !m.aliases.contains_key(&d) {
+            m.decls.insert(d);
+        }
+    }
+    Ok(())
+}
+
+/// The part of the modules at `paths` that `roots` (usually `main`)
+/// reach, as one LLVM IR module: what a test needs of core, without
+/// the rest of it.
+pub fn prune(paths: &[&Path], roots: &[&str]) -> Result<String, Error> {
     let (m, shown) = read(paths)?;
-    if !m.funcs.contains_key("main") {
-        return Err(Error::new(&shown, 0, "no function main".into()));
+    for r in roots {
+        if !m.funcs.contains_key(*r) && !m.aliases.contains_key(*r) {
+            return Err(Error::new(&shown, 0, format!("no function {r}")));
+        }
     }
     let low = lower::Lower::new(&m);
-    let (funcs, globals, external) = low.reachable(&["main"]);
+    let (funcs, globals, external) = low.reachable(roots);
     let mut body = Vec::new();
     for g in &globals {
         body.push(m.source[&('g', g.clone())].clone());
@@ -59,9 +96,12 @@ pub fn prune(paths: &[&Path]) -> Result<String, Error> {
     let mut lines = Vec::new();
     for a in aliases {
         let at = format!("@{a}");
-        if text.match_indices(&at).any(|(i, _)| {
-            !text[i + at.len()..].starts_with(|c: char| c.is_alphanumeric() || "._$-".contains(c))
-        }) {
+        if roots.contains(&a.as_str())
+            || text.match_indices(&at).any(|(i, _)| {
+                !text[i + at.len()..]
+                    .starts_with(|c: char| c.is_alphanumeric() || "._$-".contains(c))
+            })
+        {
             lines.push(m.source[&('a', a.clone())].clone());
         }
     }
@@ -109,7 +149,9 @@ pub fn prune(paths: &[&Path]) -> Result<String, Error> {
     }
     types.sort();
     text = format!(
-        "; Pruned by detrytus ll from {shown}: what main reaches.\n{}\n{text}\n{}\n",
+        "; Pruned by detrytus ll from {shown}: what {} reach{}.\n{}\n{text}\n{}\n",
+        if roots.len() == 1 { roots[0] } else { "the roots given" },
+        if roots.len() == 1 { "es" } else { "" },
         types.join("\n"),
         tail.join("\n")
     );
@@ -120,6 +162,7 @@ pub fn prune(paths: &[&Path]) -> Result<String, Error> {
 pub fn translate_text(text: &str, includes: &[String]) -> Result<Output, Error> {
     let mut m = ir::Module::default();
     ir::parse(text, "input.ll", 0, &mut m)?;
+    with_float(&mut m)?;
     translate_module(&m, "input.ll", includes)
 }
 
@@ -153,7 +196,7 @@ fn translate_module(m: &ir::Module, shown: &str, includes: &[String]) -> Result<
         out.extend(low.function(&m.funcs[f])?);
     }
     out.push(String::new());
-    // The 64-bit helper functions used, and those they use.
+    // The wide-integer helper functions used, and those they use.
     if !low.wide_calls.is_empty() {
         let mut hm = ir::Module::default();
         ir::parse(lower::WIDE_IR, "lower/wide.ll", 0, &mut hm)?;

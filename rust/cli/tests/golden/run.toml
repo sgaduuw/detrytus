@@ -793,7 +793,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
+       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]
 detrytus: --harts takes 1 to 729
 '''
 
@@ -812,7 +812,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
+       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]
 detrytus: hart 0 cannot be removed
 '''
 
@@ -831,7 +831,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
+       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]
 detrytus: --plug needs TIME:HART
 '''
 
@@ -912,7 +912,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
+       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]
 detrytus: stdin can be a FILE or the --input, not both
 '''
 
@@ -931,7 +931,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
+       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]
 detrytus: --input needs a file
 '''
 
@@ -978,7 +978,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
+       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]
 detrytus: --disk-blocks needs --disk
 '''
 
@@ -997,7 +997,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
+       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]
 detrytus: --disk-blocks takes 1 or more
 '''
 
@@ -1126,6 +1126,6 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune] FILE... [-o FILE]
+       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]
 detrytus: --input and --live both give the console its input
 """

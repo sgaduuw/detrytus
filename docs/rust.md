@@ -40,7 +40,8 @@ private name that two modules share (`@alloc_...`, `@vtable.0`) is kept
 apart by giving the second module's a suffix (`.m1`). Names no module
 defines are left to the included assembly. `--prune` writes the
 reachable part of the modules as one LLVM IR module instead, which is
-how the tests keep only what they need of core.
+how the tests keep only what they need of core; `--root NAME` (any
+number of times) prunes from those functions instead of `main`.
 
 ## What the program and its runtime agree on
 
@@ -169,6 +170,50 @@ function's start, `s0` plus an offset rounded down with `band` against
 −A, since the frame pointer itself may be anywhere; the frame has A − 1
 trytes to spare for it.
 
+## Floating point
+
+detrytus has no floating-point hardware yet (isa.md specifies the
+instructions, the emulator does not run them), so `f32` and `f64` are
+done in software, the way rustc does it on a RISC-V core without an
+FPU: by calling the functions of Rust's own `compiler_builtins`. A
+`float` is held as the integer of its bits, one word, a `double` as a
+64-bit integer, two; in memory both are the IEEE 754 bytes. When the IR
+is read (`ir.rs`, `expand_float`), each floating-point operation becomes
+calls and integer operations:
+
+- `fadd`, `fsub`, `fmul`, `fdiv` call `__adddf3` and the rest (`sf`
+  for `float`), `frem` calls `fmod`;
+- `fcmp` calls one of `__eqdf2`, `__ltdf2`, `__gedf2`, `__unorddf2`
+  and so on and compares the answer with 0, as LLVM itself does for a
+  target without an FPU; `ueq` and `one` take two calls;
+- `fptosi`, `fptoui`, `sitofp`, `uitofp` call `__fixdfsi`,
+  `__floatsidf` and the rest for 32, 64 or 128 bits, extending or
+  truncating narrower integers; `fpext` and `fptrunc` call
+  `__extendsfdf2` and `__truncdfsf2`;
+- Rust's `as` casts are `llvm.fptosi.sat` and `llvm.fptoui.sat`.
+  compiler_builtins' conversions already saturate and turn a NaN into
+  0, so 32 bits and wider is one call; narrower ones are clamped after;
+- `fneg`, `llvm.fabs` and `llvm.copysign` work on the sign bit;
+- `llvm.sqrt`, `floor`, `ceil`, `trunc`, `round`, `rint`, `fma`,
+  `minnum`, `maxnum` and their kin call compiler_builtins' libm
+  (`sqrt`, `floorf`, `fmin`, ...).
+
+The functions come from `rust/tc/src/ll/lower/float.ll`: the part of
+compiler_builtins (and the bits of core it uses) that those calls
+reach, pruned from the IR that rustc emits when it builds core, by
+`lower/float.sh`. It is translated with the program; only what the
+program calls is lowered, so a program without floating point pays
+nothing. compiler_builtins is MIT and Apache-2.0 licensed (its libm
+part comes from musl, MIT), as the file's header says.
+
+Floating point brought in what these functions need: `llvm.ctlz`,
+`llvm.umin` and the like on 64- and 128-bit integers, `llvm.ctpop`,
+`llvm.fshl`/`fshr` (funnel shifts) and `llvm.ucmp`/`scmp`. Core's
+formatting of floats (`{}`, `{:.3}`, `{:e}`) works: Grisu with Dragon
+as its fallback, as on any target. It is not small:
+`rust/tc/tests/ll/floats.rs` is about 39 000 trytes, most of it float
+formatting.
+
 ## Atomics
 
 The target, `riscv32imac`, has atomics up to 32 bits, so core's
@@ -229,9 +274,9 @@ the line:
 - integers wider than 256 bits; for widths other than 64 and 128,
   shifts by a variable amount and division by anything but a constant
   below 2²⁵;
-- floating point, vectors, varargs;
+- `half`, `fp128` and the other floating-point types, vectors,
+  varargs;
 - results of more than four words;
 - variable-sized `alloca`;
-- the intrinsics for counting bits other than `llvm.ctlz`, swapping
-  bytes and rotating (`llvm.ctpop`, `llvm.cttz`, `llvm.bswap`,
-  `llvm.fshl` and others).
+- `llvm.cttz`, `llvm.bswap`, `llvm.bitreverse` and the overflow
+  intrinsics (`llvm.umul.with.overflow` and others).

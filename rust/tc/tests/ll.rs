@@ -55,6 +55,13 @@ fn integers_of_128_bits() {
 }
 
 #[test]
+fn floating_point() {
+    let (code, text) = run("floats");
+    assert_eq!(text, "1.5 -0.25 0.1 3.142 6.02e23\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn atomics() {
     assert_eq!(run("atomics"), (0, String::new()));
 }
@@ -100,8 +107,8 @@ fn what_is_not_supported_yet_is_refused_by_name() {
         "input.ll:4: @main: udiv of 48-bit integers is supported only by a constant below 2^25"
     );
     assert_eq!(
-        refused("  %x = sitofp i32 %argc to float\n  ret i32 0"),
-        "input.ll:3: @main: the sitofp instruction is not supported"
+        refused("  %x = sitofp i32 %argc to half\n  ret i32 0"),
+        "input.ll:3: @main: sitofp to half is not supported"
     );
     assert_eq!(
         refused("  %x = atomicrmw uinc_wrap ptr %argv, i32 1 seq_cst\n  ret i32 0"),

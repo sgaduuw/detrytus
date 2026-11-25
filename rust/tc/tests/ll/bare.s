@@ -7,7 +7,7 @@
         .equ  CONSOLE_OUT, -19683
 
         .section reset, 0
-        li    sp, 4 * 19683
+        li    sp, 9 * 19683
         j     _start
 
         .section program, 2 * 19683

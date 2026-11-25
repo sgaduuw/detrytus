@@ -16,6 +16,9 @@ use crate::alloc;
 mod wide;
 pub use wide::WIDE_IR;
 
+/// Software floating point, from compiler_builtins (docs/rust.md).
+pub const FLOAT_IR: &str = include_str!("lower/float.ll");
+
 const ARGS: [&str; 6] = ["a0", "a1", "a2", "a3", "a4", "a5"];
 
 /// The widest integer held in one word. Wider ones, up to WIDE_BITS,
@@ -129,6 +132,16 @@ pub fn helpers(used: &BTreeSet<&'static str>) -> Vec<String> {
         out.push("        .words 1".into());
     }
     out
+}
+
+/// The bits of a floating-point constant of type `f`, given as those of
+/// a double, and how many there are.
+fn float_bits(double: u64, f: &str) -> R<(i128, u32)> {
+    match f {
+        "double" => Ok((double as i128, 64)),
+        "float" => Ok(((f64::from_bits(double) as f32).to_bits() as i128, 32)),
+        f => Err(format!("floating point ({f}) is not supported")),
+    }
 }
 
 fn mask(bits: u32) -> i128 {
@@ -430,7 +443,10 @@ impl<'m> Lower<'m> {
                     self.leaves(f, base + off, out)?;
                 }
             }
-            Ty::Float(f) => return Err(format!("floating point ({f}) is not supported yet")),
+            // Held as the integer of its bits (docs/rust.md, Floating point).
+            Ty::Float(f) if f == "float" => out.push((base, Ty::Int(32))),
+            Ty::Float(f) if f == "double" => self.leaves(&Ty::Int(64), base, out)?,
+            Ty::Float(f) => return Err(format!("floating point ({f}) is not supported")),
             Ty::Vector(..) => return Err("vectors are not supported".into()),
             Ty::Void => {}
             t => return Err(format!("{t:?} is not a value type")),
@@ -686,6 +702,10 @@ impl<'m> Lower<'m> {
                 Ok(out)
             }
             (Const::Bytes(bs), _) => Ok(bs.iter().map(|&b| self.li(b as i128)).collect()),
+            (Const::Float(b), Ty::Float(f)) => {
+                let (k, bits) = float_bits(*b, f)?;
+                Ok(wide::const_limbs(k, bits).into_iter().map(|k| self.li(k)).collect())
+            }
             (Const::Int(v), Ty::Int(b)) if self.wide(&t)?.is_some() => {
                 Ok(wide::const_limbs(*v, *b).into_iter().map(|k| self.li(k)).collect())
             }
@@ -1022,6 +1042,13 @@ impl<'m> Lower<'m> {
         v: &Val,
         to: &Ty,
     ) -> R<Vec<&'static str>> {
+        // A float's bits are already the integer's.
+        if op == "bitcast"
+            && (matches!(self.resolve(from)?, Ty::Float(_))
+                || matches!(self.resolve(to)?, Ty::Float(_)))
+        {
+            return self.leaves_of(v, from);
+        }
         if self.wide(from)?.is_some() || self.wide(to)?.is_some() {
             return self.wide_cast(op, flags, from, v, to);
         }
@@ -1101,6 +1128,22 @@ impl<'m> Lower<'m> {
             "llvm.abs" if self.wide(&t)?.is_some() => {
                 let bits = self.wide(&t)?.unwrap_or(WIDE_BITS);
                 self.wide_abs(&args[0].1, &t, bits)?
+            }
+            "llvm.ctpop" => {
+                let limbs = self.leaves_of(&args[0].1, &t)?;
+                let n = limbs.len();
+                let mut sum = "zero";
+                for l in limbs {
+                    let c = self.ctpop(l);
+                    sum = if sum == "zero" { c } else { self.op3("add", sum, c) };
+                }
+                let mut out = vec![sum];
+                out.resize(n, "zero");
+                out
+            }
+            "llvm.ctlz" if self.wide(&t)?.is_some() => {
+                let bits = self.wide(&t)?.unwrap_or(WIDE_BITS);
+                self.wide_ctlz(&args[0].1, &t, bits)?
             }
             "llvm.ctlz" => {
                 let bits = self.bits(&t)?;
@@ -1185,6 +1228,49 @@ impl<'m> Lower<'m> {
             step /= 2;
         }
         self.op3("sub", n, x)
+    }
+
+    /// The number of ones in a value of up to 32 bits, by adding up
+    /// pairs, then nibbles, then bytes, so that nothing passes the word.
+    fn ctpop(&mut self, x: &'static str) -> &'static str {
+        if x == "zero" {
+            return x;
+        }
+        let k = |s: &mut Self, v: i128| s.li(v);
+        let m1 = k(self, 0x5555_5555);
+        let m2 = k(self, 0x3333_3333);
+        let m4 = k(self, 0x0F0F_0F0F);
+        let h = {
+            let s = k(self, -1);
+            self.op3("bsh", x, s)
+        };
+        let h = self.op3("band", h, m1);
+        let x = self.op3("sub", x, h);
+        let l = self.op3("band", x, m2);
+        let h = {
+            let s = k(self, -2);
+            self.op3("bsh", x, s)
+        };
+        let h = self.op3("band", h, m2);
+        let x = self.op3("add", l, h);
+        let h = {
+            let s = k(self, -4);
+            self.op3("bsh", x, s)
+        };
+        let x = self.op3("add", x, h);
+        let x = self.op3("band", x, m4);
+        let h = {
+            let s = k(self, -8);
+            self.op3("bsh", x, s)
+        };
+        let x = self.op3("add", x, h);
+        let h = {
+            let s = k(self, -16);
+            self.op3("bsh", x, s)
+        };
+        let x = self.op3("add", x, h);
+        let m = k(self, 63);
+        self.op3("band", x, m)
     }
 
     /// A call to `sym`, or through the register `via`.
@@ -1533,6 +1619,7 @@ impl<'m> Lower<'m> {
                 self.helpers.insert(name);
             }
             Op::Atomic { op, .. } => return Err(format!("atomic {op} was not expanded")),
+            Op::Float { op, .. } => return Err(format!("{op} was not expanded")),
             Op::Other(what) => return Err(format!("{what} is not supported")),
             Op::Br { .. } | Op::Jump(_) | Op::Switch { .. } | Op::Ret(_) | Op::Unreachable => {
                 self.terminator(&ins.op)?
@@ -1721,6 +1808,12 @@ impl<'m> Lower<'m> {
             (Const::Agg(es), _) => {
                 for (et, ec) in es {
                     self.bytes(ec, et, out)?;
+                }
+            }
+            (Const::Float(b), Ty::Float(f)) => {
+                let (k, _) = float_bits(*b, f)?;
+                for j in 0..size as u32 {
+                    out.push(((k >> (8 * j)) & 255).to_string());
                 }
             }
             (Const::Int(v), Ty::Int(_)) => {
