@@ -1445,7 +1445,9 @@ Last of the three Rust gaps (`docs/rust.md`, Floating point):
 - *Partly superseded the same day: arithmetic, comparisons, sqrt, fma
   and 32/64-bit conversions now run on the binary floating point
   coprocessor (Binary floating point as a coprocessor on the bus,
-  below); float.ll keeps the libm functions and 128-bit conversions.*
+  below); float.ll kept the libm functions and 128-bit conversions,
+  until those were replaced by our own (Our own floating-point
+  library, below). No compiler_builtins code is left.*
 - **Software floating point, from Rust's own compiler_builtins.**
   The emulator does not run the floating-point instructions isa.md
   specifies, and a ternary FPU is a separate project. rustc already
@@ -1524,8 +1526,34 @@ FPU cannot stand in for. Eelco chose a memory-mapped coprocessor
   replaces most of the compiler_builtins calls of the entry "Floating
   point from compiler_builtins"; floats.rs translates to about 29%
   fewer lines. The rest (`floor`, `fmod`, 128-bit conversions) stays
-  in software. The address is the physical one, so an operating
+  in software, since in our own code (entry below). The address is the physical one, so an operating
   system maps the page at the same virtual address.
 - **Round to nearest even only, no flags, canonical NaNs.** That is all
   Rust's code generation uses. The emulator does the arithmetic with
   the host's IEEE floats, which are correctly rounded in that mode.
+
+### 2026-11-25 · Our own floating-point library
+
+Eelco asked to replace what was left of compiler_builtins in
+`lower/float.ll` with our own code:
+
+- **Hand-written LLVM IR, as `lower/wide.ll` is.** About 30 small
+  functions: `trunc`, `floor`, `ceil`, `round`, `rint`/`roundeven`,
+  `fmod`, `fminimum`/`fmaximum`, and the 128-bit conversions, each
+  with a `float` twin. No toolchain, generator script or third-party
+  licence is needed. Rejected: our own Rust compiled to IR (needs a
+  script and a pinned toolchain to regenerate, and LLVM may turn a
+  hand-written `floor` back into `llvm.floor`).
+- **Arithmetic on the coprocessor.** Rounding uses its correctly
+  rounded adds (2^52 for ties to even), so the functions are short
+  and need no rounding logic of their own.
+- **`float` versions widen to `double`.** That is exact both ways for
+  everything but conversions from 128-bit integers, which would round
+  twice; those convert the top 64 bits with a sticky bit at the
+  precision wanted and scale by a power of two.
+- **Tested against the host** (`rust/tc/tests/float_lib.rs`): edge
+  cases and pseudo-random inputs per function, run on the bare
+  machine, bit for bit except that any NaN matches a NaN.
+- `lower/float.sh` is gone, and `ir.rs` no longer names functions
+  nothing reaches (`fma`, `fmin`, `fminimum_num` and kin, which the
+  coprocessor does).

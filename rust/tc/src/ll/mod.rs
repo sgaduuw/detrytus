@@ -36,7 +36,7 @@ pub fn translate(paths: &[&Path], includes: &[String]) -> Result<Output, Error> 
     translate_module(&m, &shown, includes)
 }
 
-/// Add the software floating point (lower/float.ll) to a module: what
+/// Add the floating-point functions (lower/float.ll) to a module: what
 /// it defines and the module does not. Only what the program calls is
 /// lowered, so a program without floating point pays nothing.
 fn with_float(m: &mut ir::Module) -> Result<(), Error> {
