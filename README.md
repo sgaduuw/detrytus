@@ -160,12 +160,19 @@ it is missing. What a program writes stays in the file for the next run.
 `--net loop` attaches a network device whose frames come straight back,
 and `--net udp:LOCAL,PEER` carries each Ethernet frame as one UDP
 datagram between a local port and a peer: another detrytus, a QEMU
-`-netdev dgram` backend, or a bridge to the host's network. `--mac`
-sets the interface's address.
+`-netdev dgram` backend, or a bridge to the host's network. `--net user`
+puts the machine on a small network of its own behind a gateway at
+10.0.0.1 that translates its traffic to the host's sockets, as QEMU's
+user networking does: pings, UDP and TCP connections go out to
+wherever the host can reach, with no root and no TAP device, and
+10.0.0.1 itself stands for the host, so a server on the host's
+127.0.0.1 answers there. Use it with `--live`, since the far end keeps
+real time. `--mac` sets the interface's address.
 
 ```bash
 detrytus run --net loop examples/net.s
 detrytus run --net udp:5555,5556 kernel.dti   # and the other end: udp:5556,5555
+detrytus run --live --net user kernel.dti
 ```
 
 `--mix` counts instructions by mnemonic and how many of each a

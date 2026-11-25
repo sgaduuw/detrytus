@@ -1601,3 +1601,33 @@ page −16):
   emulator-side NAT like QEMU's slirp (a TCP/IP stack in the emulator,
   which is the thing trylobite is to build). A loopback link keeps runs
   deterministic for tests.
+
+### 2026-11-25 · User-space NAT: `--net user`
+
+trylobite's IP stack wanted the real network. Eelco chose address
+translation in user space over a TAP device, which needs root.
+
+- **The emulator plays the gateway**, 10.0.0.1, matching trylobite's
+  default address and gateway, so a kernel needs no configuration. The
+  link (`rust/cli/src/nat.rs`) reads the machine's frames and turns
+  them into host socket calls; nothing in the core changed.
+- **TCP is ended in the emulator,** as slirp does: the host side is a
+  plain `TcpStream`, and the link speaks TCP to the machine as the far
+  host would (handshake after the host's connect succeeds, resets for
+  refusals, retransmission on a real-time timer, the machine's window
+  respected, one octet into a closed one). Relaying the machine's
+  segments raw would need raw sockets and root, the thing avoided.
+- **The gateway is the host:** 10.0.0.1 maps to 127.0.0.1, so a test
+  can run a server on the host's loopback and reach it from the
+  machine, and so can a person.
+- **Pings** use an unprivileged ICMP socket where the host allows one
+  (Linux's `ping_group_range`, macOS always), else a raw socket for
+  root. `std` has neither, so `socket()` is declared by hand, the only
+  foreign call in the crate; the descriptor is then an ordinary
+  `UdpSocket`. The echo identifier the machine chose is put back on the
+  reply, since a ping socket replaces it.
+- **No port forwarding into the machine yet,** and no DNS: trylobite
+  has no resolver. Either can come when wanted.
+- **The connect runs on a thread,** one per connection, so a slow
+  connect never stalls the machine; everything else is non-blocking
+  sockets polled when the device polls the link.

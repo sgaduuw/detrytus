@@ -19,6 +19,7 @@ mod link;
 mod live;
 mod ll;
 mod mix;
+mod nat;
 mod net;
 mod program;
 mod tc;
@@ -31,7 +32,7 @@ const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [--net loop|udp:LOCAL,PEER [--mac MAC]]
+                    [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
                     FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...

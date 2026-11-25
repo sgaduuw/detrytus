@@ -1,5 +1,7 @@
 //! `--net` and `--mac`: what the network device's link is
 //! (docs/platform.md, The network device). `loop` hands every frame back;
+//! `user` reaches the host's network through address translation in user
+//! space (`nat.rs`);
 //! `udp:LOCAL,PEER` carries each frame as one UDP datagram between a
 //! local port and a peer, which may be another detrytus, a QEMU
 //! `-netdev dgram` or `socket,udp=` backend, or a bridge to the host's
@@ -17,15 +19,19 @@ use crate::{Fail, NO_INPUT, usage};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetSpec {
     Loopback,
+    User,
     Udp { local: String, peer: String },
 }
 
 impl NetSpec {
     pub fn parse(value: Option<String>) -> Result<NetSpec, Fail> {
-        let bad = || usage("--net takes loop or udp:LOCAL,PEER");
+        let bad = || usage("--net takes loop, user or udp:LOCAL,PEER");
         let value = value.ok_or_else(bad)?;
         if value == "loop" {
             return Ok(NetSpec::Loopback);
+        }
+        if value == "user" {
+            return Ok(NetSpec::User);
         }
         let (local, peer) =
             value.strip_prefix("udp:").and_then(|v| v.split_once(',')).ok_or_else(bad)?;
@@ -38,6 +44,7 @@ impl NetSpec {
     pub fn open(&self) -> Result<Box<dyn Link>, Fail> {
         match self {
             NetSpec::Loopback => Ok(Box::new(Loopback::default())),
+            NetSpec::User => Ok(Box::new(crate::nat::UserLink::new())),
             NetSpec::Udp { local, peer } => Ok(Box::new(UdpLink::open(local, peer)?)),
         }
     }
@@ -119,6 +126,7 @@ mod tests {
     #[test]
     fn net_specs_parse() {
         assert_eq!(NetSpec::parse(Some("loop".into())).ok().unwrap(), NetSpec::Loopback);
+        assert_eq!(NetSpec::parse(Some("user".into())).ok().unwrap(), NetSpec::User);
         assert_eq!(
             NetSpec::parse(Some("udp:5555,10.0.0.2:5556".into())).ok().unwrap(),
             NetSpec::Udp { local: "127.0.0.1:5555".into(), peer: "10.0.0.2:5556".into() }

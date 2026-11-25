@@ -431,6 +431,25 @@ other end. Frames come from outside the machine at no particular step,
 so a run with a UDP link is not deterministic. `--mac` sets MAC_HI and
 MAC_LO, for two machines on one wire.
 
+`run --net user` attaches a link that is a small network: the machine
+and a gateway, 10.0.0.1 (MAC 02:00:00:00:00:fe), which the emulator
+plays, translating the machine's traffic to the host's own sockets as
+QEMU's user networking (slirp) does. The gateway answers ARP for its
+address and pings to it. Past it, an ICMP echo request goes out on a
+host ping socket (an unprivileged ICMP datagram socket where the host
+allows one, else a raw socket, which needs root; with neither, it goes
+unanswered); each UDP port of the machine's gets a host UDP socket, and
+what comes back to that socket comes back to the port; a TCP
+connection becomes a host TCP connection, the emulator ending the
+machine's TCP itself: its SYN is answered once the host's connect
+succeeds, and reset if that fails. Packets to 10.0.0.1 go to the host's
+127.0.0.1, so the machine reaches the host's own servers there. The
+machine takes any address on 10.0.0.0/24 (10.0.0.2 by convention); the
+gateway answers whichever it uses. Nothing outside can open a
+connection to the machine. The host keeps real time, so a machine on
+this link wants `--live`; without it, its idle time is skipped and its
+timeouts run out before the host answers.
+
 ## Emulator behaviour outside the ISA
 
 - A trap aimed at a ring whose `tvec` is 0 stops the emulator with an
