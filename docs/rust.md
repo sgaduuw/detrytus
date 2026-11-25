@@ -28,8 +28,9 @@ rustup component add rust-src
 RUSTC_BOOTSTRAP=1 \
 RUSTFLAGS="--emit=llvm-ir,link -Zunstable-options -Cpanic=immediate-abort" \
 cargo build --release -Zbuild-std=core --target riscv32imac-unknown-none-elf
-deps=target/riscv32imac-unknown-none-elf/release/deps
-detrytus ll --include start.s $deps/prog-*.ll $deps/core-*.ll -o prog.s
+# cargo leaves the IR in deps/ before 1.100, in build/CRATE/HASH/out/ since
+ir=$(find target/riscv32imac-unknown-none-elf/release -name 'prog-*.ll' -o -name 'core-*.ll')
+detrytus ll --include start.s $ir -o prog.s
 ```
 
 `detrytus ll FILE.ll... [--include FILE]... [-o OUT]` reads the modules

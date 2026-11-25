@@ -1315,14 +1315,24 @@ impl<'m> Lower<'m> {
                 "a result of more than two words is not supported yet".into(),
             ));
         }
-        for b in &f.blocks {
+        // Blocks are lowered so that each comes after the blocks that
+        // dominate it (reverse postorder), since LLVM may place a block
+        // before the one defining a value it uses, but are written out
+        // in their own order.
+        let start = std::mem::take(&mut self.body);
+        let mut code: Vec<Vec<String>> = vec![Vec::new(); f.blocks.len()];
+        for k in reverse_postorder(f) {
+            let b = &f.blocks[k];
             self.block = b.label.clone();
             let l = self.labels[&b.label].clone();
             self.label(&l);
             for i in &b.instrs {
                 self.instr(i).map_err(|e| fail(i.line, e))?;
             }
+            code[k] = std::mem::take(&mut self.body);
         }
+        self.body = start;
+        self.body.extend(code.into_iter().flatten());
         let ret = format!("        j     {}$ret", self.fsym);
         if self.body.last() == Some(&ret) {
             self.body.pop();
@@ -1451,4 +1461,47 @@ impl<'m> Lower<'m> {
         }
         (funcs, globals, external)
     }
+}
+
+/// The blocks of `f` that its entry reaches, in reverse postorder: every
+/// block after those that dominate it.
+fn reverse_postorder(f: &Function) -> Vec<usize> {
+    let index: HashMap<&str, usize> =
+        f.blocks.iter().enumerate().map(|(k, b)| (b.label.as_str(), k)).collect();
+    let succs = |k: usize| -> Vec<usize> {
+        let labels: Vec<&String> = match f.blocks[k].instrs.last().map(|i| &i.op) {
+            Some(Op::Jump(l)) => vec![l],
+            Some(Op::Br { t, f, .. }) => vec![t, f],
+            Some(Op::Switch { default, cases, .. }) => {
+                std::iter::once(default).chain(cases.iter().map(|(_, l)| l)).collect()
+            }
+            _ => Vec::new(),
+        };
+        labels.into_iter().filter_map(|l| index.get(l.as_str()).copied()).collect()
+    };
+    let mut seen = vec![false; f.blocks.len()];
+    let mut post = Vec::new();
+    // Depth first without recursion: (block, successors still to visit).
+    let mut stack: Vec<(usize, Vec<usize>)> = Vec::new();
+    if !f.blocks.is_empty() {
+        seen[0] = true;
+        let mut s = succs(0);
+        s.reverse();
+        stack.push((0, s));
+    }
+    while let Some((k, rest)) = stack.last_mut() {
+        if let Some(n) = rest.pop() {
+            if !seen[n] {
+                seen[n] = true;
+                let mut s = succs(n);
+                s.reverse();
+                stack.push((n, s));
+            }
+        } else {
+            post.push(*k);
+            stack.pop();
+        }
+    }
+    post.reverse();
+    post
 }

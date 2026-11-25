@@ -94,7 +94,16 @@ fn fib(n: u32) -> u32 {
 pub extern "C" fn main(argc: i32, argv: *const *const u8) -> i32 {
     let mut buf = [0u8; 12];
     unsafe {
-        let m = get(&raw const M);
+        // Field by field: a volatile read of the whole 8-byte struct is
+        // one i64 load to LLVM 1.100's rustc, and 64 bits are not
+        // supported yet.
+        let p = &raw const M;
+        let m = Mixed {
+            a: get(&raw const (*p).a),
+            b: get(&raw const (*p).b),
+            c: get(&raw const (*p).c),
+            d: get(&raw const (*p).d),
+        };
         check(b"struct u8", m.a == 7);
         check(b"struct u32", m.b == 0xCAFE_F00D);
         check(b"struct u16", m.c == 0xBEEF);
@@ -102,8 +111,8 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8) -> i32 {
         let p = &raw mut M;
         (*p).b = m.b.wrapping_add(m.c as u32);
         core::ptr::write_volatile(&raw mut (*p).d, m.d - 1);
-        let m2 = get(&raw const M);
-        check(b"struct store", m2.b == 0xCAFE_F00Du32.wrapping_add(0xBEEF) && m2.d == -4);
+        let (b2, d2) = (get(&raw const (*p).b), get(&raw const (*p).d));
+        check(b"struct store", b2 == 0xCAFE_F00Du32.wrapping_add(0xBEEF) && d2 == -4);
     }
     let args = unsafe { core::slice::from_raw_parts(argv, argc as usize) };
     let arg = unsafe { core::ffi::CStr::from_ptr(args[1] as *const core::ffi::c_char) }.to_bytes();
