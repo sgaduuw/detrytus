@@ -149,6 +149,22 @@ pub enum Op {
         ty: Ty,
         v: Val,
     },
+    /// Take the lock that makes atomic operations atomic (docs/rust.md,
+    /// Atomics); the parser brackets each one's plain operations with it.
+    Lock,
+    /// Give the lock back.
+    Unlock,
+    /// An atomic operation as read, before [`expand_atomic`] turns it
+    /// into plain ones: `load atomic` (`op` "load"), `store atomic`
+    /// ("store", `a` the value), `atomicrmw OP` (OP, `a` the operand),
+    /// `cmpxchg` ("cmpxchg", `a` expected, `b` new) and `fence`.
+    Atomic {
+        op: String,
+        ty: Ty,
+        p: Val,
+        a: Val,
+        b: Val,
+    },
     /// A line that could not be read, or an instruction not handled:
     /// what to say if the function is used.
     Other(String),
@@ -369,6 +385,101 @@ struct P {
 }
 
 type R<T> = Result<T, String>;
+
+/// An atomic operation as plain ones between [`Op::Lock`] and
+/// [`Op::Unlock`]: the lock is one word for the whole program, taken
+/// with `amoswap`, so that every atomic access is one at a time while
+/// the rest of memory is reached as usual (docs/rust.md, Atomics). A
+/// fence becomes nothing, as a hart sees its own accesses in order and
+/// the lock orders those of others. Any other instruction is itself.
+fn expand_atomic(i: Instr) -> Vec<Instr> {
+    let Op::Atomic { op, ty, p, a, b } = i.op else { return vec![i] };
+    if op == "fence" {
+        return vec![];
+    }
+    let line = i.line;
+    let res = i.res.unwrap_or_else(|| format!("at${line}"));
+    let name = |k: &str| format!("{res}$at{k}");
+    let ins = |res: String, op: Op| Instr { res: Some(res), op, line };
+    let bare = |op: Op| Instr { res: None, op, line };
+    // The value in memory before, named as the result but for cmpxchg.
+    let old = if op == "cmpxchg" { name("old") } else { res.clone() };
+    let oldv = Val::Local(old.clone());
+    let bin = |o: &str, x: Val, y: Val| Op::Bin {
+        op: o.into(),
+        flags: vec![],
+        ty: ty.clone(),
+        a: x,
+        b: y,
+    };
+    let icmp =
+        |pred: &str, x: Val, y: Val| Op::Icmp { pred: pred.into(), ty: ty.clone(), a: x, b: y };
+    let select =
+        |c: String, x: Val, y: Val| Op::Select { c: Val::Local(c), ty: ty.clone(), a: x, b: y };
+    let mut out = vec![bare(Op::Lock)];
+    if op != "store" {
+        out.push(ins(old.clone(), Op::Load { ty: ty.clone(), p: p.clone() }));
+    }
+    // The value to store, if any.
+    let new = match op.as_str() {
+        "load" => None,
+        "store" | "xchg" => Some(a),
+        "add" | "sub" | "and" | "or" | "xor" => {
+            out.push(ins(name("new"), bin(&op, oldv.clone(), a)));
+            Some(Val::Local(name("new")))
+        }
+        "nand" => {
+            out.push(ins(name("and"), bin("and", oldv.clone(), a)));
+            out.push(ins(
+                name("new"),
+                bin("xor", Val::Local(name("and")), Val::Const(Const::Int(-1))),
+            ));
+            Some(Val::Local(name("new")))
+        }
+        "max" | "min" | "umax" | "umin" => {
+            let pred = match op.as_str() {
+                "max" => "sgt",
+                "min" => "slt",
+                "umax" => "ugt",
+                _ => "ult",
+            };
+            out.push(ins(name("keep"), icmp(pred, oldv.clone(), a.clone())));
+            out.push(ins(name("new"), select(name("keep"), oldv.clone(), a)));
+            Some(Val::Local(name("new")))
+        }
+        "cmpxchg" => {
+            out.push(ins(name("eq"), icmp("eq", oldv.clone(), a)));
+            out.push(ins(name("new"), select(name("eq"), b, oldv.clone())));
+            Some(Val::Local(name("new")))
+        }
+        _ => return vec![ins(res, Op::Other(format!("atomicrmw {op}")))],
+    };
+    if let Some(v) = new {
+        out.push(bare(Op::Store { ty: ty.clone(), v, p }));
+    }
+    out.push(bare(Op::Unlock));
+    if op == "cmpxchg" {
+        // `{ old, whether it was the one expected }`.
+        let pair = Ty::Struct(vec![ty.clone(), Ty::Int(1)], false);
+        let half = Op::Insert {
+            ty: pair.clone(),
+            agg: Val::Const(Const::Undef),
+            vty: ty.clone(),
+            v: oldv,
+            idx: vec![0],
+        };
+        out.push(ins(name("half"), half));
+        let whole = Op::Insert {
+            ty: pair,
+            agg: Val::Local(name("half")),
+            vty: Ty::Int(1),
+            v: Val::Local(name("eq")),
+            idx: vec![1],
+        };
+        out.push(ins(res, whole));
+    }
+    out
+}
 
 const CONST_EXPRS: [&str; 20] = [
     "getelementptr",
@@ -817,7 +928,12 @@ impl P {
             }
             "load" => {
                 if self.eat_word("atomic") {
-                    return Err("atomic loads are not supported".into());
+                    self.eat_word("volatile");
+                    let ty = self.ty()?;
+                    self.punct(',')?;
+                    let (_, p) = self.typed()?;
+                    let none = Val::Const(Const::Undef);
+                    return Ok(Op::Atomic { op: w, ty, p, a: none.clone(), b: none });
                 }
                 self.eat_word("volatile");
                 let ty = self.ty()?;
@@ -827,7 +943,11 @@ impl P {
             }
             "store" => {
                 if self.eat_word("atomic") {
-                    return Err("atomic stores are not supported".into());
+                    self.eat_word("volatile");
+                    let (ty, a) = self.typed()?;
+                    self.punct(',')?;
+                    let (_, p) = self.typed()?;
+                    return Ok(Op::Atomic { op: w, ty, p, a, b: Val::Const(Const::Undef) });
                 }
                 self.eat_word("volatile");
                 let (ty, v) = self.typed()?;
@@ -963,7 +1083,31 @@ impl P {
                 let (ty, v) = self.typed()?;
                 Ok(Op::Freeze { ty, v })
             }
-            "fence" => Ok(Op::Other("fence".into())),
+            "fence" => {
+                let none = Val::Const(Const::Undef);
+                Ok(Op::Atomic { op: w, ty: Ty::Void, p: none.clone(), a: none.clone(), b: none })
+            }
+            "atomicrmw" => {
+                self.eat_word("volatile");
+                let op = match self.next()? {
+                    Tok::Word(op) => op,
+                    t => return Err(format!("expected an operation, found {t:?}")),
+                };
+                let (_, p) = self.typed()?;
+                self.punct(',')?;
+                let (ty, a) = self.typed()?;
+                Ok(Op::Atomic { op, ty, p, a, b: Val::Const(Const::Undef) })
+            }
+            "cmpxchg" => {
+                self.eat_word("weak");
+                self.eat_word("volatile");
+                let (_, p) = self.typed()?;
+                self.punct(',')?;
+                let (ty, a) = self.typed()?;
+                self.punct(',')?;
+                let (_, b) = self.typed()?;
+                Ok(Op::Atomic { op: w, ty, p, a, b })
+            }
             w => Ok(Op::Other(format!("the {w} instruction"))),
         }
     }
@@ -1212,7 +1356,7 @@ pub fn parse(text: &str, file: &str, index: usize, m: &mut Module) -> Result<(),
                         Instr { res, op, line: bno }
                     }
                 };
-                cur.instrs.push(instr);
+                cur.instrs.extend(expand_atomic(instr));
             }
             f.blocks.push(cur);
             m.source.insert(('f', name.clone()), lines[no - 1..n].join("\n"));

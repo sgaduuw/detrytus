@@ -172,13 +172,16 @@ fn effects(line: &Line) -> Effects {
                 e.targets.push(arg(0).to_string());
                 e.falls = false;
                 e.keep = true;
-            } else if op == "hload" || op == "hstore" {
+            } else if op == "hload" || op == "hstore" || op == "hcall" {
                 // `hload SYM` / `hstore SYM`: a call to a small helper
                 // that links through t6 and leaves the rest alone: it
                 // reads an address in t5 (and, to store, a value in t4)
                 // and changes t2..t6, a loaded value coming back in t4
-                // (docs/rust.md, Size). It becomes `jal t6, SYM`.
-                e.uses.push("t5".into());
+                // (docs/rust.md, Size). `hcall SYM` reads nothing (the
+                // lock helpers). Each becomes `jal t6, SYM`.
+                if op != "hcall" {
+                    e.uses.push("t5".into());
+                }
                 if op == "hstore" {
                     e.uses.push("t4".into());
                 }
@@ -252,7 +255,7 @@ fn render(line: &Line) -> String {
         Line::Label(l) => format!("{l}:"),
         Line::Raw(r) => r.clone(),
         Line::Op { op, args } if op == "callr" => format!("        jalr  ra, 0({})", args[0]),
-        Line::Op { op, args } if op == "hload" || op == "hstore" => {
+        Line::Op { op, args } if op == "hload" || op == "hstore" || op == "hcall" => {
             format!("        jal   t6, {}", args[0])
         }
         Line::Op { op, args } => {
@@ -932,6 +935,7 @@ pub fn finish(f: Func) -> Result<Vec<String>, String> {
             op != "sys"
                 && op != "hload"
                 && op != "hstore"
+                && op != "hcall"
                 && e.defs.len() > 1
                 && e.keep
                 && e.targets.is_empty()

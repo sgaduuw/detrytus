@@ -44,6 +44,11 @@ fn integers_of_64_bits_and_long_calls() {
 }
 
 #[test]
+fn atomics() {
+    assert_eq!(run("atomics"), (0, String::new()));
+}
+
+#[test]
 fn core_fmt_formats() {
     let (code, text) = run("fmt");
     assert_eq!(
@@ -84,8 +89,8 @@ fn what_is_not_supported_yet_is_refused_by_name() {
         "input.ll:3: @main: the sitofp instruction is not supported"
     );
     assert_eq!(
-        refused("  %x = atomicrmw add ptr %argv, i32 1 seq_cst\n  ret i32 0"),
-        "input.ll:3: @main: the atomicrmw instruction is not supported"
+        refused("  %x = atomicrmw uinc_wrap ptr %argv, i32 1 seq_cst\n  ret i32 0"),
+        "input.ll:3: @main: atomicrmw uinc_wrap is not supported"
     );
 }
 

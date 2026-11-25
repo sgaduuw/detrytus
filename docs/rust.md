@@ -161,6 +161,30 @@ function's start, `s0` plus an offset rounded down with `band` against
 −A, since the frame pointer itself may be anywhere; the frame has A − 1
 trytes to spare for it.
 
+## Atomics
+
+The target, `riscv32imac`, has atomics up to 32 bits, so core's
+`AtomicU32`, `AtomicBool` and the rest come out as LLVM's `load atomic`,
+`store atomic`, `atomicrmw` and `cmpxchg`. Bytes in memory are trytes,
+four to a `u32`, while detrytus's atomic instructions work on whole
+words (isa.md 7.9), so an atomic `u32` cannot be one `amoadd`. Instead
+the program has one lock, a word `ll$held`, and every atomic
+operation becomes its plain operations between taking it and giving it
+back: `atomicrmw max` is a load, a comparison, a select and a store,
+`cmpxchg` a load, an `eq`, a select and a store. Taking the lock is a
+call to `ll$lock`, which spins on `amoswap.aq` until the word was 0;
+`ll$unlock` puts 0 back with `amoswap.rl`. Both are `jal t6` helpers
+that change only `t2`..`t6` (`hcall` in alloc.rs), as the load and
+store helpers do. A `fence` becomes nothing, since a hart sees its own
+accesses in order and the lock orders those of others.
+
+So atomic operations are atomic against each other on any number of
+harts, which is what Rust promises; a plain access racing an atomic
+one is undefined behaviour in Rust anyway. A thread preempted while it
+holds the lock makes others spin until it runs again, which is slow but
+correct. `atomicrmw` on floats and the wrapping increments
+(`uinc_wrap`) are refused.
+
 ## Size
 
 Faithful bytes cost room: a `u32` in memory is four trytes to read
@@ -196,7 +220,7 @@ the line:
 
 - 128-bit integers; for integers of 33 to 63 bits, shifts by a
   variable amount and division by anything but a constant below 2²⁵;
-- floating point, atomics, vectors, varargs;
+- floating point, vectors, varargs;
 - results of more than two words;
 - variable-sized `alloca`;
 - the intrinsics for counting bits other than `llvm.ctlz`, swapping

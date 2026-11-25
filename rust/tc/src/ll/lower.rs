@@ -80,7 +80,7 @@ pub struct Lower<'m> {
 /// byte first: called with `jal t6`, the address in t5 and the value in
 /// t4, changing only t2..t6 (alloc.rs, `hload` and `hstore`). One call
 /// takes the place of up to eleven instructions at every load or store.
-const HELPERS: [(&str, &str); 4] = [
+const HELPERS: [(&str, &str); 6] = [
     (
         "ll$ld2",
         "lt    t4, 1(t5)\nli    t3, 256\nmul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2",
@@ -101,6 +101,14 @@ const HELPERS: [(&str, &str); 4] = [
          rem   t2, t4, t3\nst    t2, 1(t5)\ndiv   t4, t4, t3\n\
          rem   t2, t4, t3\nst    t2, 2(t5)\ndiv   t4, t4, t3\nst    t4, 3(t5)",
     ),
+    // Take and give back the lock around an atomic operation (ir.rs,
+    // `expand_atomic`): a word that is 1 while held.
+    (
+        "ll$lock",
+        "la    t5, ll$held\nli    t3, 1\nll$lock.again:\n\
+         amoswap.aq t2, t3, (t5)\nbne   t2, zero, ll$lock.again",
+    ),
+    ("ll$unlock", "la    t5, ll$held\namoswap.rl t2, zero, (t5)"),
 ];
 
 /// The assembly of the helpers in `used`.
@@ -110,11 +118,15 @@ pub fn helpers(used: &BTreeSet<&'static str>) -> Vec<String> {
         if used.contains(name) {
             out.push(String::new());
             out.push(format!("{name}:"));
-            for l in body.lines() {
-                out.push(format!("        {}", l.trim()));
+            for l in body.lines().map(str::trim) {
+                out.push(if l.ends_with(':') { l.to_string() } else { format!("        {l}") });
             }
             out.push("        jalr  zero, 0(t6)".into());
         }
+    }
+    if used.contains("ll$lock") {
+        out.push("ll$held:".into());
+        out.push("        .words 1".into());
     }
     out
 }
@@ -1529,6 +1541,12 @@ impl<'m> Lower<'m> {
                 }
                 self.set(res, out);
             }
+            Op::Lock | Op::Unlock => {
+                let name = if matches!(ins.op, Op::Lock) { "ll$lock" } else { "ll$unlock" };
+                self.emit(format!("hcall {name}"));
+                self.helpers.insert(name);
+            }
+            Op::Atomic { op, .. } => return Err(format!("atomic {op} was not expanded")),
             Op::Other(what) => return Err(format!("{what} is not supported")),
             Op::Br { .. } | Op::Jump(_) | Op::Switch { .. } | Op::Ret(_) | Op::Unreachable => {
                 self.terminator(&ins.op)?
