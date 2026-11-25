@@ -62,6 +62,16 @@ fn floating_point() {
 }
 
 #[test]
+fn float_arithmetic_runs_on_the_coprocessor() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ll");
+    let out = detrytus_tc::ll::translate(&[&dir.join("floats.ll")], &[]).unwrap();
+    for name in ["__adddf3", "__mulsf3", "__ltdf2", "__fixdfsi", "__extendsfdf2", "sqrt"] {
+        assert!(!out.assembly.contains(&format!("{name}:")), "{name} is still called");
+    }
+    assert!(out.assembly.contains("-295245"), "the coprocessor is not used");
+}
+
+#[test]
 fn atomics() {
     assert_eq!(run("atomics"), (0, String::new()));
 }

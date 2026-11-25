@@ -227,6 +227,7 @@ fn instr_refs(op: &Op, out: &mut Vec<String>) {
             val_refs(callee, out);
             args.iter().for_each(|(_, v)| val_refs(v, out));
         }
+        Op::Fpu { args, .. } => args.iter().for_each(|(_, v)| val_refs(v, out)),
         Op::Br { c, .. } => val_refs(c, out),
         Op::Switch { v, .. } => val_refs(v, out),
         Op::Ret(Some((_, v))) => val_refs(v, out),
@@ -274,6 +275,7 @@ fn instr_uses(op: &Op) -> Vec<&str> {
             val_locals(callee, &mut out);
             args.iter().for_each(|(_, v)| val_locals(v, &mut out));
         }
+        Op::Fpu { args, .. } => args.iter().for_each(|(_, v)| val_locals(v, &mut out)),
         Op::Br { c, .. } => val_locals(c, &mut out),
         Op::Switch { v, .. } => val_locals(v, &mut out),
         Op::Ret(Some((_, v))) => val_locals(v, &mut out),
@@ -286,6 +288,9 @@ fn instr_uses(op: &Op) -> Vec<&str> {
     }
     out
 }
+
+/// The centre of the binary floating point coprocessor's page, −15.
+const FPU_CENTRE: i128 = -15 * 19683;
 
 /// Intrinsics that do nothing here.
 const NOPS: [&str; 7] = [
@@ -1610,6 +1615,32 @@ impl<'m> Lower<'m> {
                     let d = self.vreg();
                     self.emit(format!("mv    {d}, {s}"));
                     out.push(d);
+                }
+                self.set(res, out);
+            }
+            Op::Fpu { code, args, ret } => {
+                // Operands into A, B and C, the operation into OP, the
+                // result out of R (docs/platform.md, page −15).
+                let base = self.li(FPU_CENTRE);
+                for (k, (t, v)) in args.iter().enumerate() {
+                    for (j, r) in self.leaves_of(v, t)?.into_iter().enumerate() {
+                        self.emit(format!(
+                            "sw    {r}, {}({base})",
+                            -9 + 6 * k as i64 + 3 * j as i64
+                        ));
+                    }
+                }
+                let c = self.li(*code as i128);
+                self.emit(format!("sw    {c}, 9({base})"));
+                let n = self.leaf_types(ret)?.len();
+                let mut out = Vec::new();
+                for j in 0..n {
+                    let d = self.vreg();
+                    self.emit(format!("lw    {d}, {}({base})", 12 + 3 * j));
+                    out.push(d);
+                }
+                if code.abs() == FPU_CMP {
+                    self.emit(format!("addi  {0}, {0}, 1", out[0]));
                 }
                 self.set(res, out);
             }

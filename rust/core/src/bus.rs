@@ -4,8 +4,9 @@
 //! boot page (read-only to the CPU), positive pages up to `ram_pages`
 //! are RAM, negative pages are devices. The platform's devices are built
 //! in: the console at page −1, power control at page −2, the hart
-//! controller at pages −3 and −4, the interrupt controller at page −13
-//! and the block device at page −14.
+//! controller at pages −3 and −4, the interrupt controller at page −13,
+//! the block device at page −14 and the binary floating point
+//! coprocessor at page −15.
 //!
 //! The bus also keeps each hart's `lr` reservation, so that a store by
 //! one hart breaks another's.
@@ -14,6 +15,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::block::{BLOCK_PAGE, BLOCK_READ, BLOCK_TRYTES, BlockDevice, Request, Transfer};
 use crate::block::{ROUNDS_PER_BLOCK, SETUP_ROUNDS};
+use crate::fpu::{FPU_PAGE, Fpu};
 use crate::harts::{HartController, LOCAL_PAGE, SLOTS_PAGE};
 use crate::irq::{BLOCK_SOURCE, CONSOLE_SOURCE, IRQ_PAGE, InterruptController, Lines};
 use crate::trits::{TRYTE_MOD, TRYTE_TRITS, low, split_high};
@@ -96,6 +98,7 @@ enum Region {
     Harts,
     Irq,
     Block,
+    Fpu,
 }
 
 pub fn page_of(addr: i64) -> i64 {
@@ -111,6 +114,7 @@ pub struct Bus {
     pub harts: HartController,
     pub irq: InterruptController,
     pub block: BlockDevice,
+    pub fpu: Fpu,
     /// The machine's clock, set each round, for devices that take time.
     pub now: i64,
     /// The hart whose access this is: the machine sets it before each
@@ -135,6 +139,7 @@ impl Bus {
             harts: HartController::new(present),
             irq: InterruptController::default(),
             block: BlockDevice::default(),
+            fpu: Fpu::default(),
             now: 0,
             current: 0,
             reservations: HashMap::new(),
@@ -257,6 +262,7 @@ impl Bus {
             SLOTS_PAGE | LOCAL_PAGE if !device => Ok(Region::Harts),
             IRQ_PAGE if !device => Ok(Region::Irq),
             BLOCK_PAGE if !device => Ok(Region::Block),
+            FPU_PAGE if !device => Ok(Region::Fpu),
             _ => Err(BusError::Fault(addr)),
         }
     }
@@ -307,6 +313,7 @@ impl Bus {
                 Ok(self.irq.read(addr, self.current, &lines))
             }
             Region::Block => Ok(self.block.read(addr)),
+            Region::Fpu => Ok(self.fpu.read(addr, self.current)),
             Region::Console | Region::Power => Ok(0),
             Region::Boot | Region::Ram if width == 1 => Ok(self.get(addr)),
             Region::Boot | Region::Ram => Ok(self.word(addr)),
@@ -330,6 +337,7 @@ impl Bus {
                     self.start_transfer(command, first, count, list);
                 }
             }
+            Region::Fpu => self.fpu.write(addr, self.current, value),
             Region::Power | Region::Boot => {}
             Region::Ram if width == 1 => {
                 self.break_reservations(addr, 1);

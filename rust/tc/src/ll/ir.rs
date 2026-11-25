@@ -179,6 +179,15 @@ pub enum Op {
         b: Val,
         to: Ty,
     },
+    /// An operation on the binary floating point coprocessor
+    /// (docs/platform.md, page −15): `args` into A, B and C, `code` into
+    /// OP, the result from R. A comparison's result is FPU_CMP's plus
+    /// one: 0 less, 1 equal, 2 greater, 3 unordered.
+    Fpu {
+        code: i64,
+        args: Vec<(Ty, Val)>,
+        ret: Ty,
+    },
     /// A line that could not be read, or an instruction not handled:
     /// what to say if the function is used.
     Other(String),
@@ -512,6 +521,13 @@ impl FloatOps {
         self.put(Op::Bin { op: op.into(), flags: vec![], ty: ty.clone(), a, b }, last)
     }
 
+    /// Operation `n` of the coprocessor on `args` of float type `ty`,
+    /// with the sign that picks its precision.
+    fn fpu(&mut self, n: i64, ty: &Ty, args: Vec<(Ty, Val)>, ret: Ty, last: bool) -> Val {
+        let code = if float_kind(ty).is_some_and(|(bits, _)| bits == 32) { -n } else { n };
+        self.put(Op::Fpu { code, args, ret }, last)
+    }
+
     fn icmp(&mut self, pred: &str, a: Val, k: i128, last: bool) -> Val {
         let op = Op::Icmp { pred: pred.into(), ty: Ty::Int(32), a, b: Val::Const(Const::Int(k)) };
         self.put(op, last)
@@ -551,7 +567,7 @@ fn float_op(f: &mut FloatOps, op: &str, ty: &Ty, a: &Val, b: &Val, to: &Ty) -> R
     let fty = ty.clone();
     match op {
         "fadd" | "fsub" | "fmul" | "fdiv" | "frem" | "fneg" => {
-            let (bits, sfx) =
+            let (bits, _) =
                 float_kind(ty).ok_or(format!("{op} on {} is not supported", shown(ty)))?;
             match op {
                 "fneg" => {
@@ -571,56 +587,53 @@ fn float_op(f: &mut FloatOps, op: &str, ty: &Ty, a: &Val, b: &Val, to: &Ty) -> R
                     );
                 }
                 _ => {
-                    let name = format!("__{}{sfx}3", &op[1..]);
-                    f.call(
-                        &name,
-                        fty.clone(),
-                        vec![(fty.clone(), a.clone()), (fty, b.clone())],
-                        true,
-                    );
+                    let n = match op {
+                        "fadd" => FPU_ADD,
+                        "fsub" => FPU_SUB,
+                        "fmul" => FPU_MUL,
+                        _ => FPU_DIV,
+                    };
+                    let args = vec![(fty.clone(), a.clone()), (fty.clone(), b.clone())];
+                    f.fpu(n, &fty, args, fty.clone(), true);
                 }
             }
         }
         _ if op.starts_with("fcmp ") => {
-            let (_, sfx) =
-                float_kind(ty).ok_or(format!("{op} on {} is not supported", shown(ty)))?;
+            float_kind(ty).ok_or(format!("{op} on {} is not supported", shown(ty)))?;
             let pred = &op[5..];
+            if pred == "false" || pred == "true" {
+                let p = if pred == "true" { "eq" } else { "ne" };
+                f.icmp(p, Val::Const(Const::Int(0)), 0, true);
+                return Ok(true);
+            }
+            // The coprocessor's answer plus one: 0 less, 1 equal, 2
+            // greater, 3 unordered; each predicate is a set of those.
             let args = vec![(fty.clone(), a.clone()), (fty.clone(), b.clone())];
-            let lib = |f: &mut FloatOps, name: &str| {
-                f.call(&format!("__{name}{sfx}2"), i32t.clone(), args.clone(), false)
-            };
-            let (name, ipred) = match pred {
-                "false" | "true" => {
-                    let p = if pred == "true" { "eq" } else { "ne" };
-                    f.icmp(p, Val::Const(Const::Int(0)), 0, true);
-                    return Ok(true);
+            let c = f.fpu(FPU_CMP, &fty, args, i32t.clone(), false);
+            let k = |v: i128| Val::Const(Const::Int(v));
+            match pred {
+                "oeq" => f.icmp("eq", c, 1, true),
+                "olt" => f.icmp("eq", c, 0, true),
+                "ogt" => f.icmp("eq", c, 2, true),
+                "uno" => f.icmp("eq", c, 3, true),
+                "une" => f.icmp("ne", c, 1, true),
+                "uge" => f.icmp("ne", c, 0, true),
+                "ule" => f.icmp("ne", c, 2, true),
+                "ord" => f.icmp("ult", c, 3, true),
+                "ole" => f.icmp("ult", c, 2, true),
+                "ugt" => f.icmp("ugt", c, 1, true),
+                "oge" | "ult" => {
+                    // 1 or 2: c − 1 below 2.
+                    let d = f.bin("add", &i32t, c, k(-1), false);
+                    f.icmp(if pred == "oge" { "ult" } else { "uge" }, d, 2, true)
                 }
-                "ueq" | "one" => {
-                    let u = lib(f, "unord");
-                    let e = lib(f, "eq");
-                    let (pu, pe, join) =
-                        if pred == "ueq" { ("ne", "eq", "or") } else { ("eq", "ne", "and") };
-                    let u = f.icmp(pu, u, 0, false);
-                    let e = f.icmp(pe, e, 0, false);
-                    f.bin(join, &Ty::Int(1), u, e, true);
-                    return Ok(true);
+                "one" | "ueq" => {
+                    // 0 or 2 have the low bit clear; 1 or 3 set.
+                    let lowbit = f.bin("and", &i32t, c, k(1), false);
+                    f.icmp(if pred == "one" { "eq" } else { "ne" }, lowbit, 0, true)
                 }
-                "oeq" => ("eq", "eq"),
-                "une" => ("ne", "ne"),
-                "olt" => ("lt", "slt"),
-                "ole" => ("le", "sle"),
-                "ogt" => ("gt", "sgt"),
-                "oge" => ("ge", "sge"),
-                "ult" => ("ge", "slt"),
-                "ule" => ("gt", "sle"),
-                "ugt" => ("le", "sgt"),
-                "uge" => ("lt", "sge"),
-                "uno" => ("unord", "ne"),
-                "ord" => ("unord", "eq"),
                 p => return Err(format!("fcmp {p} is not supported")),
             };
-            let c = lib(f, name);
-            f.icmp(ipred, c, 0, true);
         }
         "fptosi" | "fptoui" => {
             let (_, sfx) =
@@ -631,12 +644,26 @@ fn float_op(f: &mut FloatOps, op: &str, ty: &Ty, a: &Val, b: &Val, to: &Ty) -> R
             let (w, size) = int_width(*n)?;
             let u = if op == "fptoui" { "uns" } else { "" };
             let wt = Ty::Int(w);
-            let v = f.call(
-                &format!("__fix{u}{sfx}{size}"),
-                wt.clone(),
-                vec![(fty, a.clone())],
-                w == *n,
-            );
+            let v = match (w, u.is_empty()) {
+                (128, _) => f.call(
+                    &format!("__fix{u}{sfx}{size}"),
+                    wt.clone(),
+                    vec![(fty, a.clone())],
+                    w == *n,
+                ),
+                (32, true) => {
+                    f.fpu(FPU_TO_I32, &fty, vec![(fty.clone(), a.clone())], wt.clone(), w == *n)
+                }
+                (32, false) => {
+                    f.fpu(FPU_TO_U32, &fty, vec![(fty.clone(), a.clone())], wt.clone(), w == *n)
+                }
+                (_, true) => {
+                    f.fpu(FPU_TO_I64, &fty, vec![(fty.clone(), a.clone())], wt.clone(), w == *n)
+                }
+                (_, false) => {
+                    f.fpu(FPU_TO_U64, &fty, vec![(fty.clone(), a.clone())], wt.clone(), w == *n)
+                }
+            };
             if w != *n {
                 f.cast("trunc", &wt, v, to, true);
             }
@@ -651,12 +678,25 @@ fn float_op(f: &mut FloatOps, op: &str, ty: &Ty, a: &Val, b: &Val, to: &Ty) -> R
             let (u, ext) = if op == "uitofp" { ("un", "zext") } else { ("", "sext") };
             let wt = Ty::Int(w);
             let v = if w != *n { f.cast(ext, ty, a.clone(), &wt, false) } else { a.clone() };
-            f.call(&format!("__float{u}{size}{sfx}"), to.clone(), vec![(wt, v)], true);
+            let unsigned = !u.is_empty();
+            let code = match (w, unsigned) {
+                (128, _) => {
+                    f.call(&format!("__float{u}{size}{sfx}"), to.clone(), vec![(wt, v)], true);
+                    return Ok(true);
+                }
+                (32, false) => FPU_FROM_I32,
+                (32, true) => FPU_FROM_U32,
+                (_, false) => FPU_FROM_I64,
+                (_, true) => FPU_FROM_U64,
+            };
+            f.fpu(code, to, vec![(wt, v)], to.clone(), true);
         }
         "fpext" | "fptrunc" => {
-            let name = match (float_kind(ty), float_kind(to)) {
-                (Some((32, _)), Some((64, _))) => "__extendsfdf2",
-                (Some((64, _)), Some((32, _))) => "__truncdfsf2",
+            match (float_kind(ty), float_kind(to)) {
+                (Some((32, _)), Some((64, _))) | (Some((64, _)), Some((32, _))) => {
+                    // The sign of FPU_CVT is the precision converted from.
+                    f.fpu(FPU_CVT, &fty, vec![(fty.clone(), a.clone())], to.clone(), true);
+                }
                 _ => {
                     return Err(format!(
                         "{op} from {} to {} is not supported",
@@ -664,13 +704,33 @@ fn float_op(f: &mut FloatOps, op: &str, ty: &Ty, a: &Val, b: &Val, to: &Ty) -> R
                         shown(to)
                     ));
                 }
-            };
-            f.call(name, to.clone(), vec![(fty, a.clone())], true);
+            }
         }
         _ => return Ok(false),
     }
     Ok(true)
 }
+
+/// The binary floating point coprocessor's operations (docs/platform.md,
+/// page −15); the sign of OP picks binary32 (−) or binary64 (+).
+pub const FPU_ADD: i64 = 1;
+pub const FPU_SUB: i64 = 2;
+pub const FPU_MUL: i64 = 3;
+pub const FPU_DIV: i64 = 4;
+pub const FPU_SQRT: i64 = 5;
+pub const FPU_FMA: i64 = 6;
+pub const FPU_MIN: i64 = 7;
+pub const FPU_MAX: i64 = 8;
+pub const FPU_CMP: i64 = 9;
+pub const FPU_CVT: i64 = 10;
+pub const FPU_TO_I32: i64 = 11;
+pub const FPU_TO_U32: i64 = 12;
+pub const FPU_TO_I64: i64 = 13;
+pub const FPU_TO_U64: i64 = 14;
+pub const FPU_FROM_I32: i64 = 15;
+pub const FPU_FROM_U32: i64 = 16;
+pub const FPU_FROM_I64: i64 = 17;
+pub const FPU_FROM_U64: i64 = 18;
 
 /// The width an integer of `n` bits goes through a conversion as, and
 /// the suffix for it: `si` (32), `di` (64) or `ti` (128).
@@ -825,8 +885,19 @@ fn float_intrinsic(f: &mut FloatOps, name: &str, ret: &Ty, args: &[(Ty, Val)]) -
     let it = Ty::Int(bits);
     let sign = 1i128 << (bits - 1);
     let suffix = if bits == 32 { "f" } else { "" };
+    let hardware = match base {
+        "sqrt" => Some(FPU_SQRT),
+        "fma" | "fmuladd" => Some(FPU_FMA),
+        "minnum" | "minimumnum" => Some(FPU_MIN),
+        "maxnum" | "maximumnum" => Some(FPU_MAX),
+        _ => None,
+    };
+    if let Some(n) = hardware {
+        f.fpu(n, &ft, args.to_vec(), ret.clone(), true);
+        return Ok(true);
+    }
     let lib = match base {
-        "floor" | "ceil" | "trunc" | "round" | "sqrt" | "fma" | "rint" | "roundeven" => base,
+        "floor" | "ceil" | "trunc" | "round" | "fma" | "rint" | "roundeven" => base,
         "nearbyint" => "rint",
         "minnum" => "fmin",
         "maxnum" => "fmax",
