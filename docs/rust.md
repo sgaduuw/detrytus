@@ -172,33 +172,37 @@ trytes to spare for it.
 
 ## Floating point
 
-detrytus has no floating-point hardware yet (isa.md specifies the
-instructions, the emulator does not run them), so `f32` and `f64` are
-done in software, the way rustc does it on a RISC-V core without an
-FPU: by calling the functions of Rust's own `compiler_builtins`. A
-`float` is held as the integer of its bits, one word, a `double` as a
-64-bit integer, two; in memory both are the IEEE 754 bytes. When the IR
-is read (`ir.rs`, `expand_float`), each floating-point operation becomes
-calls and integer operations:
+`f32` and `f64` are IEEE 754 binary floats, which run on the binary
+floating point coprocessor, a device on page −15 (`docs/platform.md`);
+the core's own floats are ternary (isa.md 7.11) and do not stand in
+for them. A `float` is held as the integer of its bits, one word, a
+`double` as a 64-bit integer, two; in memory both are the IEEE 754
+bytes. Those are the words the coprocessor takes, so an operation is
+its operands stored into A and B, the operation into OP, and the
+result loaded from R. When the IR is read (`ir.rs`, `expand_float`),
+each floating-point operation becomes such an `Op::Fpu`, or calls and
+integer operations where the coprocessor has no operation:
 
-- `fadd`, `fsub`, `fmul`, `fdiv` call `__adddf3` and the rest (`sf`
-  for `float`), `frem` calls `fmod`;
-- `fcmp` calls one of `__eqdf2`, `__ltdf2`, `__gedf2`, `__unorddf2`
-  and so on and compares the answer with 0, as LLVM itself does for a
-  target without an FPU; `ueq` and `one` take two calls;
-- `fptosi`, `fptoui`, `sitofp`, `uitofp` call `__fixdfsi`,
-  `__floatsidf` and the rest for 32, 64 or 128 bits, extending or
-  truncating narrower integers; `fpext` and `fptrunc` call
-  `__extendsfdf2` and `__truncdfsf2`;
-- Rust's `as` casts are `llvm.fptosi.sat` and `llvm.fptoui.sat`.
-  compiler_builtins' conversions already saturate and turn a NaN into
-  0, so 32 bits and wider is one call; narrower ones are clamped after;
+- `fadd`, `fsub`, `fmul`, `fdiv` are `FPU_ADD` and the rest; `frem`
+  calls `fmod`;
+- `fcmp` is one `FPU_CMP`, whose answer the lowering turns into 0
+  (less), 1 (equal), 2 (greater) or 3 (unordered), and each predicate
+  one or two integer comparisons of that;
+- `fptosi`, `fptoui`, `sitofp`, `uitofp` to and from 32 or 64 bits are
+  `FPU_TO_I32`, `FPU_FROM_U64` and the rest, extending or truncating
+  narrower integers; 128 bits call `__fixdfti` and kin; `fpext` and
+  `fptrunc` are `FPU_CVT`;
+- Rust's `as` casts are `llvm.fptosi.sat` and `llvm.fptoui.sat`; the
+  coprocessor's conversions (and compiler_builtins' for 128 bits)
+  already saturate and turn a NaN into 0, so 32 bits and wider is one
+  operation, and narrower ones are clamped after;
 - `fneg`, `llvm.fabs` and `llvm.copysign` work on the sign bit;
-- `llvm.sqrt`, `floor`, `ceil`, `trunc`, `round`, `rint`, `fma`,
-  `minnum`, `maxnum` and their kin call compiler_builtins' libm
-  (`sqrt`, `floorf`, `fmin`, ...).
+- `llvm.sqrt`, `fma`, `fmuladd`, `minnum`, `maxnum`, `minimumnum` and
+  `maximumnum` are coprocessor operations; `floor`, `ceil`, `trunc`,
+  `round`, `rint`, `minimum`, `maximum` and kin call compiler_builtins'
+  libm (`floorf`, `fminimum`, ...).
 
-The functions come from `rust/tc/src/ll/lower/float.ll`: the part of
+The library functions come from `rust/tc/src/ll/lower/float.ll`: the part of
 compiler_builtins (and the bits of core it uses) that those calls
 reach, pruned from the IR that rustc emits when it builds core, by
 `lower/float.sh`. It is translated with the program; only what the
@@ -210,9 +214,8 @@ Floating point brought in what these functions need: `llvm.ctlz`,
 `llvm.umin` and the like on 64- and 128-bit integers, `llvm.ctpop`,
 `llvm.fshl`/`fshr` (funnel shifts) and `llvm.ucmp`/`scmp`. Core's
 formatting of floats (`{}`, `{:.3}`, `{:e}`) works: Grisu with Dragon
-as its fallback, as on any target. It is not small:
-`rust/tc/tests/ll/floats.rs` is about 39 000 trytes, most of it float
-formatting.
+as its fallback, as on any target. It is not small: most of
+`rust/tc/tests/ll/floats.rs` is float formatting.
 
 ## Atomics
 

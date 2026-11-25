@@ -16,6 +16,7 @@ the platform (`isa.md` 8.5 and 12.3).
 | -5 .. -12 | reserved for more harts |
 | -13 | interrupt controller (Device interrupts, below) |
 | -14 | block device (The block device, below) |
+| -15 | binary floating point coprocessor (below) |
 
 A page is 19,683 trytes centred on a multiple of 19,683, so page `p`
 spans `p·19683 − 9841` .. `p·19683 + 9841`. The loader may place data in
@@ -287,6 +288,70 @@ zeros, and writes extend it. A run refuses a file holding a value that
 is not a tryte. A command's blocks reach the file in one host write
 when it finishes, so a crash keeps whole commands, never half of one.
 The debugger's `restart` does not undo writes already made to the file.
+
+## The binary floating point coprocessor (page −15)
+
+IEEE 754 binary32 and binary64 arithmetic beside the ternary core, for
+programs whose floats are binary, such as Rust's `f32` and `f64`
+(`docs/rust.md`). The core's own floats are ternary (`isa.md` 7.11);
+binary ones belong to a coprocessor on the bus, as the 8087 sat beside
+the 8086, so the instruction set stays ternary. CONTEXT.md gives the
+reasoning.
+
+Page −15 is centred on `F = −295245`. Each hart has its own bank of
+registers, so harts never see each other's operands. Every register is
+one word.
+
+| Address | Register | Access | Behaviour |
+|---------|----------|--------|-----------|
+| F−12 | PRESENT | ro | `FPU_VERSION`, 1: the coprocessor is here |
+| F−9, F−6 | A_LO, A_HI | rw | operand A |
+| F−3, F | B_LO, B_HI | rw | operand B |
+| F+3, F+6 | C_LO, C_HI | rw | operand C (`FPU_FMA` only) |
+| F+9 | OP | wo | computes the operation written from A, B and C into R at once; other values are ignored |
+| F+12, F+15 | R_LO, R_HI | rw | the result; writable so that a kernel can restore a bank |
+
+- **Values are bits.** A binary32 value or a 32-bit integer is one
+  word, LO, holding the bit pattern as a number from 0 to 2³² − 1; HI
+  is not read, and a 32-bit result leaves R_HI 0. A binary64 value or
+  a 64-bit integer is two such words, low bits in LO. A word is read
+  modulo 2³², so a negative 32-bit integer can also be written as its
+  balanced value. This is how `detrytus ll` holds `float`, `double`,
+  `i32` and `i64` already.
+- **The sign of OP is the precision**: +n works on binary64, −n on
+  binary32.
+
+| n | Name | R |
+|---|------|---|
+| 1 | `FPU_ADD` | A + B |
+| 2 | `FPU_SUB` | A − B |
+| 3 | `FPU_MUL` | A × B |
+| 4 | `FPU_DIV` | A / B |
+| 5 | `FPU_SQRT` | √A |
+| 6 | `FPU_FMA` | A × B + C, rounded once |
+| 7 | `FPU_MIN` | minimumNumber(A, B): a NaN is ignored, −0 is below +0 |
+| 8 | `FPU_MAX` | maximumNumber(A, B) |
+| 9 | `FPU_CMP` | −1, 0 or +1 as A is below, equal to or above B; `FPU_UNORDERED` (2) when either is a NaN |
+| 10 | `FPU_CVT` | A in the other precision: −10 binary32 to binary64, +10 binary64 to binary32 |
+| 11, 12 | `FPU_TO_I32`, `FPU_TO_U32` | A as a signed or unsigned 32-bit integer |
+| 13, 14 | `FPU_TO_I64`, `FPU_TO_U64` | A as a 64-bit integer |
+| 15, 16 | `FPU_FROM_I32`, `FPU_FROM_U32` | the 32-bit integer in A as a float |
+| 17, 18 | `FPU_FROM_I64`, `FPU_FROM_U64` | the 64-bit integer in A as a float |
+
+- **Rounding** is to nearest, ties to even, the IEEE default and the
+  only mode Rust uses. Conversions to integers truncate toward zero and
+  saturate, a NaN giving 0, as Rust's `as` does.
+- **NaNs.** A NaN result is the canonical quiet NaN, `0x7fc00000` or
+  `0x7ff8000000000000`, as on RISC-V.
+- **No flags and no other rounding modes** in this version: nothing
+  Rust compiles reads them. They can come later behind a new
+  `FPU_VERSION`.
+- **Timing.** The result is ready when the OP store completes, so a
+  binary64 add is four stores of operands, one of OP and two loads.
+- **Context switches.** A bank is state like registers: a kernel that
+  lets several processes use the coprocessor saves and restores A, B,
+  C and R, eight words, when it switches between them, since a process
+  can be interrupted between writing OP and reading R.
 
 ## Emulator behaviour outside the ISA
 

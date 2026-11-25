@@ -1442,6 +1442,10 @@ Second of the remaining Rust gaps (`docs/rust.md`, Wide integers):
 
 Last of the three Rust gaps (`docs/rust.md`, Floating point):
 
+- *Partly superseded the same day: arithmetic, comparisons, sqrt, fma
+  and 32/64-bit conversions now run on the binary floating point
+  coprocessor (Binary floating point as a coprocessor on the bus,
+  below); float.ll keeps the libm functions and 128-bit conversions.*
 - **Software floating point, from Rust's own compiler_builtins.**
   The emulator does not run the floating-point instructions isa.md
   specifies, and a ternary FPU is a separate project. rustc already
@@ -1496,3 +1500,32 @@ coprocessor rather than more instructions, so the core stays ternary.
 - **`.float` takes decimal literals and rounds them exactly**, with a
   small big-number division, so a constant in a program is the float
   nearest what was written.
+
+### 2026-11-25 · Binary floating point as a coprocessor on the bus
+
+Rust's `f32` and `f64` are IEEE 754 binary floats, which the ternary
+FPU cannot stand in for. Eelco chose a memory-mapped coprocessor
+(`docs/platform.md`, page −15) over binary instructions in the ISA:
+
+- **The core stays ternary.** Binary floats are foreign to the machine,
+  so they live in a device, as x87 once did, and the ISA gains nothing
+  binary. Rejected: binary float instructions in the ISA (one
+  instruction per operation, but a binary unit in the core), and a
+  coprocessor opcode space with its own registers (fast, but more ISA
+  for a binary concern).
+- **Operands as bit patterns in words**, low and high 32 bits, which is
+  how `detrytus ll` already holds floats and 64-bit integers, so
+  lowering is a few stores and loads around one OP store. About eight
+  instructions per operation, against a hundred or more for the
+  software routines.
+- **One bank per hart**, so harts need no lock; a kernel saves a
+  process's bank like registers.
+- **`detrytus ll` uses it** for every operation it has, which
+  replaces most of the compiler_builtins calls of the entry "Floating
+  point from compiler_builtins"; floats.rs translates to about 29%
+  fewer lines. The rest (`floor`, `fmod`, 128-bit conversions) stays
+  in software. The address is the physical one, so an operating
+  system maps the page at the same virtual address.
+- **Round to nearest even only, no flags, canonical NaNs.** That is all
+  Rust's code generation uses. The emulator does the arithmetic with
+  the host's IEEE floats, which are correctly rounded in that mode.

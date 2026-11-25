@@ -1,0 +1,99 @@
+# The binary floating point coprocessor (docs/platform.md, page -15),
+# centred on F. Values are IEEE 754 bit patterns, 32 bits to a word:
+# a binary64 is LO and HI. The sign of OP is the precision.
+
+[defaults]
+prelude = '''
+        .equ  F, -295245
+        li    s1, F
+'''
+postlude = '''
+        li    t6, -39366
+        sw    a0, 0(t6)
+'''
+
+[[case]]
+name = "PRESENT reads the version"
+program = "lw a0, -12(s1)"
+expect.exit_code = 1
+
+[[case]]
+name = "a binary64 add: 1.5 + 2.25"
+program = '''
+        sw    zero, -9(s1)
+        li    t0, 1073217536    # 0x3ff80000: 1.5
+        sw    t0, -6(s1)
+        sw    zero, -3(s1)
+        li    t0, 1073872896    # 0x40020000: 2.25
+        sw    t0, 0(s1)
+        li    t0, 1             # FPU_ADD, binary64
+        sw    t0, 9(s1)
+        lw    a1, 12(s1)
+        lw    a0, 15(s1)
+'''
+expect.exit_code = 1074659328   # 0x400e0000: 3.75
+expect.registers = { a1 = 0 }
+
+[[case]]
+name = "a binary32 conversion truncates: 2.5 to 2"
+program = '''
+        li    t0, 1075838976    # 0x40200000: 2.5
+        sw    t0, -9(s1)
+        li    t0, -11           # FPU_TO_I32, binary32
+        sw    t0, 9(s1)
+        lw    a0, 12(s1)
+'''
+expect.exit_code = 2
+
+[[case]]
+name = "a negative integer may be written as its balanced value"
+program = '''
+        li    t0, -7
+        sw    t0, -9(s1)
+        li    t0, -15           # FPU_FROM_I32, binary32
+        sw    t0, 9(s1)
+        lw    a0, 12(s1)
+'''
+expect.exit_code = 3235905536   # 0xc0e00000: -7.0
+
+[[case]]
+name = "a comparison with a NaN is unordered"
+program = '''
+        li    t0, 2143289344    # 0x7fc00000: NaN
+        sw    t0, -9(s1)
+        sw    zero, -3(s1)
+        li    t0, -9            # FPU_CMP, binary32
+        sw    t0, 9(s1)
+        lw    a0, 12(s1)
+'''
+expect.exit_code = 2
+
+[[case]]
+name = "each hart has its own bank"
+harts = 2
+program = '''
+        li    t0, 5
+        sw    t0, -9(s1)        # hart 0's A_LO
+        li    s0, -59049 - 27   # hart -1's slot
+        la    t0, other
+        sw    t0, -9(s0)        # START_PC
+        li    t0, 1
+        sw    t0, -3(s0)        # CONTROL: start
+        li    t2, 2000
+wait:   addi  t2, t2, -1
+        bnez  t2, wait
+        lw    a0, -9(s1)        # still 5
+        li    t0, 19683
+        lw    a1, 0(t0)         # what hart -1 read back
+        j     done
+other:  li    s1, F
+        li    t0, 9
+        sw    t0, -9(s1)        # its own A_LO
+        lw    t1, -9(s1)
+        li    t0, 19683
+        sw    t1, 0(t0)
+spin:   j     spin
+done:
+'''
+expect.exit_code = 5
+expect.registers = { a1 = 9 }
