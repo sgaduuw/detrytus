@@ -172,6 +172,20 @@ fn effects(line: &Line) -> Effects {
                 e.targets.push(arg(0).to_string());
                 e.falls = false;
                 e.keep = true;
+            } else if op == "csrr" {
+                // The machine's own instructions, from detrytus ll's
+                // builtins (docs/rust.md, Words and the machine).
+                e.defs.extend(reg(arg(0)));
+                e.keep = true;
+            } else if op == "csrw" {
+                e.uses.extend(reg(arg(1)));
+                e.keep = true;
+            } else if op == "fence.vm" {
+                e.uses.extend(reg(arg(0)));
+                e.uses.extend(reg(arg(1)));
+                e.keep = true;
+            } else if op == "wfi" {
+                e.keep = true;
             } else if op == "hload" || op == "hstore" || op == "hcall" {
                 // `hload SYM` / `hstore SYM`: a call to a small helper
                 // that links through t6 and leaves the rest alone: it

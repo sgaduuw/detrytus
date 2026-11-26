@@ -257,7 +257,7 @@ fn a_pointer_may_be_negative_with_signed_pointers() {
                \x20 ret i32 %s6\n}\n";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ll");
     let bare = dir.join("bare.s").display().to_string();
-    let options = detrytus_tc::ll::Options { signed_pointers: true };
+    let options = detrytus_tc::ll::Options { signed_pointers: true, ..Default::default() };
     let out = detrytus_tc::ll::translate_text_with(src, &[bare], &options)
         .unwrap_or_else(|e| panic!("does not translate: {e}"));
     assert_eq!(execute("input", out), (0, String::new()));
@@ -306,4 +306,119 @@ fn an_odd_sized_integer_touches_only_its_own_bytes() {
                \x20 %s4 = or i32 %s3, %e5\n\
                \x20 ret i32 %s4\n}\n";
     assert_eq!(run_text(src), (0, String::new()));
+}
+
+/// IR run with `options` on the bare machine.
+fn run_text_with(src: &str, options: &detrytus_tc::ll::Options) -> (i64, String) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ll");
+    let bare = dir.join("bare.s").display().to_string();
+    let out = detrytus_tc::ll::translate_text_with(src, &[bare], options)
+        .unwrap_or_else(|e| panic!("does not translate: {e}"));
+    execute("input", out)
+}
+
+#[test]
+fn words_and_privileged_instructions_as_builtins() {
+    // A word is an i64 on the Rust side. Each failed check sets a bit
+    // of the exit code. 2192 is sscratch; @testwords two aligned words
+    // in bare.s.
+    let src = "@testwords = external global [6 x i8]\n\
+               declare i64 @detrytus.lw(ptr)\n\
+               declare void @detrytus.sw(ptr, i64)\n\
+               declare i64 @detrytus.csrr(i32)\n\
+               declare void @detrytus.csrw(i32, i64)\n\
+               declare i64 @detrytus.tex(i64, i32, i32)\n\
+               declare i64 @detrytus.tins(i64, i64, i32, i32)\n\
+               define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n\
+               \x20 %w2 = getelementptr i8, ptr @testwords, i32 3\n\
+               \x20 call void @detrytus.sw(ptr @testwords, i64 -3000000000000)\n\
+               \x20 call void @detrytus.sw(ptr %w2, i64 3812798742493)\n\
+               \x20 %a = call i64 @detrytus.lw(ptr @testwords)\n\
+               \x20 %b = call i64 @detrytus.lw(ptr %w2)\n\
+               \x20 %ok1 = icmp eq i64 %a, -3000000000000\n\
+               \x20 %ok2 = icmp eq i64 %b, 3812798742493\n\
+               \x20 call void @detrytus.csrw(i32 2192, i64 -123456789012)\n\
+               \x20 %c = call i64 @detrytus.csrr(i32 2192)\n\
+               \x20 %ok3 = icmp eq i64 %c, -123456789012\n\
+               \x20 call void @detrytus.csrw(i32 2192, i64 0)\n\
+               \x20 %z = call i64 @detrytus.csrr(i32 2192)\n\
+               \x20 %ok4 = icmp eq i64 %z, 0\n\
+               \x20 %f = call i64 @detrytus.tex(i64 -486, i32 5, i32 2)\n\
+               \x20 %ok5 = icmp eq i64 %f, -2\n\
+               \x20 %g = call i64 @detrytus.tins(i64 1, i64 -2, i32 5, i32 2)\n\
+               \x20 %ok6 = icmp eq i64 %g, -485\n\
+               \x20 %small = call i64 @detrytus.tex(i64 %a, i32 0, i32 27)\n\
+               \x20 %ok7 = icmp eq i64 %small, -3000000000000\n\
+               \x20 %b1 = select i1 %ok1, i32 0, i32 1\n\
+               \x20 %b2 = select i1 %ok2, i32 0, i32 2\n\
+               \x20 %b3 = select i1 %ok3, i32 0, i32 4\n\
+               \x20 %b4 = select i1 %ok4, i32 0, i32 8\n\
+               \x20 %b5 = select i1 %ok5, i32 0, i32 16\n\
+               \x20 %b6 = select i1 %ok6, i32 0, i32 32\n\
+               \x20 %b7 = select i1 %ok7, i32 0, i32 64\n\
+               \x20 %s1 = or i32 %b1, %b2\n\
+               \x20 %s2 = or i32 %s1, %b3\n\
+               \x20 %s3 = or i32 %s2, %b4\n\
+               \x20 %s4 = or i32 %s3, %b5\n\
+               \x20 %s5 = or i32 %s4, %b6\n\
+               \x20 %s6 = or i32 %s5, %b7\n\
+               \x20 ret i32 %s6\n}\n";
+    assert_eq!(run_text_with(src, &Default::default()), (0, String::new()));
+}
+
+#[test]
+fn builtins_that_only_assemble() {
+    // wfi may wait for an interrupt the bare machine never raises, so
+    // these are only translated and assembled.
+    let src = "declare void @detrytus.wfi()\n\
+               declare void @detrytus.fence.vm(ptr, i64)\n\
+               define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n\
+               \x20 call void @detrytus.fence.vm(ptr null, i64 0)\n\
+               \x20 call void @detrytus.fence.vm(ptr %argv, i64 7)\n\
+               \x20 call void @detrytus.wfi()\n\
+               \x20 ret i32 0\n}\n";
+    let out = detrytus_tc::ll::translate_text(src, &[]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(out.assembly.contains("fence.vm zero, zero"), "{}", out.assembly);
+    assert!(out.assembly.contains("wfi"), "{}", out.assembly);
+    detrytus_asm::assemble(&out.assembly, None).unwrap_or_else(|e| panic!("{e}"));
+}
+
+#[test]
+fn a_builtin_needs_constants_where_the_instruction_does() {
+    let src = "declare i64 @detrytus.csrr(i32)\n\
+               define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n\
+               \x20 %c = call i64 @detrytus.csrr(i32 %argc)\n\
+               \x20 ret i32 0\n}\n";
+    let e = detrytus_tc::ll::translate_text(src, &[]).expect_err("refused").to_string();
+    assert!(e.contains("must be a constant number"), "{e}");
+}
+
+#[test]
+fn roots_instead_of_main_and_data_in_its_own_section() {
+    // A kernel: entry points its assembly calls, no main, and its data
+    // in a section of its own.
+    let src = "@count = global i32 0, align 4\n\
+               define void @tick() {\n\
+               start:\n  %v = load i32, ptr @count\n  %w = add i32 %v, 1\n\
+               \x20 store i32 %w, ptr @count\n  ret void\n}\n\
+               define i32 @unused() {\nstart:\n  ret i32 7\n}\n";
+    let options = detrytus_tc::ll::Options {
+        roots: vec!["tick".into()],
+        sections: Some(("kcode".into(), "kdata".into())),
+        ..Default::default()
+    };
+    let out =
+        detrytus_tc::ll::translate_text_with(src, &[], &options).unwrap_or_else(|e| panic!("{e}"));
+    let a = &out.assembly;
+    assert!(a.contains("tick:") && !a.contains("unused:"), "{a}");
+    let (code, data) = (a.find(".section kcode").unwrap(), a.find(".section kdata").unwrap());
+    assert!(code < a.find("tick:").unwrap() && a.find("tick:").unwrap() < data, "{a}");
+    assert!(data < a.find("count:").unwrap(), "{a}");
+    assert!(a.trim_end().ends_with(".section kcode"), "{a}");
+    let missing = detrytus_tc::ll::Options { roots: vec!["nothing".into()], ..Default::default() };
+    let e = detrytus_tc::ll::translate_text_with(src, &[], &missing).expect_err("refused");
+    assert!(e.to_string().contains("no function nothing"), "{e}");
 }

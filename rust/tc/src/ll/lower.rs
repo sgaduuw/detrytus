@@ -147,6 +147,12 @@ pub fn helpers(used: &BTreeSet<&'static str>) -> Vec<String> {
             out.push("        jalr  zero, 0(t6)".into());
         }
     }
+    out
+}
+
+/// The data the helpers in `used` need: the atomics' lock word.
+pub fn helper_data(used: &BTreeSet<&'static str>) -> Vec<String> {
+    let mut out = Vec::new();
     if used.contains("ll$lock") {
         out.push("ll$held:".into());
         out.push("        .words 1".into());
@@ -1374,6 +1380,148 @@ impl<'m> Lower<'m> {
         }))
     }
 
+    // --- words and the machine's own instructions --------------------------
+
+    /// A word's value, held as an `i64` (two limbs, low first), as one
+    /// word: the value must be one a word can hold, ±(3²⁷ − 1)/2.
+    fn join_word(&mut self, lo: &'static str, hi: &'static str) -> &'static str {
+        if hi == "zero" {
+            return lo;
+        }
+        let h = self.signed(hi, 32);
+        let k = self.li(1i128 << 32);
+        let d = self.op3("mul", h, k);
+        self.op3("add", d, lo)
+    }
+
+    /// A word as an `i64`'s two limbs: its value in two's complement.
+    fn split_word(&mut self, w: &'static str) -> Vec<&'static str> {
+        if w == "zero" {
+            return vec!["zero", "zero"];
+        }
+        let m = self.li(mask(32));
+        let lo = self.op3("band", w, m);
+        let rest = self.op3("sub", w, lo);
+        let k = self.li(1i128 << 32);
+        let hi = self.op3("div", rest, k);
+        self.emit(format!("band  {hi}, {hi}, {m}"));
+        vec![lo, hi]
+    }
+
+    /// A constant argument of a builtin: the number it must be.
+    fn builtin_const(&self, name: &str, args: &[(Ty, Val)], k: usize) -> R<i128> {
+        match args.get(k) {
+            Some((t, Val::Const(c))) => match self.const_int(c, t)? {
+                Some(v) => Ok(Self::as_signed(v, self.bits(t)?)),
+                None => Err(format!("{name}: argument {} must be a constant number", k + 1)),
+            },
+            _ => Err(format!("{name}: argument {} must be a constant number", k + 1)),
+        }
+    }
+
+    /// The machine's words and privileged instructions, for a kernel
+    /// (docs/rust.md, Words and the machine): calls to `detrytus.*`,
+    /// which Rust declares with `#[link_name]`, each a few instructions
+    /// in place. A word is an `i64` on the Rust side.
+    fn builtin(&mut self, name: &str, args: &[(Ty, Val)]) -> R<Vec<&'static str>> {
+        let want = |n: usize| -> R<()> {
+            if args.len() == n {
+                Ok(())
+            } else {
+                Err(format!("{name} takes {n} arguments, not {}", args.len()))
+            }
+        };
+        let word = |s: &mut Self, k: usize| -> R<&'static str> {
+            let (t, v) = &args[k];
+            let l = s.leaves_of(v, t)?;
+            match l[..] {
+                [lo, hi] => Ok(s.join_word(lo, hi)),
+                _ => Err(format!("{name}: argument {} must be an i64 (a word)", k + 1)),
+            }
+        };
+        let field = |s: &Self| -> R<(i128, i128)> {
+            let n = args.len();
+            let (pos, len) =
+                (s.builtin_const(name, args, n - 2)?, s.builtin_const(name, args, n - 1)?);
+            if pos < 0 || len < 1 || pos + len > 27 {
+                return Err(format!("{name} needs 0 <= pos, 1 <= len and pos + len <= 27"));
+            }
+            Ok((pos, len))
+        };
+        Ok(match name {
+            // lw(p) -> i64, sw(p, w): the aligned word at p.
+            "detrytus.lw" => {
+                want(1)?;
+                let (base, off) = self.addr(&args[0].1)?;
+                let w = self.vreg();
+                self.emit(format!("lw    {w}, {off}({base})"));
+                self.split_word(w)
+            }
+            "detrytus.sw" => {
+                want(2)?;
+                let w = word(self, 1)?;
+                let (base, off) = self.addr(&args[0].1)?;
+                self.emit(format!("sw    {w}, {off}({base})"));
+                vec![]
+            }
+            // csrr(csr) -> i64, csrw(csr, w): csr a constant, a CSR's number.
+            "detrytus.csrr" => {
+                want(1)?;
+                let csr = self.builtin_const(name, args, 0)?;
+                let w = self.vreg();
+                self.emit(format!("csrr  {w}, {csr}"));
+                self.split_word(w)
+            }
+            "detrytus.csrw" => {
+                want(2)?;
+                let csr = self.builtin_const(name, args, 0)?;
+                let mut w = word(self, 1)?;
+                if w == "zero" {
+                    // csrw from zero would only read (assembler.md).
+                    w = self.vreg();
+                    self.emit(format!("mv    {w}, zero"));
+                }
+                self.emit(format!("csrw  {csr}, {w}"));
+                vec![]
+            }
+            // tex(w, pos, len) -> i64, tins(w, v, pos, len) -> i64: a
+            // trit field, and w with one replaced (isa.md 7.3).
+            "detrytus.tex" => {
+                want(3)?;
+                let (pos, len) = field(self)?;
+                let w = word(self, 0)?;
+                let d = self.vreg();
+                self.emit(format!("tex   {d}, {w}, {pos}, {len}"));
+                self.split_word(d)
+            }
+            "detrytus.tins" => {
+                want(4)?;
+                let (pos, len) = field(self)?;
+                let w = word(self, 0)?;
+                let v = word(self, 1)?;
+                let d = self.vreg();
+                self.emit(format!("mv    {d}, {w}"));
+                self.emit(format!("tins  {d}, {v}, {pos}, {len}"));
+                self.split_word(d)
+            }
+            // fence_vm(addr, asid): addr a pointer, asid a word; null and
+            // 0 mean all (isa.md 9.7).
+            "detrytus.fence.vm" => {
+                want(2)?;
+                let a = self.scalar(&args[0].1, &Ty::Ptr)?;
+                let s = word(self, 1)?;
+                self.emit(format!("fence.vm {a}, {s}"));
+                vec![]
+            }
+            "detrytus.wfi" => {
+                want(0)?;
+                self.emit("wfi");
+                vec![]
+            }
+            _ => return Err(format!("{name} is not a detrytus builtin")),
+        })
+    }
+
     /// Leading zeros of the `bits`-bit value in `x0`, by halving:
     /// whenever `x >> s` is not zero, `s` fewer leading zeros and keep
     /// that; what is left is 0 or 1.
@@ -1498,6 +1646,9 @@ impl<'m> Lower<'m> {
                 return self.call_to(Err(r), args, ret);
             }
         };
+        if name.starts_with("detrytus.") {
+            return self.builtin(name, args);
+        }
         if name.starts_with("llvm.") {
             return match self.intrinsic(name, ret, args)? {
                 Some(r) => Ok(r),

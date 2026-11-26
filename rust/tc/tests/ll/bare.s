@@ -97,3 +97,6 @@ argv:   .tryte (prog) % 256, (prog) / 256 % 256, (prog) / 65536 % 256, (prog) / 
         .tryte (arg1) % 256, (arg1) / 256 % 256, (arg1) / 65536 % 256, (arg1) / 16777216 % 256
 prog:   .string "prog"
 arg1:   .string " hi there  9 "
+
+# Two aligned words, for tests of the word builtins (detrytus.lw, .sw).
+testwords: .words 2
