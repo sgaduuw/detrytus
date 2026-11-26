@@ -634,6 +634,16 @@ impl<'m> Lower<'m> {
             {
                 self.const_addr(&from.1)?
             }
+            // An address plus or minus a number (ptrtoint of a global, add).
+            Const::Bin { op, a, b } if matches!(op.as_str(), "add" | "sub") => {
+                let (Some(x), Some(k)) = (self.const_addr(&a.1)?, self.const_int(&b.1, &b.0)?)
+                else {
+                    return Ok(None);
+                };
+                let k = Self::as_signed(k, self.bits(&b.0)?);
+                let k = if op == "sub" { -k } else { k };
+                Some(format!("{x} + {k}"))
+            }
             _ => None,
         })
     }
@@ -1186,6 +1196,72 @@ impl<'m> Lower<'m> {
                 self.wrap(d, bits);
                 vec![d, ov]
             }
+            "llvm.umul" if name.contains("with.overflow") && self.wide(&t)?.is_none() => {
+                // The product wraps as mul's does; it overflowed when a is
+                // not 0 and b > mask / a (a of 0 makes that mask: never).
+                let bits = self.bits(&t)?;
+                let a = arg(self, 0)?;
+                let b = arg(self, 1)?;
+                let d = self.mul(&t, bits, false, &args[0].1, &args[1].1, a, b)?;
+                let m = self.li(mask(bits));
+                let one = self.li(1);
+                let a1 = self.op3("max", a, one);
+                let q = self.op3("div", m, a1);
+                let c = self.op3("cmp", b, q);
+                let ov = self.op3("max", c, "zero");
+                vec![d, ov]
+            }
+            "llvm.sadd" | "llvm.ssub"
+                if name.contains("with.overflow") && self.wide(&t)?.is_none() =>
+            {
+                // As signed values the sum fits a word; it overflowed when
+                // it is outside -2^(bits-1) .. 2^(bits-1) - 1.
+                let bits = self.bits(&t)?;
+                let a = arg(self, 0)?;
+                let b = arg(self, 1)?;
+                let sa = self.signed(a, bits);
+                let sb = self.signed(b, bits);
+                let op = if base == "llvm.sadd" { "add" } else { "sub" };
+                let d = self.op3(op, sa, sb);
+                let hi = self.li((1i128 << (bits - 1)) - 1);
+                let lo = self.li(-(1i128 << (bits - 1)));
+                let above = self.op3("cmp", d, hi);
+                let above = self.op3("max", above, "zero");
+                let below = self.op3("cmp", lo, d);
+                let below = self.op3("max", below, "zero");
+                let ov = self.op3("add", above, below);
+                self.wrap(d, bits);
+                vec![d, ov]
+            }
+            "llvm.bitreverse" | "llvm.bswap" if self.wide(&t)?.is_none() => {
+                // Piece by piece: bit (or byte) k of x moves to place
+                // n - 1 - k, by a multiply or a divide by a power of two.
+                let bits = self.bits(&t)?;
+                let x = arg(self, 0)?;
+                let w = if base == "llvm.bswap" { 8 } else { 1 };
+                let n = bits / w;
+                let piece = self.li((1i128 << w) - 1);
+                let mut d = "zero";
+                for k in 0..n {
+                    let from = k * w;
+                    let to = (n - 1 - k) * w;
+                    let p = if from == 0 {
+                        self.op3("band", x, piece)
+                    } else {
+                        let s = self.li(1i128 << from);
+                        let q = self.op3("div", x, s);
+                        self.op3("band", q, piece)
+                    };
+                    let p = if to == 0 {
+                        p
+                    } else {
+                        let s = self.li(1i128 << to);
+                        self.op3("mul", p, s)
+                    };
+                    d = if d == "zero" { p } else { self.op3("add", d, p) };
+                }
+                vec![d]
+            }
             "llvm.uadd" | "llvm.usub" if name.contains(".sat.") => {
                 let bits = self.bits(&t)?;
                 let a = arg(self, 0)?;
@@ -1340,6 +1416,11 @@ impl<'m> Lower<'m> {
                 Some(r) => Ok(r),
                 None => Err(format!("the intrinsic {name} is not supported yet")),
             };
+        }
+        // rustc's allocator shim defines this marker for a program that
+        // uses alloc, at link time; a call to it does nothing.
+        if name.ends_with("___rust_no_alloc_shim_is_unstable_v2") {
+            return Ok(vec![]);
         }
         let sym = self.sym(name);
         self.call_named(&sym, args, ret)
@@ -1855,8 +1936,14 @@ impl<'m> Lower<'m> {
                 }
             }
             _ => {
-                let Some(a) = self.const_addr(c)? else {
-                    return Err(format!("constant {c:?} is not supported in data"));
+                // A pointer made from a number (a dangling NonNull, say)
+                // is that number; anything else an address.
+                let a = match self.const_int(c, &t)? {
+                    Some(v) => v.to_string(),
+                    None => match self.const_addr(c)? {
+                        Some(a) => a,
+                        None => return Err(format!("constant {c:?} is not supported in data")),
+                    },
                 };
                 let mut div = 1i128;
                 for _ in 0..size {

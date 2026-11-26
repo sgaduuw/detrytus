@@ -73,7 +73,8 @@ memset: mv    t0, a0
         j     1b
 2:      ret
 
-# memcmp(a, b, n) and bcmp: <0, 0 or >0 as the first difference.
+# memcmp(a, b, n) and bcmp: <0, 0 or >0 as the first difference, an
+# i32, so a negative one is held as its unsigned value (plus 2^32).
 bcmp:
 memcmp: add   t2, a0, a2
 1:      bge   a0, t2, 2f
@@ -86,7 +87,10 @@ memcmp: add   t2, a0, a2
 2:      li    a0, 0
         ret
 3:      sub   a0, t0, t1
-        ret
+        bgez  a0, 4f
+        li    t0, 4294967296
+        add   a0, a0, t0
+4:      ret
 
 # The arguments: pointers as Rust lays them out, 4 bytes each.
 argv:   .tryte (prog) % 256, (prog) / 256 % 256, (prog) / 65536 % 256, (prog) / 16777216 % 256

@@ -1647,3 +1647,33 @@ link now plays a name server at 10.0.0.3.
   compression pointer to it, TTL 60.
 - **10.0.0.3, not the gateway,** so the name server is a separate
   setting in trylobite, as on a real network.
+
+### 2026-11-26 · Rust's `alloc` crate through `detrytus ll`
+
+Eelco wanted a heap for Rust programs on trylobite. The allocator
+itself is the runtime's business (trylobite's, over a kernel call);
+what the translator needed was the IR `alloc` brings in:
+
+- **Overflow-reporting arithmetic of up to 32 bits**: `umul` (the
+  product as `mul` wraps it, overflow when `b > mask / a`), `uadd` and
+  `usub` (already there), `sadd` and `ssub` (the signed sum fits a
+  word; overflow when it is out of range). `RawVec` checks its sizes
+  with them. `smul` and wider types can come when something needs them.
+- **`bitreverse` and `bswap` of up to 32 bits,** a piece at a time
+  (alloc's formatting reverses a 3-bit field).
+- **The allocator shim's marker is a no-op.** rustc defines
+  `__rust_alloc` and the rest in the crate with the
+  `#[global_allocator]`, and calls `__rust_no_alloc_shim_is_unstable_v2`,
+  which its linker would add, to make sure the shim is linked. Taking
+  the call as nothing is what that function does.
+- **Constants: a number as a pointer in data** (`inttoptr (i32 1 to
+  ptr)`, the dangling pointer of an empty slice in a static), and an
+  address plus or minus a number.
+- **A runtime's `i32` results are held unsigned.** `bare.s`'s `memcmp`
+  returned a negative difference as it was; core's sort tests the sign
+  with `lshr 31`, read garbage and indexed off the slice. It now adds
+  2^32, as every `i32` is held, and docs/rust.md says so for any
+  runtime function.
+- **The test is a bump allocator in a static array**
+  (`rust/tc/tests/ll/alloc.rs`), which the bare machine needs no heap
+  for; `regenerate.sh` builds `alloc` too and prunes it with core.

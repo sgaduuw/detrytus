@@ -15,7 +15,14 @@ rustc compiles for the built-in target `riscv32imac-unknown-none-elf`,
 which has 32-bit pointers, a `usize` of 32 bits and little-endian data.
 No RISC-V code is ever run: only the IR is used. `core` is built from
 source alongside the program (`-Zbuild-std`, which `RUSTC_BOOTSTRAP=1`
-allows on a stable toolchain), so that its IR is there too. Panics
+allows on a stable toolchain), so that its IR is there too; with
+`-Zbuild-std=core,alloc` and `alloc-*.ll` given too, a program may
+use `alloc` (`Vec`, `String`, `Box`, `format!`) over a
+`#[global_allocator]` it or its runtime defines. rustc then defines
+`__rust_alloc` and the rest in the program's module; the marker
+function its allocator shim would add at link time
+(`__rust_no_alloc_shim_is_unstable_v2`) is taken as doing nothing.
+Panics
 abort at once (`-Cpanic=immediate-abort`): a panic becomes a call to
 `abort` and none of core's formatting comes in with it.
 
@@ -62,6 +69,11 @@ and the included assembly provides:
   `abort`, for panics;
 - whatever `extern "C"` functions the program declares, such as system
   calls.
+
+Each takes and returns its values as the translated code holds them
+(Binary integers, below): an `i32` result such as `memcmp`'s that is
+below 0 is returned as its unsigned value, `2^32` more, or code that
+tests its sign bit (`lshr` by 31, as core's sort does) reads it wrong.
 
 `rust/tc/tests/ll/bare.s` is such a runtime for the bare machine.
 
@@ -285,5 +297,7 @@ the line:
   varargs;
 - results of more than four words;
 - variable-sized `alloca`;
-- `llvm.cttz`, `llvm.bswap`, `llvm.bitreverse` and the overflow
-  intrinsics (`llvm.umul.with.overflow` and others).
+- `llvm.cttz`; `llvm.smul.with.overflow` and the overflow intrinsics,
+  `llvm.bswap` and `llvm.bitreverse` on integers wider than a word
+  (those of up to 32 bits are done: `umul`, `uadd`, `usub`, `sadd`,
+  `ssub`).
