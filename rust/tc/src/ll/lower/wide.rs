@@ -468,9 +468,9 @@ impl Lower<'_> {
                 out.resize(tnl, "zero");
                 // A pointer's bits are its address in two's complement
                 // (docs/rust.md, Pointers).
-                if op == "ptrtoint" {
+                if self.signed_ptrs && op == "ptrtoint" {
                     out[0] = self.ptr_to_bits(out[0]);
-                } else if op == "inttoptr" {
+                } else if self.signed_ptrs && op == "inttoptr" {
                     out[0] = self.bits_to_ptr(out[0]);
                 }
                 // A trunc drops the bits above the narrower width, unless

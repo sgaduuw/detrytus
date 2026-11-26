@@ -78,6 +78,8 @@ pub struct Lower<'m> {
     /// Whether a 64-bit multiply goes to the helper: when the program
     /// has more than one, so that the helper costs less than copies.
     pub mul_helper: bool,
+    /// Pointers are signed (docs/rust.md, Pointers): `--signed-pointers`.
+    pub signed_ptrs: bool,
 }
 
 /// Helpers that load or store a 2- or 4-byte value, a byte a tryte, low
@@ -95,14 +97,14 @@ const HELPERS: [(&str, &str); 8] = [
          mul   t4, t4, t3\nlt    t2, 1(t5)\nadd   t4, t4, t2\n\
          mul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2",
     ),
-    // A pointer: its 4 bytes are the address in two's complement, made
-    // signed again once joined (docs/rust.md, Pointers).
+    // A pointer: its 4 bytes are the address in two's complement, so the
+    // top byte is taken as signed (docs/rust.md, Pointers).
     (
         "ll$ldp",
-        "lt    t4, 3(t5)\nli    t3, 256\nmul   t4, t4, t3\nlt    t2, 2(t5)\nadd   t4, t4, t2\n\
+        "lt    t4, 3(t5)\nli    t2, 128\nblt   t4, t2, ll$ldp.up\naddi  t4, t4, -256\nll$ldp.up:\n\
+         li    t3, 256\nmul   t4, t4, t3\nlt    t2, 2(t5)\nadd   t4, t4, t2\n\
          mul   t4, t4, t3\nlt    t2, 1(t5)\nadd   t4, t4, t2\n\
-         mul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2\n\
-         li    t3, 2147483648\nbxor  t4, t4, t3\nsub   t4, t4, t3",
+         mul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2",
     ),
     (
         "ll$st2",
@@ -114,10 +116,10 @@ const HELPERS: [(&str, &str); 8] = [
          rem   t2, t4, t3\nst    t2, 1(t5)\ndiv   t4, t4, t3\n\
          rem   t2, t4, t3\nst    t2, 2(t5)\ndiv   t4, t4, t3\nst    t4, 3(t5)",
     ),
-    // A pointer: wrapped to its 32 bits first.
+    // A pointer: a negative address is stored as 2^32 more.
     (
         "ll$stp",
-        "li    t3, 4294967295\nband  t4, t4, t3\n\
+        "bge   t4, zero, ll$stp.up\nli    t3, 4294967296\nadd   t4, t4, t3\nll$stp.up:\n\
          li    t3, 256\nrem   t2, t4, t3\nst    t2, 0(t5)\ndiv   t4, t4, t3\n\
          rem   t2, t4, t3\nst    t2, 1(t5)\ndiv   t4, t4, t3\n\
          rem   t2, t4, t3\nst    t2, 2(t5)\ndiv   t4, t4, t3\nst    t4, 3(t5)",
@@ -340,6 +342,7 @@ impl<'m> Lower<'m> {
             wide_calls: BTreeSet::new(),
             inline_wide: false,
             mul_helper: false,
+            signed_ptrs: false,
             konst: HashMap::new(),
             stub_labels: HashMap::new(),
             local_labels: 0,
@@ -632,8 +635,7 @@ impl<'m> Lower<'m> {
         d
     }
 
-    /// The address that 32 bits stand for: their signed value. Bits
-    /// above the 32nd are dropped first.
+    /// The address that 32 bits stand for: their signed value.
     fn bits_to_ptr(&mut self, r: &'static str) -> &'static str {
         if r == "zero" {
             return r;
@@ -732,7 +734,7 @@ impl<'m> Lower<'m> {
             {
                 let bits = self.bits(t)?;
                 let v = self.const_int(&from.1, &from.0)?;
-                if self.resolve(t)? == Ty::Ptr {
+                if self.signed_ptrs && self.resolve(t)? == Ty::Ptr {
                     // An address: the signed value of its 32 bits.
                     v.map(|v| Self::as_signed(v, 32))
                 } else {
@@ -867,7 +869,7 @@ impl<'m> Lower<'m> {
         if bytes == 2 || bytes == 4 {
             let name = match bytes {
                 2 => "ll$ld2",
-                _ if self.resolve(t)? == Ty::Ptr => "ll$ldp",
+                _ if self.signed_ptrs && self.resolve(t)? == Ty::Ptr => "ll$ldp",
                 _ => "ll$ld4",
             };
             self.helper_address(base, off);
@@ -905,7 +907,7 @@ impl<'m> Lower<'m> {
         if bytes == 2 || bytes == 4 {
             let name = match bytes {
                 2 => "ll$st2",
-                _ if self.resolve(t)? == Ty::Ptr => "ll$stp",
+                _ if self.signed_ptrs && self.resolve(t)? == Ty::Ptr => "ll$stp",
                 _ => "ll$st4",
             };
             self.emit(format!("mv    t4, {v}"));
@@ -1163,7 +1165,7 @@ impl<'m> Lower<'m> {
             "zext" | "bitcast" | "addrspacecast" => {}
             "inttoptr" => {
                 let fb = self.bits(from)?;
-                if fb >= 32 {
+                if self.signed_ptrs && fb >= 32 {
                     let p = self.bits_to_ptr(d);
                     self.emit(format!("mv    {d}, {p}"));
                 }
@@ -1177,7 +1179,18 @@ impl<'m> Lower<'m> {
             }
             "ptrtoint" => {
                 let tb = self.bits(to)?;
-                self.wrap(d, tb.min(32));
+                if tb < 32 {
+                    self.wrap(d, tb);
+                } else if self.signed_ptrs {
+                    // A negative address as its 32 bits: 2^32 more.
+                    // Pointers are mostly above 0, so a branch costs
+                    // less than a wrap.
+                    let up = self.new_label();
+                    self.emit(format!("bge   {d}, zero, {up}"));
+                    let k = self.li(1i128 << 32);
+                    self.emit(format!("add   {d}, {d}, {k}"));
+                    self.label(&up);
+                }
             }
             op => return Err(format!("the {op} cast is not supported")),
         }
@@ -2024,7 +2037,11 @@ impl<'m> Lower<'m> {
                         return Err(format!("constant {c:?} is not supported in data"));
                     };
                     // The assembler's `/` and `%` truncate.
-                    let u = format!("(({a}) % 4294967296 + 4294967296) % 4294967296");
+                    let u = if self.signed_ptrs {
+                        format!("(({a}) % 4294967296 + 4294967296) % 4294967296")
+                    } else {
+                        format!("({a})")
+                    };
                     let mut div = 1i128;
                     for _ in 0..size {
                         out.push(if div == 1 {

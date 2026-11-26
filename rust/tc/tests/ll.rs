@@ -213,7 +213,7 @@ fn a_number_as_a_pointer_in_data() {
 }
 
 #[test]
-fn a_pointer_may_be_negative() {
+fn a_pointer_may_be_negative_with_signed_pointers() {
     // Pointers are signed: an address below zero (a kernel's, a device
     // page's) is 32 bits of two's complement in memory and in integers,
     // and the address again when loaded or cast back (docs/rust.md,
@@ -255,7 +255,15 @@ fn a_pointer_may_be_negative() {
                \x20 %s5 = or i32 %s4, %b6\n\
                \x20 %s6 = or i32 %s5, %b7\n\
                \x20 ret i32 %s6\n}\n";
-    assert_eq!(run_text(src), (0, String::new()));
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ll");
+    let bare = dir.join("bare.s").display().to_string();
+    let options = detrytus_tc::ll::Options { signed_pointers: true };
+    let out = detrytus_tc::ll::translate_text_with(src, &[bare], &options)
+        .unwrap_or_else(|e| panic!("does not translate: {e}"));
+    assert_eq!(execute("input", out), (0, String::new()));
+    // Without --signed-pointers, a pointer is unsigned, as a program
+    // running above 0 needs no more: the same checks fail.
+    assert_ne!(run_text(src).0, 0);
 }
 
 #[test]
