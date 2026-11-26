@@ -193,6 +193,18 @@ impl Hart {
         value
     }
 
+    /// Whether `read_csr` would succeed: the ring may read it and it
+    /// exists. Changes nothing (reading `entropy` itself would).
+    pub(crate) fn csr_readable(&self, number: i64) -> bool {
+        self.ring >= isa::csr_ring(number)
+            && (Self::bank_slot(number).is_some()
+                || matches!(
+                    number,
+                    isa::CYCLE | isa::INSTRET | isa::TIME | isa::HARTID | isa::ENTROPY
+                )
+                || self.csrs.contains_key(&number))
+    }
+
     // --- privileged instructions -------------------------------------------
 
     pub(crate) fn privileged(&self) -> Exec {

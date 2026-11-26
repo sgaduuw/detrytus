@@ -1851,3 +1851,27 @@ profile now shows the 9% of steps still interpreted (mostly the
 kernel's trap entry and exit, `csrrw` and `tret`) as the largest cost;
 interpreting one step after such an instruction instead of eight made
 no difference.
+
+### 2026-11-26 · The kernel's trap path in compiled code
+
+CSR accesses, `tret` and the atomics (the kernel lock's `lr`, `sc` and
+`amoswap`) are compiled now instead of ending a block, which sent the
+next eight steps to the interpreter. They are a class of their own,
+`Class::System`: compiled code calls `Hart::jit_system`, which runs the
+interpreter's own code for the instruction and then ends the run, as
+such an instruction may change what bounded it (interrupt enables, the
+timer, the ring, `ptbr`, reservations).
+
+Two things keep it exact. A refusal must change nothing, so
+`jit_system` first checks every way the instruction could trap (a CSR
+the ring may not read or may not write, a misaligned or untranslatable
+address, anything but RAM) and only then runs it; reading `entropy`
+advances its stream, so the read must not happen before a write that
+traps. And the clock and counters a CSR reads are the ones the machine
+would have set for that step: compiled code passes how many
+instructions ran before it in the run, and `time`, `cycle` and
+`instret` are adjusted for the one read.
+
+Steps still interpreted on the sort benchmark: 9% to under 4%, mostly
+trap entry now (`sys` and interrupts). Sort benchmark: about 10.5 s to
+about 9.3 s, same output and step count.
