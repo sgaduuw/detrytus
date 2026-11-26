@@ -2,7 +2,7 @@
 //! Each implements one rule of docs/isa.md section 7 and returns a value
 //! already in word range. Ported from the original Python tools.
 
-use crate::trits::{WORD_MOD, WORD_TRITS, field, low, pow3, split_high, wrap, wrap_wide};
+use crate::trits::{WORD_MAX, WORD_MOD, WORD_TRITS, field, low, pow3, split_high, wrap, wrap_wide};
 
 /// (high, low) words of the 54-trit product: a·b = hi·3²⁷ + lo.
 pub fn mul_parts(a: i64, b: i64) -> (i64, i64) {
@@ -81,15 +81,26 @@ pub fn nonzero_trits(x: i64) -> i64 {
 }
 
 /// Apply a 9-trit truth table to each trit pair of a and b.
-pub fn tlut(mut a: i64, mut b: i64, table: i64) -> i64 {
-    let mut out = 0;
-    for i in 0..WORD_TRITS {
-        let (ta, tb) = (low(a, 1), low(b, 1));
-        a = (a - ta) / 3;
-        b = (b - tb) / 3;
-        out += field(table, (3 * (ta + 1) + tb + 1) as u32, 1) * pow3(i);
+pub fn tlut(a: i64, b: i64, table: i64) -> i64 {
+    // The table's trits, read once, plus one: entry 3(a+1) + (b+1).
+    let mut entry = [0u64; 9];
+    let mut t = table;
+    for e in &mut entry {
+        let trit = low(t, 1);
+        *e = (trit + 1) as u64;
+        t = (t - trit) / 3;
     }
-    out
+    // Each operand's trits plus one are its digits in plain base 3
+    // once WORD_MAX is added; the result is built the same way.
+    let (mut a, mut b) = ((a + WORD_MAX) as u64, (b + WORD_MAX) as u64);
+    let (mut out, mut place) = (0u64, 1u64);
+    for _ in 0..WORD_TRITS {
+        out += entry[(3 * (a % 3) + b % 3) as usize] * place;
+        a /= 3;
+        b /= 3;
+        place *= 3;
+    }
+    out as i64 - WORD_MAX
 }
 
 /// 2ⁿ modulo 3²⁷, for a left binary shift by a large n.
@@ -156,6 +167,33 @@ mod tests {
         assert_eq!(nonzero_trits(81 - 9 + 1), 3);
         assert_eq!(leading_zero_trits(1), 26);
         assert_eq!(leading_zero_trits(0), 27);
+    }
+
+    #[test]
+    fn tlut_matches_its_definition() {
+        // Trit by trit, as docs/isa.md defines it.
+        fn reference(a: i64, b: i64, table: i64) -> i64 {
+            (0..WORD_TRITS)
+                .map(|i| {
+                    let (ta, tb) = (field(a, i, 1), field(b, i, 1));
+                    field(table, (3 * (ta + 1) + tb + 1) as u32, 1) * pow3(i)
+                })
+                .sum()
+        }
+        let mut x: i64 = 1958;
+        let mut next = || {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (x >> 20) % WORD_MAX
+        };
+        for _ in 0..20_000 {
+            let (a, b, t) = (next(), next(), low(next(), 9));
+            assert_eq!(tlut(a, b, t), reference(a, b, t), "{a} {b} {t}");
+        }
+        for (a, b) in [(WORD_MAX, -WORD_MAX), (-WORD_MAX, WORD_MAX), (0, 0)] {
+            for t in [-9841, 9841, 5792, 0] {
+                assert_eq!(tlut(a, b, t), reference(a, b, t));
+            }
+        }
     }
 
     #[test]

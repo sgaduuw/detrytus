@@ -73,6 +73,20 @@ pub fn class(d: &Decoded) -> Class {
     }
 }
 
+/// What a hart's map from virtual pages to RAM depends on
+/// ([`Hart::jit_view`]): compiled code keeps pages it found only while
+/// this is unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemoryView {
+    pub(crate) hart: i64,
+    pub(crate) ring: i64,
+    pub(crate) ptbr: crate::mmu::Ptbr,
+    pub(crate) sua: bool,
+    pub(crate) generation: u64,
+    pub(crate) code_pages: u64,
+    pub(crate) reserved: bool,
+}
+
 /// An instruction compiled code may run: decoded, and how far pc moves
 /// past it.
 #[derive(Clone, Copy, Debug)]
