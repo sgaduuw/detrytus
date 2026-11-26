@@ -149,6 +149,11 @@ struct Ctx {
     /// `Pages::load` and `Pages::store`.
     load_pages: *mut Slot,
     store_pages: *mut Slot,
+    /// Instructions run by earlier calls in this `run`, for the clock a
+    /// system instruction reads.
+    before: i64,
+    /// Set by a system instruction: return to the machine.
+    stop: i64,
 }
 
 const CTX_REGS: i32 = 0;
@@ -193,6 +198,7 @@ struct Helpers {
     store: FuncId,
     compute: FuncId,
     tlut: FuncId,
+    system: FuncId,
 }
 
 fn new_module() -> (JITModule, Helpers) {
@@ -213,6 +219,7 @@ fn new_module() -> (JITModule, Helpers) {
     jb.symbol("detrytus_store", helper_store as *const u8);
     jb.symbol("detrytus_compute", helper_compute as *const u8);
     jb.symbol("detrytus_tlut", helper_tlut as *const u8);
+    jb.symbol("detrytus_system", helper_system as *const u8);
     let mut module = JITModule::new(jb);
     let ptr = module.target_config().pointer_type();
     let sig = |params: &[Type], ret: bool| {
@@ -227,6 +234,7 @@ fn new_module() -> (JITModule, Helpers) {
     let store_sig = sig(&[ptr, types::I64, types::I64, types::I64], true);
     let compute_sig = sig(&[ptr, types::I64, types::I64], true);
     let tlut_sig = sig(&[ptr, types::I64, types::I64], true);
+    let system_sig = sig(&[ptr, types::I64, types::I64, types::I64], true);
     let helpers = Helpers {
         load: module.declare_function("detrytus_load", Linkage::Import, &load_sig).unwrap(),
         store: module.declare_function("detrytus_store", Linkage::Import, &store_sig).unwrap(),
@@ -234,6 +242,7 @@ fn new_module() -> (JITModule, Helpers) {
             .declare_function("detrytus_compute", Linkage::Import, &compute_sig)
             .unwrap(),
         tlut: module.declare_function("detrytus_tlut", Linkage::Import, &tlut_sig).unwrap(),
+        system: module.declare_function("detrytus_system", Linkage::Import, &system_sig).unwrap(),
     };
     (module, helpers)
 }
@@ -291,6 +300,24 @@ extern "C" fn helper_tlut(groups: *const [u8; 729], a: i64, b: i64) -> i64 {
 }
 
 /// Run instruction `index` of the block, at pc: 0 done, 1 it would trap.
+/// Run system instruction `index` of the block, at pc, after `n` of
+/// the block's instructions: the pc to go on from, or REFUSED if it
+/// would trap. Either way the run ends after it.
+extern "C" fn helper_system(ctx: *mut Ctx, index: i64, pc: i64, n: i64) -> i64 {
+    // SAFETY: as for helper_load; insns has the block's instructions.
+    let ctx = unsafe { &mut *ctx };
+    let (hart, bus, insn) =
+        unsafe { (&mut *ctx.hart, &mut *ctx.bus, &*ctx.insns.add(index as usize)) };
+    let next = wrap(pc + insn.advance);
+    match hart.jit_system(bus, &insn.d, pc, next, (ctx.before + n) as u64) {
+        Some(to) => {
+            ctx.stop = 1;
+            to
+        }
+        None => REFUSED,
+    }
+}
+
 extern "C" fn helper_compute(ctx: *mut Ctx, index: i64, pc: i64) -> i64 {
     // SAFETY: as for helper_load; insns has the block's instructions.
     let ctx = unsafe { &mut *ctx };
@@ -366,6 +393,7 @@ impl Jit {
             match d.op.kind {
                 Kind::Jal => work.push(wrap(base + 3 * d.imm)),
                 Kind::Jalr => {}
+                _ if accel::class(d) == Class::System => {}
                 Kind::B => work.extend([next, wrap(base + 3 * d.off)]),
                 Kind::Br3 => work.extend([next, wrap(base + 3 * d.offn), wrap(base + 3 * d.offp)]),
                 _ => work.push(next),
@@ -402,7 +430,7 @@ impl Jit {
                     leader[j] = true;
                 }
             }
-            if accel::class(d) == Class::Control && i + 1 < code.len() {
+            if matches!(accel::class(d), Class::Control | Class::System) && i + 1 < code.len() {
                 leader[i + 1] = true;
             }
             // A run also starts after a gap in the code.
@@ -415,7 +443,7 @@ impl Jit {
         let mut run_len = vec![0i64; code.len()];
         for i in (0..code.len()).rev() {
             let (at, insn) = &code[i];
-            let falls = accel::class(&insn.d) != Class::Control
+            let falls = !matches!(accel::class(&insn.d), Class::Control | Class::System)
                 && i + 1 < code.len()
                 && code[i + 1].0 == wrap(at + insn.advance)
                 && !leader[i + 1];
@@ -440,6 +468,7 @@ impl Jit {
             let store = self.module.declare_func_in_func(self.helpers.store, b.func);
             let compute = self.module.declare_func_in_func(self.helpers.compute, b.func);
             let tlut = self.module.declare_func_in_func(self.helpers.tlut, b.func);
+            let system = self.module.declare_func_in_func(self.helpers.system, b.func);
             let trusted = MemFlagsData::trusted();
             let n = b.declare_var(types::I64);
             // Every way out: (count, pc).
@@ -531,6 +560,18 @@ impl Jit {
                             g.b.ins().smax(a, c)
                         };
                         g.set(regs, d.rd, v);
+                    }
+                    _ if accel::class(d) == Class::System => {
+                        let index = g.b.ins().iconst(types::I64, i as i64);
+                        let at = g.b.ins().iconst(types::I64, pc);
+                        let count = g.b.use_var(n);
+                        let call = g.b.ins().call(system, &[cx, index, at, count]);
+                        let to = g.b.inst_results(call)[0];
+                        let refused = g.b.ins().icmp_imm_s(IntCC::Equal, to, REFUSED);
+                        g.exit_if(refused, 0, pc);
+                        g.count();
+                        g.finish(to);
+                        continue;
                     }
                     Kind::Tlut => {
                         // The spread table is on the heap, so it stays
@@ -943,15 +984,17 @@ impl Accelerator for Jit {
                 budget: (budget - total) as i64,
                 load_pages: pages.load.as_mut_ptr(),
                 store_pages: pages.store.as_mut_ptr(),
+                before: total as i64,
+                stop: 0,
             };
             // SAFETY: the function was compiled for a Ctx like this one,
             // and hart and bus are not otherwise used during the call.
             let ran = unsafe { (block.f)(&mut ctx) } as u64;
             hart.pc = ctx.next_pc;
             total += ran;
-            // Stopped at an instruction it leaves to the interpreter, or
-            // at the budget.
-            if ran == 0 || total >= budget {
+            // Stopped at an instruction it leaves to the interpreter, at
+            // the budget, or after a system instruction.
+            if ran == 0 || total >= budget || ctx.stop != 0 {
                 break;
             }
         }

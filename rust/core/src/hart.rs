@@ -333,6 +333,72 @@ impl Hart {
         matches!(self.compute(d), Some(Ok(())))
     }
 
+    /// Run a [`Class::System`](crate::accel::Class) instruction at pc,
+    /// as the step after `ran` others compiled code has run since the
+    /// machine last set the clock: the pc to go on from, or None,
+    /// changing nothing, if it would trap or reach anything but RAM.
+    /// It may change what the machine must know before the next step
+    /// (interrupt enables, the timer, the ring, `ptbr`, reservations),
+    /// so compiled code returns to it next.
+    pub fn jit_system(
+        &mut self,
+        bus: &mut Bus,
+        d: &Decoded,
+        pc: i64,
+        next: i64,
+        ran: u64,
+    ) -> Option<i64> {
+        match d.op.kind {
+            Kind::Amoswap
+            | Kind::Amoadd
+            | Kind::Amomin
+            | Kind::Amomax
+            | Kind::Amotlut
+            | Kind::Cas
+            | Kind::Lr
+            | Kind::Sc => {
+                // Every way these trap comes before they change anything
+                // but these checks: so check first.
+                let addr = self.amo_addr(d).ok()?;
+                let access = match d.op.kind {
+                    Kind::Lr => mmu::Access::Load,
+                    Kind::Sc => mmu::Access::Store,
+                    _ => mmu::Access::Amo,
+                };
+                let physical = self.translate(bus, addr, access).ok()?;
+                if !bus.is_ram(physical) {
+                    return None;
+                }
+                self.pc = pc;
+                let src = self.x(d.rs2);
+                self.atomic(bus, d, src).ok()?;
+                Some(next)
+            }
+            Kind::Csrrw | Kind::Csrrtmax | Kind::Csrrtmin => {
+                let number = low(d.imm, 9);
+                if !self.csr_readable(number) || (d.rs1 != 0 && !isa::csr_writable(number)) {
+                    return None;
+                }
+                // What `time`, `cycle` and `instret` read at this step,
+                // as the machine would have set them.
+                let (time, instret) = (self.time, self.instret);
+                self.time += ran as i64 + 1;
+                self.instret += ran as i64;
+                self.pc = pc;
+                let done = self.system(d);
+                (self.time, self.instret) = (time, instret);
+                done.ok()?;
+                Some(next)
+            }
+            Kind::Tret => {
+                self.pc = pc;
+                self.tret(d).ok()?;
+                Some(self.next_pc)
+            }
+            _ => None,
+        }
+    }
+
     /// A load as compiled code makes it: None, changing nothing the
     /// interpreter would not, where it would trap or reach a device.
     pub fn jit_load(&mut self, bus: &mut Bus, addr: i64, width: u32) -> Option<i64> {

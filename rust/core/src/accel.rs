@@ -35,7 +35,10 @@ pub enum Class {
     Store(u32),
     /// A jump or branch: ends a block.
     Control,
-    /// Anything else (atomics, system instructions): left to the
+    /// A CSR access, `tret` or an atomic: [`Hart::jit_system`]. Ends a
+    /// block and the run, as it may change what bounds the run.
+    System,
+    /// Anything else (traps, waits, fences): left to the
     /// interpreter, so a block ends before it.
     Other,
 }
@@ -47,15 +50,7 @@ pub fn class(d: &Decoded) -> Class {
         Kind::St => Class::Store(1),
         Kind::Sw => Class::Store(3),
         Kind::Jal | Kind::Jalr | Kind::B | Kind::Br3 => Class::Control,
-        Kind::Amoswap
-        | Kind::Amoadd
-        | Kind::Amomin
-        | Kind::Amomax
-        | Kind::Amotlut
-        | Kind::Lr
-        | Kind::Sc
-        | Kind::Wrs
-        | Kind::Cas
+        Kind::Wrs
         | Kind::Sys
         | Kind::Brk
         | Kind::Fence
@@ -63,12 +58,20 @@ pub fn class(d: &Decoded) -> Class {
         | Kind::Cclean
         | Kind::Cflush
         | Kind::Cinval
-        | Kind::Tret
         | Kind::FenceVm
-        | Kind::Csrrw
+        | Kind::Wfi => Class::Other,
+        Kind::Csrrw
         | Kind::Csrrtmax
         | Kind::Csrrtmin
-        | Kind::Wfi => Class::Other,
+        | Kind::Tret
+        | Kind::Amoswap
+        | Kind::Amoadd
+        | Kind::Amomin
+        | Kind::Amomax
+        | Kind::Amotlut
+        | Kind::Cas
+        | Kind::Lr
+        | Kind::Sc => Class::System,
         _ => Class::Compute,
     }
 }

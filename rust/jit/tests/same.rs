@@ -125,6 +125,46 @@ fill:   sw    t1, 0(t0)
         lw    t4, -2(t6)         # misaligned: left to the interpreter
 "#;
 
+/// The kernel's kind of code: CSR reads of the clock and counters,
+/// swaps, `tret`, and atomics, in a loop, ending in a write to a
+/// read-only CSR that traps. The clock and counters must read as they
+/// do in the interpreter, step for step.
+const SYSTEM: &str = r#"
+        li    t0, 19683
+        li    s1, 0
+        li    s2, 60
+again:  csrr  t1, time
+        add   s1, s1, t1
+        csrr  t1, instret
+        add   s1, s1, t1
+        csrrw t2, mscratch, s2
+        add   s1, s1, t2
+        lr    t3, (t0)
+        addi  t3, t3, 7
+        sc    t4, t3, (t0)
+        add   s1, s1, t4
+        sc    t4, t3, (t0)       # no reservation now: fails
+        add   s1, s1, t4
+        amoadd t5, s2, (t0)
+        add   s1, s1, t5
+        li    t5, 3
+        cas   t5, s2, (t0)
+        add   s1, s1, t5
+        amoswap t5, s1, (t0)
+        add   s1, s1, t5
+        li    t6, after
+        csrw  mtpc, t6
+        li    t6, 1              # tstatus.PR = +1: tret stays in ring +1
+        csrw  mtstatus, t6
+        tret
+        addi  s1, s1, 1000       # skipped
+after:  csrr  t1, cycle
+        add   s1, s1, t1
+        addi  s2, s2, -1
+        bne   s2, r0, again
+        csrw  time, s1           # read-only: traps
+"#;
+
 fn run_file(
     source: &str,
     file: Option<&str>,
@@ -183,6 +223,19 @@ fn memory_and_arithmetic_match_the_interpreter() {
     assert!(matches!(outcome, Outcome::Unhandled { cause: 2, .. }), "{outcome:?}");
     assert_eq!((outcome, regs), {
         let (o, _, r) = run(MEMORY, "", false);
+        (o, r)
+    });
+}
+
+#[test]
+fn system_instructions_match_the_interpreter() {
+    let before = COMPILED.with(|c| c.get());
+    let (outcome, _, regs) = run(SYSTEM, "", true);
+    let ran = COMPILED.with(|c| c.get()) - before;
+    assert!(matches!(outcome, Outcome::Unhandled { cause: 1, .. }), "{outcome:?}");
+    assert!(ran > 1000, "ran compiled ({ran} instructions)");
+    assert_eq!((outcome, regs), {
+        let (o, _, r) = run(SYSTEM, "", false);
         (o, r)
     });
 }

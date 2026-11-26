@@ -468,6 +468,12 @@ impl Bus {
         Some(unsafe { mem.as_mut_ptr().add(HALF_PAGE as usize) })
     }
 
+    /// Whether a physical address is in RAM, where an access has no
+    /// effect but on memory.
+    pub(crate) fn is_ram(&self, addr: i64) -> bool {
+        (1..=self.ram_pages).contains(&page_of(addr))
+    }
+
     /// Whether a hart other than the current one holds a reservation.
     pub(crate) fn reserved_by_others(&self) -> bool {
         self.reservations.keys().any(|&h| h != self.current)
