@@ -8,7 +8,7 @@ the platform (`isa.md` 8.5 and 12.3).
 | Physical page | Contents |
 |---------------|----------|
 | 0 | boot page: the program is loaded here and runs from address 0; read and execute only |
-| 1 .. 729 | RAM (`--ram-pages` changes the count) |
+| 1 .. 729 | RAM (`--ram-pages` changes the count, up to 193,710,244; the RAM size register reads it) |
 | -1 | console |
 | -2 | power control |
 | -3 | hart controller: one slot per hart (Harts, below) |
@@ -20,7 +20,14 @@ the platform (`isa.md` 8.5 and 12.3).
 | -16 | network device (The network device, below) |
 
 A page is 19,683 trytes centred on a multiple of 19,683, so page `p`
-spans `p·19683 − 9841` .. `p·19683 + 9841`. The loader may place data in
+spans `p·19683 − 9841` .. `p·19683 + 9841`.
+
+RAM can be any number of pages from 1 to 193,710,244, (3¹⁸ − 1) / 2:
+every positive page number, up to the top of the address space. The
+emulator allocates a page's host memory the first time something writes
+to it, so a large machine costs only what its programs use. Software
+learns the size from the RAM size register rather than being built for
+one machine. The loader may place data in
 RAM pages too; only the program writes are checked.
 
 ## Devices
@@ -30,6 +37,7 @@ RAM pages too; only the program writes are checked.
 | −19683 | console out | writing a Unicode code point prints it |
 | −19680 | console in | reading returns the next input code point, or a negative state when there is none (Console input states, below; test the sign: a code point is never negative) |
 | −39366 | power off | writing any value stops the machine; the value becomes the exit code |
+| −39363 | RAM size | read-only: how many RAM pages the machine has (pages 1 to N are RAM); writes are ignored |
 
 Console input is the text `--input FILE` names, queued before the
 first step, plus whatever the debugger's `input` command adds, or, with

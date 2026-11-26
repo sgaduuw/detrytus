@@ -115,6 +115,26 @@ program = '''
 '''
 expect.exit_code = 7
 
+[[case]]
+name = "a root-level superpage maps 3**16 pages, far up in RAM"
+# A leaf in root entry 1: virtual pages ROOTSUPER + k go to physical
+# pages 3 * ROOTSUPER + k, past what a mid-level superpage reaches. The
+# machine is large; pages cost the emulator nothing until written.
+ram_pages = 129140200
+program = '''
+        .include "user.s"
+        .equ  ROOTSUPER, 43046721        # pages in a root-level superpage (3**16)
+        li    t0, (ROOTSUPER + 5) * PAGE + 3
+        lw    a2, 0(t0)
+        sys
+        .org  ROOT * PAGE + 3
+        .word LEAF + R + W + U + A + D + 3 * ROOTSUPER * PAGE
+        .org  (3 * ROOTSUPER + 5) * PAGE + 3
+        .word 888
+'''
+expect.exit_code = 4
+expect.registers = { a2 = 888 }
+
 # The reserved-entry cases each start from this working mapping, under
 # its own mid entry so the code page's walk is unaffected, and spoil
 # exactly one trit of it.

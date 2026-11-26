@@ -31,6 +31,13 @@ pub const POWER_PAGE: i64 = -2;
 pub const CONSOLE_OUT: i64 = CONSOLE_PAGE * PAGE;
 pub const CONSOLE_IN: i64 = CONSOLE_OUT + 3;
 pub const POWER_OFF: i64 = POWER_PAGE * PAGE;
+/// Read-only: how many RAM pages the machine has, so a kernel need not
+/// be built for one size of machine.
+pub const RAM_SIZE: i64 = POWER_OFF + 3;
+
+/// The most RAM a machine can have: every positive page number an
+/// 18-trit physical page number holds, (3^18 − 1) / 2.
+pub const MAX_RAM_PAGES: i64 = 193_710_244;
 
 /// What console in reads when there is no character: nothing yet, or
 /// nothing ever again. Any negative read is "no character".
@@ -404,6 +411,7 @@ impl Bus {
             Region::Block => Ok(self.block.read(addr)),
             Region::Fpu => Ok(self.fpu.read(addr, self.current)),
             Region::Net => Ok(self.net.read(addr)),
+            Region::Power if addr == RAM_SIZE => Ok(self.ram_pages),
             Region::Console | Region::Power => Ok(0),
             Region::Boot | Region::Ram if width == 1 => Ok(self.get(addr)),
             Region::Boot | Region::Ram => Ok(self.word(addr)),
@@ -477,6 +485,18 @@ mod tests {
         assert_eq!(bus.read(-5 * PAGE, 3, Access::Load), Err(BusError::Fault(-5 * PAGE)));
         assert_eq!(bus.read(-3 * PAGE, 3, Access::Fetch), Err(BusError::Fault(-3 * PAGE)));
         assert_eq!(bus.write(POWER_OFF, 3, 7), Err(BusError::Halt(7)));
+    }
+
+    #[test]
+    fn the_power_page_says_how_much_ram_there_is() {
+        let mut bus = Bus::new(MAX_RAM_PAGES);
+        assert_eq!(bus.read(RAM_SIZE, 3, Access::Load), Ok(MAX_RAM_PAGES));
+        assert_eq!(bus.write(RAM_SIZE, 3, 5), Ok(()));
+        assert_eq!(bus.read(RAM_SIZE, 3, Access::Load), Ok(MAX_RAM_PAGES));
+        let top = MAX_RAM_PAGES * PAGE + HALF_PAGE - 1;
+        assert_eq!(bus.write(top, 3, 42), Ok(()));
+        assert_eq!(bus.read(top, 3, Access::Load), Ok(42));
+        assert_eq!(bus.read(top + 2, 1, Access::Load), Err(BusError::Fault(top + 2)));
     }
 
     #[test]
