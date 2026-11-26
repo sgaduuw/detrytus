@@ -90,6 +90,17 @@ fn core_fmt_formats() {
 }
 
 #[test]
+fn alloc_vec_string_box_and_overflow_checks() {
+    let (code, text) = run("alloc");
+    assert_eq!(
+        text,
+        "8555 [0, 1, 4, 9] joined: <one> <two> <three> 2000000014\n\
+         None Some(4200000000) None None 1e6a2c48 78563412 (-2147483648, true)\n"
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn trait_objects_and_function_pointers() {
     assert_eq!(run("dyn"), (0, "square rect square \n".into()));
 }

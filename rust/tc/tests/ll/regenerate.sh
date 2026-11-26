@@ -1,7 +1,7 @@
 #!/bin/sh
 # Rebuild the LLVM IR the ll tests translate (rust/tc/tests/ll/*.ll)
 # from the Rust programs beside it, as docs/rust.md builds a program:
-# for riscv32imac-unknown-none-elf, with core built from source and
+# for riscv32imac-unknown-none-elf, with core and alloc built from source and
 # panics that abort at once. Needs a Rust toolchain with the target's
 # rust-std and rust-src:
 #   rustup target add riscv32imac-unknown-none-elf
@@ -28,15 +28,16 @@ for src in ${ONLY:-"$here"/*.rs}; do
     rm -f "$work"/target/riscv32imac-unknown-none-elf/release/deps/prog-*.ll
     (cd "$work" && RUSTC_BOOTSTRAP=1 \
         RUSTFLAGS="--emit=llvm-ir,link -Zunstable-options -Cpanic=immediate-abort" \
-        cargo build --quiet --release -Zbuild-std=core --target riscv32imac-unknown-none-elf)
-    # What main reaches of the program and core, as one module.
+        cargo build --quiet --release -Zbuild-std=core,alloc --target riscv32imac-unknown-none-elf)
+    # What main reaches of the program, core and alloc, as one module.
     # Cargo leaves them in deps/ before 1.100, build/CRATE/HASH/out/ since.
     release="$work"/target/riscv32imac-unknown-none-elf/release
     prog=$(ls -t $(find "$release" -name 'prog-*.ll') | head -1)
     core=$(ls -t $(find "$release" -name 'core-*.ll') | head -1)
+    alloc=$(ls -t $(find "$release" -name 'alloc-*.ll') | head -1)
     cargo run --quiet --manifest-path "$here/../../../../Cargo.toml" -p detrytus-cli -- \
-        ll --prune "$prog" "$core" -o "$here/$name.ll"
-    sed -i.bak "s|$(dirname "$prog")/||g; s|$(dirname "$core")/||g" "$here/$name.ll"
+        ll --prune "$prog" "$core" "$alloc" -o "$here/$name.ll"
+    sed -i.bak "s|$(dirname "$prog")/||g; s|$(dirname "$core")/||g; s|$(dirname "$alloc")/||g" "$here/$name.ll"
     rm "$here/$name.ll.bak"
     echo "$name.ll"
 done
