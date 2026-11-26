@@ -1727,3 +1727,23 @@ Together: 90 s for the same run, with the same output and step count,
 and nothing about the machine changed. The larger steps (a dispatch
 loop that runs a hart many instructions at a time, predecoded blocks,
 and a JIT) change the core's structure and are planned separately.
+
+### 2026-11-26 · A fast loop between deadlines
+
+The first step towards decoded blocks and a JIT. `Machine::run` runs a
+lone running hart in a tight loop for as long as a round's bookkeeping
+would change nothing: no device due to finish or be looked at
+(`Bus::next_event`), no hot-plug change due, and no access to a device
+page since the loop began. Each iteration is still one round, one tick
+and one instruction, so step counts and timing are unchanged. Any
+access to a device page ends the loop, since it may raise a line,
+start a hart or begin a transfer. The binary floating point
+coprocessor is the exception: it only computes for the hart using it,
+and Rust programs touch it every hundred or so instructions.
+
+`take_interrupt` also checks first whether anything could be pending
+(a stored ip trit, the timer due, a line raised) before building ip
+trit by trit, which it did on every step. Together: 90 s to 59 s on the
+sort benchmark, same output and step count. Most of what is left is
+per instruction: fetch, translation and decode, which decoded blocks
+remove.

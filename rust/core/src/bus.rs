@@ -113,6 +113,16 @@ enum Region {
     Net,
 }
 
+impl Region {
+    /// Whether an access here may change what the machine looks at
+    /// between steps: interrupt lines, harts started or stopped,
+    /// transfers begun. Memory may not, nor may the floating point
+    /// coprocessor, which only computes for the hart using it.
+    fn is_machine_device(self) -> bool {
+        !matches!(self, Region::Boot | Region::Ram | Region::Fpu)
+    }
+}
+
 pub fn page_of(addr: i64) -> i64 {
     split_high(addr, PAGE_TRITS)
 }
@@ -135,6 +145,10 @@ pub struct Bus {
     pub current: i64,
     /// Each hart's reserved word, by physical address.
     reservations: HashMap<i64, i64>,
+    /// Set by any access to a device page: the machine's fast loop
+    /// (`Machine::run`) stops at once, as a device may have changed an
+    /// interrupt line, started a hart or begun a transfer.
+    pub(crate) touched_device: bool,
 }
 
 impl Bus {
@@ -157,6 +171,7 @@ impl Bus {
             now: 0,
             current: 0,
             reservations: HashMap::default(),
+            touched_device: false,
         }
     }
 
@@ -295,6 +310,23 @@ impl Bus {
         }
     }
 
+    /// The first round after `now` in which `advance` may do anything:
+    /// a block command or send finishing, the link being looked at, or
+    /// a frame ready for the armed buffer. Until then a round's
+    /// `advance` changes nothing.
+    pub(crate) fn next_event(&self, now: i64) -> i64 {
+        if self.net.armed.is_some() && !self.net.arrived.is_empty() {
+            return now + 1;
+        }
+        let poll = self.net.link.as_ref().map(|_| {
+            let next = now + 1;
+            next + (POLL_ROUNDS - next.rem_euclid(POLL_ROUNDS)) % POLL_ROUNDS
+        });
+        let block = self.block.done_at().map(|t| t.max(now + 1));
+        let send = self.net.done_at().map(|t| t.max(now + 1));
+        poll.into_iter().chain(block).chain(send).min().unwrap_or(i64::MAX)
+    }
+
     /// Let the devices that take time move on to `now`.
     pub fn advance(&mut self) {
         self.advance_block();
@@ -424,7 +456,9 @@ impl Bus {
     /// Read a tryte (width 1) or the word centred on addr (width 3). A
     /// word's alignment is the caller's to check.
     pub fn read(&mut self, addr: i64, width: u32, access: Access) -> Result<i64, BusError> {
-        match self.region(addr, access)? {
+        let region = self.region(addr, access)?;
+        self.touched_device |= region.is_machine_device();
+        match region {
             Region::Console if addr == CONSOLE_IN => Ok(self.console.read()),
             Region::Harts => Ok(self.harts.read(addr, self.current)),
             Region::Irq => {
@@ -442,7 +476,9 @@ impl Bus {
     }
 
     pub fn write(&mut self, addr: i64, width: u32, value: i64) -> Result<(), BusError> {
-        match self.region(addr, Access::Store)? {
+        let region = self.region(addr, Access::Store)?;
+        self.touched_device |= region.is_machine_device();
+        match region {
             Region::Console => {
                 if addr == CONSOLE_OUT && (0..=0x10FFFF).contains(&value) {
                     self.console.output.push(value as u32);

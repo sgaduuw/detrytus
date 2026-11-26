@@ -102,6 +102,13 @@ impl Hart {
             if enabled == 0 || !self.interruptible(ring) {
                 continue;
             }
+            // Nothing can be pending without a stored ip trit, the timer
+            // due, or a line raised: the common case, checked before
+            // `pending` builds ip trit by trit.
+            let bank = &self.banks[bank_index(ring)];
+            if bank[IP] == 0 && self.time < bank[TIMECMP] && !self.external && !self.doorbell {
+                continue;
+            }
             let pending = self.pending(ring);
             for i in IRQ_PRIORITY {
                 if field(pending, i, 1) == 1 && field(enabled, i, 1) == 1 {
