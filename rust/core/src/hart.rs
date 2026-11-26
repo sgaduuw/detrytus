@@ -272,6 +272,96 @@ impl Hart {
         self.step_ring
     }
 
+    // --- for compiled code (accel.rs) ---------------------------------------
+
+    /// How many of the next steps are sure to take no interrupt, from
+    /// the timer alone, while the hart's lines and CSRs stay as they
+    /// are: 0 if one could be taken now.
+    pub fn quiet_steps(&self) -> u64 {
+        if self.step_ring.is_some() || self.events.is_some() {
+            return 0;
+        }
+        let mut quiet = u64::MAX;
+        for ring in [1, 0] {
+            let bank = &self.banks[ring as usize];
+            if bank[isa::IE] == 0 || !self.interruptible(ring) {
+                continue;
+            }
+            if bank[isa::IP] != 0 || self.external || self.doorbell {
+                return 0;
+            }
+            // A step at time t takes the timer once t >= timecmp.
+            let left = bank[isa::TIMECMP] - self.time - 1;
+            quiet = quiet.min(left.max(0) as u64);
+        }
+        quiet
+    }
+
+    /// Where the instruction at pc is in physical memory, if a fetch
+    /// would succeed in reaching it: the key compiled code is kept by.
+    pub fn code_address(&mut self, bus: &mut Bus, pc: i64) -> Option<i64> {
+        let slot = low(pc, 1);
+        if slot == -1 {
+            return None;
+        }
+        self.fetch(bus, pc, slot).ok()?;
+        let w = self.code.window?;
+        Some(w.page * PAGE + (pc - w.vpn * PAGE))
+    }
+
+    /// The instruction at pc, for compiling, or None where a fetch
+    /// would trap.
+    pub fn jit_fetch(&mut self, bus: &mut Bus, pc: i64) -> Option<crate::accel::Insn> {
+        let slot = low(pc, 1);
+        if slot == -1 {
+            return None;
+        }
+        let f = self.fetch(bus, pc, slot).ok()?;
+        Some(crate::accel::Insn { d: f.d, advance: f.advance })
+    }
+
+    /// The registers, r-13 to r13, for compiled code to read and write
+    /// (r0, at index 13, must stay 0).
+    pub fn regs_mut(&mut self) -> &mut [i64; 27] {
+        &mut self.regs
+    }
+
+    /// Run a [`Class::Compute`](crate::accel::Class) instruction at
+    /// pc: false, changing nothing, if it would trap.
+    pub fn jit_compute(&mut self, d: &Decoded, pc: i64) -> bool {
+        self.pc = pc;
+        matches!(self.compute(d), Some(Ok(())))
+    }
+
+    /// A load as compiled code makes it: None, changing nothing the
+    /// interpreter would not, where it would trap or reach a device.
+    pub fn jit_load(&mut self, bus: &mut Bus, addr: i64, width: u32) -> Option<i64> {
+        Self::aligned(addr, width).ok()?;
+        let physical = self.translate(bus, addr, mmu::Access::Load).ok()?;
+        if !bus.is_memory(physical, false) {
+            return None;
+        }
+        bus.read(physical, width, Access::Load).ok()
+    }
+
+    /// A store as compiled code makes it: None, having stored nothing,
+    /// where it would trap or reach a device. Stores the low tryte of
+    /// value for width 1.
+    pub fn jit_store(&mut self, bus: &mut Bus, addr: i64, width: u32, value: i64) -> Option<()> {
+        Self::aligned(addr, width).ok()?;
+        let physical = self.translate(bus, addr, mmu::Access::Store).ok()?;
+        if !bus.is_memory(physical, true) {
+            return None;
+        }
+        let value = if width == 1 { low(value, TRYTE_TRITS) } else { value };
+        bus.write(physical, width, value).ok()
+    }
+
+    /// Count instructions compiled code ran.
+    pub fn retire(&mut self, n: u64) {
+        self.instret += n as i64;
+    }
+
     // --- the fetch loop ----------------------------------------------------
 
     /// Run one instruction, or take an interrupt, at the time the
@@ -504,14 +594,30 @@ impl Hart {
     // --- instructions ------------------------------------------------------
 
     fn run(&mut self, bus: &mut Bus, d: &Decoded) -> Exec {
+        match self.compute(d) {
+            Some(done) => done,
+            None => {
+                let (a, b) = (self.x(d.rs1), self.x(d.rs2));
+                self.memory_or_control(bus, d, a, b)
+            }
+        }
+    }
+
+    /// An instruction that only reads and writes this hart's registers
+    /// (and `fcsr`), or None for any other.
+    fn compute(&mut self, d: &Decoded) -> Option<Exec> {
         let (a, b) = (self.x(d.rs1), self.x(d.rs2));
         if (40..=54).contains(&d.op.opcode) {
-            return self.float(d, a, b);
+            return Some(self.float(d, a, b));
         }
         if let Some(value) = Self::arithmetic(d, a, b) {
             self.set_x(d.rd, value);
-            return Ok(());
+            return Some(Ok(()));
         }
+        self.compute_rest(d, a, b)
+    }
+
+    fn compute_rest(&mut self, d: &Decoded, a: i64, b: i64) -> Option<Exec> {
         match d.op.kind {
             Kind::Sel => {
                 let value = match a.signum() {
@@ -522,17 +628,23 @@ impl Hart {
                 self.set_x(d.rd, value);
             }
             Kind::Tex => {
-                let (pos, len) = Self::field_args(d)?;
+                let (pos, len) = match Self::field_args(d) {
+                    Ok(f) => f,
+                    Err(e) => return Some(Err(e)),
+                };
                 self.set_x(d.rd, field(a, pos, len));
             }
             Kind::Tins => {
-                let (pos, len) = Self::field_args(d)?;
+                let (pos, len) = match Self::field_args(d) {
+                    Ok(f) => f,
+                    Err(e) => return Some(Err(e)),
+                };
                 self.set_x(d.rd, alu::trit_insert(self.x(d.rd), a, pos, len));
             }
             Kind::Auipc => self.set_x(d.rd, wrap(self.pc + d.imm * pow3(8))),
-            _ => return self.memory_or_control(bus, d, a, b),
+            _ => return None,
         }
-        Ok(())
+        Some(Ok(()))
     }
 
     /// A floating point instruction: the result in rd, the flags it

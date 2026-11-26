@@ -433,6 +433,21 @@ impl Bus {
         }
     }
 
+    /// Whether compiled code may load (or store) at a physical address:
+    /// RAM, the boot page for a load, and the binary floating point
+    /// coprocessor, which only computes for the hart using it. Never
+    /// another device.
+    pub(crate) fn is_memory(&self, addr: i64, store: bool) -> bool {
+        let page = page_of(addr);
+        (if store { 1 } else { 0 }..=self.ram_pages).contains(&page) || page == FPU_PAGE
+    }
+
+    /// How many stores have hit decoded code (`code_store`): compiled
+    /// code made before the count last moved may be stale.
+    pub fn code_writes(&self) -> u64 {
+        self.code_writes
+    }
+
     fn get(&self, addr: i64) -> i64 {
         let page = page_of(addr);
         self.pages.get(&page).map_or(0, |p| p[(addr - page * PAGE + HALF_PAGE) as usize] as i64)

@@ -87,7 +87,7 @@ impl Hart {
             .min()
     }
 
-    fn interruptible(&self, ring: i64) -> bool {
+    pub(crate) fn interruptible(&self, ring: i64) -> bool {
         if self.ring < ring {
             return true;
         }

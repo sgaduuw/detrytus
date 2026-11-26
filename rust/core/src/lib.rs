@@ -8,12 +8,13 @@
 //! floating point coprocessor and the network device. Debug
 //! triggers are specified but not implemented yet.
 
+pub mod accel;
 pub mod alu;
 pub mod block;
 pub mod bus;
 pub mod compressed;
 pub mod entropy;
-mod fastmap;
+pub mod fastmap;
 pub mod float;
 pub mod fpu;
 pub mod hart;

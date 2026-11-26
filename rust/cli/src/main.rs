@@ -32,7 +32,7 @@ use program::{Loaded, load, load_one, strerror};
 const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
-                    [--live] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
                     FILE...
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
@@ -77,6 +77,8 @@ struct RunArgs {
     disk: Option<DiskSpec>,
     net: Option<net::NetSpec>,
     mac: Option<u64>,
+    /// `--no-jit`: interpret every instruction.
+    no_jit: bool,
 }
 
 /// A failure that ends the command: its message and exit status.
@@ -128,6 +130,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         disk: None,
         net: None,
         mac: None,
+        no_jit: false,
     };
     let mut disk = DiskArgs::default();
     let mut args = args.peekable();
@@ -136,6 +139,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--ram-pages" => run.ram_pages = ram_pages(&arg, args.next())?,
             "--max-steps" => run.max_steps = Some(number(&arg, args.next())?),
             "--live" => run.live = true,
+            "--no-jit" => run.no_jit = true,
             "--stats" => run.stats = true,
             "--trace" => run.trace = true,
             "--mix" => run.mix = true,
@@ -381,6 +385,9 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     let several = args.harts > 1 || !args.hotplug.is_empty();
     if args.trace || args.mix {
         machine.record_events(true);
+    }
+    if !args.no_jit {
+        machine.set_accelerator(Some(Box::new(detrytus_jit::Jit::new())));
     }
     let mut mix = mix::Mix::default();
     let mut stdout = std::io::stdout();
