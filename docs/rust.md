@@ -107,6 +107,9 @@ a branch uses becomes a compare-and-branch; one kept as a value is
 
 A load of a 2- or 4-byte value calls a small helper that reads its
 trytes and joins them; a store calls one that splits it (see Size).
+A load or store touches the integer's bits rounded up to bytes, LLVM's
+store size, and no more: an `i24`, which SROA makes of the bytes beside
+an enum's tag, is 3 bytes, though it takes 4 in an array.
 A struct or array value is held as one register per scalar in it (a
 slice is two: pointer and length).
 

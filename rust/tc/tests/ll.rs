@@ -13,6 +13,20 @@ fn run(name: &str) -> (i64, String) {
     let bare = dir.join("bare.s").display().to_string();
     let out = detrytus_tc::ll::translate(&[&ll], &[bare])
         .unwrap_or_else(|e| panic!("does not translate: {e}"));
+    execute(name, out)
+}
+
+/// IR written out in a test, run as `run` runs a program.
+fn run_text(src: &str) -> (i64, String) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ll");
+    let bare = dir.join("bare.s").display().to_string();
+    let out = detrytus_tc::ll::translate_text(src, &[bare])
+        .unwrap_or_else(|e| panic!("does not translate: {e}"));
+    execute("input", out)
+}
+
+fn execute(name: &str, out: detrytus_tc::Output) -> (i64, String) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ll");
     let shown = dir.join(format!("{name}.s")).display().to_string();
     let image = detrytus_asm::assemble(&out.assembly, Some(&shown))
         .unwrap_or_else(|e| panic!("does not assemble: {e}\n{}", out.assembly));
@@ -196,4 +210,46 @@ fn a_number_as_a_pointer_in_data() {
                start:\n  %v = load ptr, ptr @p\n  %x = ptrtoint ptr %v to i32\n  ret i32 %x\n}\n";
     let out = detrytus_tc::ll::translate_text(src, &[]).unwrap_or_else(|e| panic!("{e}"));
     assert!(out.assembly.contains(".tryte (1) % 256"), "{}", out.assembly);
+}
+
+#[test]
+fn an_odd_sized_integer_touches_only_its_own_bytes() {
+    // LLVM loads and stores an i24 as 3 bytes and an i56 as 7, though
+    // each takes 4 or 8 in an array; SROA makes them of a struct's
+    // padding (an enum tag's neighbours). Reading a fourth byte made a
+    // String's capacity look like an enum's niche.
+    let src = "define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n\
+               \x20 %buf = alloca [16 x i8], align 4\n\
+               \x20 store i64 -1, ptr %buf\n\
+               \x20 %hi = getelementptr inbounds i8, ptr %buf, i32 8\n\
+               \x20 store i64 -1, ptr %hi\n\
+               \x20 %p1 = getelementptr inbounds i8, ptr %buf, i32 1\n\
+               \x20 store i24 0, ptr %p1\n\
+               \x20 %b4p = getelementptr inbounds i8, ptr %buf, i32 4\n\
+               \x20 %b4 = load i8, ptr %b4p\n\
+               \x20 %w = load i32, ptr %buf\n\
+               \x20 store i24 5, ptr %p1\n\
+               \x20 %a = load i24, ptr %p1\n\
+               \x20 store i56 0, ptr %hi\n\
+               \x20 %b15p = getelementptr inbounds i8, ptr %buf, i32 15\n\
+               \x20 %b15 = load i8, ptr %b15p\n\
+               \x20 store i8 9, ptr %b15p\n\
+               \x20 %c = load i56, ptr %hi\n\
+               \x20 %ok1 = icmp eq i8 %b4, -1\n\
+               \x20 %ok2 = icmp eq i32 %w, 255\n\
+               \x20 %ok3 = icmp eq i24 %a, 5\n\
+               \x20 %ok4 = icmp eq i8 %b15, -1\n\
+               \x20 %ok5 = icmp eq i56 %c, 0\n\
+               \x20 %e1 = select i1 %ok1, i32 0, i32 1\n\
+               \x20 %e2 = select i1 %ok2, i32 0, i32 2\n\
+               \x20 %e3 = select i1 %ok3, i32 0, i32 4\n\
+               \x20 %e4 = select i1 %ok4, i32 0, i32 8\n\
+               \x20 %e5 = select i1 %ok5, i32 0, i32 16\n\
+               \x20 %s1 = or i32 %e1, %e2\n\
+               \x20 %s2 = or i32 %s1, %e3\n\
+               \x20 %s3 = or i32 %s2, %e4\n\
+               \x20 %s4 = or i32 %s3, %e5\n\
+               \x20 ret i32 %s4\n}\n";
+    assert_eq!(run_text(src), (0, String::new()));
 }

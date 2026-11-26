@@ -798,8 +798,18 @@ impl<'m> Lower<'m> {
         }
     }
 
+    /// The bytes a load or store of scalar `t` touches: LLVM's store size,
+    /// which for an integer is its bits rounded up to bytes, not its
+    /// alloc size (an i24 is 3 bytes, though it takes 4 in an array).
+    fn store_size(&self, t: &Ty) -> R<i128> {
+        Ok(match self.resolve(t)? {
+            Ty::Int(b) => b.div_ceil(8) as i128,
+            t => self.size(&t)? as i128,
+        })
+    }
+
     fn load_scalar(&mut self, t: &Ty, base: &str, off: i128) -> R<&'static str> {
-        let bytes = self.size(t)? as i128;
+        let bytes = self.store_size(t)?;
         if bytes > 4 {
             return Err(format!("{}-byte values are not supported yet", bytes));
         }
@@ -827,7 +837,7 @@ impl<'m> Lower<'m> {
     }
 
     fn store_scalar(&mut self, t: &Ty, v: &'static str, base: &str, off: i128) -> R<()> {
-        let bytes = self.size(t)? as i128;
+        let bytes = self.store_size(t)?;
         if bytes > 4 {
             return Err(format!("{}-byte values are not supported yet", bytes));
         }
