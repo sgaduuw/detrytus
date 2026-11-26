@@ -1841,6 +1841,13 @@ within one of the true one, the remainder computed modulo 2^64 with it
 is exact, and one correction step finishes it. Divide, remainder and
 the binary `band`/`bor`/`bxor` are inline too. `tlut` in the core no
 longer divides by a variable power of 3 for each trit, which helps the
-interpreter as well.
+interpreter as well; compiled code spreads each `tlut`'s table over
+pairs of 3-trit groups once (`alu::TlutGroups`, 729 bytes) and applies
+it in 9 lookups instead of 27 (Rust programs use it for every binary
+operation).
 
-Sort benchmark: 22 s to 12 s, same output and step count.
+Sort benchmark: 22 s to about 10.5 s, same output and step count. A
+profile now shows the 9% of steps still interpreted (mostly the
+kernel's trap entry and exit, `csrrw` and `tret`) as the largest cost;
+interpreting one step after such an instruction instead of eight made
+no difference.

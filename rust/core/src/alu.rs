@@ -103,6 +103,60 @@ pub fn tlut(a: i64, b: i64, table: i64) -> i64 {
     out as i64 - WORD_MAX
 }
 
+/// A truth table spread over three trits at a time: what `tlut` gives
+/// for each pair of 3-trit groups, so applying it takes 9 lookups
+/// rather than 27. Groups and results are read as plain base-3 digits,
+/// each trit plus one.
+pub struct TlutGroups(Box<[u8; 729]>);
+
+impl TlutGroups {
+    pub fn new(table: i64) -> Self {
+        let mut entry = [0u8; 9];
+        let mut t = table;
+        for e in &mut entry {
+            let trit = low(t, 1);
+            *e = (trit + 1) as u8;
+            t = (t - trit) / 3;
+        }
+        let mut groups = Box::new([0u8; 729]);
+        for (i, g) in groups.iter_mut().enumerate() {
+            let (mut a, mut b) = (i / 27, i % 27);
+            let (mut out, mut place) = (0, 1);
+            for _ in 0..3 {
+                out += entry[3 * (a % 3) + b % 3] * place;
+                a /= 3;
+                b /= 3;
+                place *= 3;
+            }
+            *g = out;
+        }
+        TlutGroups(groups)
+    }
+
+    /// `tlut(a, b, table)` for the table this was made from.
+    pub fn apply(&self, a: i64, b: i64) -> i64 {
+        Self::apply_groups(&self.0, a, b)
+    }
+
+    /// The spread table itself, which stays put while this lives.
+    pub fn groups(&self) -> &[u8; 729] {
+        &self.0
+    }
+
+    /// `apply`, given `groups()`.
+    pub fn apply_groups(groups: &[u8; 729], a: i64, b: i64) -> i64 {
+        let (mut a, mut b) = ((a + WORD_MAX) as u64, (b + WORD_MAX) as u64);
+        let (mut out, mut place) = (0u64, 1u64);
+        for _ in 0..WORD_TRITS / 3 {
+            out += groups[(27 * (a % 27) + b % 27) as usize] as u64 * place;
+            a /= 27;
+            b /= 27;
+            place *= 27;
+        }
+        out as i64 - WORD_MAX
+    }
+}
+
 /// 2ⁿ modulo 3²⁷, for a left binary shift by a large n.
 fn pow2_mod(mut n: i64) -> i128 {
     let m = WORD_MOD as i128;
@@ -189,9 +243,18 @@ mod tests {
             let (a, b, t) = (next(), next(), low(next(), 9));
             assert_eq!(tlut(a, b, t), reference(a, b, t), "{a} {b} {t}");
         }
+        for _ in 0..2_000 {
+            let t = low(next(), 9);
+            let groups = TlutGroups::new(t);
+            for _ in 0..10 {
+                let (a, b) = (next(), next());
+                assert_eq!(groups.apply(a, b), reference(a, b, t), "{a} {b} {t}");
+            }
+        }
         for (a, b) in [(WORD_MAX, -WORD_MAX), (-WORD_MAX, WORD_MAX), (0, 0)] {
             for t in [-9841, 9841, 5792, 0] {
                 assert_eq!(tlut(a, b, t), reference(a, b, t));
+                assert_eq!(TlutGroups::new(t).apply(a, b), reference(a, b, t));
             }
         }
     }
