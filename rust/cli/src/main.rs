@@ -39,7 +39,8 @@ const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] FILE...
        detrytus tc [-c] FILE [-o FILE]
-       detrytus ll [--include FILE]... [--prune [--root NAME]...] FILE... [-o FILE]";
+       detrytus ll [--include FILE]... [--signed-pointers] [--prune [--root NAME]...] FILE...
+                   [-o FILE]";
 
 // Exit statuses, as the Python command uses them (sysexits.h where one fits).
 const USAGE_ERROR: u8 = 2;

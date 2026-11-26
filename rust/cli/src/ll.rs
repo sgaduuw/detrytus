@@ -8,6 +8,7 @@ use crate::{BAD_INPUT, Fail, NO_INPUT, usage};
 pub(crate) fn cmd_ll(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     let (mut files, mut output, mut includes, mut prune) = (Vec::new(), None, Vec::new(), false);
     let mut roots = Vec::new();
+    let mut options = detrytus_tc::ll::Options::default();
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -18,6 +19,7 @@ pub(crate) fn cmd_ll(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
                 includes.push(args.next().ok_or_else(|| usage("--include needs a file"))?)
             }
             "--prune" => prune = true,
+            "--signed-pointers" => options.signed_pointers = true,
             "--root" => roots.push(args.next().ok_or_else(|| usage("--root needs a name"))?),
             flag if flag.starts_with('-') => {
                 return Err(usage(&format!("unknown option {flag}")));
@@ -46,7 +48,7 @@ pub(crate) fn cmd_ll(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
         }
         return Ok(0);
     }
-    let out = detrytus_tc::ll::translate(&paths, &includes)
+    let out = detrytus_tc::ll::translate_with(&paths, &includes, &options)
         .map_err(|e| Fail::new(e.to_string(), BAD_INPUT))?;
     match output {
         None => print!("{}", out.assembly),

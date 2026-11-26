@@ -28,12 +28,31 @@ fn read(paths: &[&Path]) -> Result<(ir::Module, String), Error> {
     Ok((m, shown.join(", ")))
 }
 
+/// How a translation differs from the default, which suits a user
+/// program.
+#[derive(Clone, Debug, Default)]
+pub struct Options {
+    /// Pointers are signed addresses, two's complement in memory and in
+    /// integers, so an address below 0 can be one (docs/rust.md,
+    /// Pointers). A kernel needs it; a program running above 0 does not.
+    pub signed_pointers: bool,
+}
+
 /// Translate the LLVM IR modules at `paths` into one assembly file that
 /// includes `includes` first (paths as `.include` should name them).
 pub fn translate(paths: &[&Path], includes: &[String]) -> Result<Output, Error> {
+    translate_with(paths, includes, &Options::default())
+}
+
+/// `translate`, with `options`.
+pub fn translate_with(
+    paths: &[&Path],
+    includes: &[String],
+    options: &Options,
+) -> Result<Output, Error> {
     let (mut m, shown) = read(paths)?;
     with_float(&mut m)?;
-    translate_module(&m, &shown, includes)
+    translate_module(&m, &shown, includes, options)
 }
 
 /// Add the floating-point functions (lower/float.ll) to a module: what
@@ -160,17 +179,32 @@ pub fn prune(paths: &[&Path], roots: &[&str]) -> Result<String, Error> {
 
 /// Translate LLVM IR given as text, for tests.
 pub fn translate_text(text: &str, includes: &[String]) -> Result<Output, Error> {
+    translate_text_with(text, includes, &Options::default())
+}
+
+/// `translate_text`, with `options`.
+pub fn translate_text_with(
+    text: &str,
+    includes: &[String],
+    options: &Options,
+) -> Result<Output, Error> {
     let mut m = ir::Module::default();
     ir::parse(text, "input.ll", 0, &mut m)?;
     with_float(&mut m)?;
-    translate_module(&m, "input.ll", includes)
+    translate_module(&m, "input.ll", includes, options)
 }
 
-fn translate_module(m: &ir::Module, shown: &str, includes: &[String]) -> Result<Output, Error> {
+fn translate_module(
+    m: &ir::Module,
+    shown: &str,
+    includes: &[String],
+    options: &Options,
+) -> Result<Output, Error> {
     if !m.funcs.contains_key("main") {
         return Err(Error::new(shown, 0, "no function main".into()));
     }
     let mut low = lower::Lower::new(m);
+    low.signed_ptrs = options.signed_pointers;
     let (funcs, globals, external) = low.reachable(&["main"]);
     let muls = funcs
         .iter()
@@ -203,6 +237,7 @@ fn translate_module(m: &ir::Module, shown: &str, includes: &[String]) -> Result<
         let roots: Vec<&str> = low.wide_calls.iter().copied().collect();
         let mut wl = lower::Lower::new(&hm);
         wl.inline_wide = true;
+        wl.signed_ptrs = options.signed_pointers;
         let (hfuncs, _, _) = wl.reachable(&roots);
         for f in &hfuncs {
             out.extend(wl.function(&hm.funcs[f])?);

@@ -49,6 +49,8 @@ defines are left to the included assembly. `--prune` writes the
 reachable part of the modules as one LLVM IR module instead, which is
 how the tests keep only what they need of core; `--root NAME` (any
 number of times) prunes from those functions instead of `main`.
+`--signed-pointers` makes pointers signed (Pointers, below), which
+code running below address 0, a kernel, needs.
 
 ## What the program and its runtime agree on
 
@@ -82,7 +84,8 @@ tests its sign bit (`lshr` by 31, as core's sort does) reads it wrong.
 | Rust and LLVM | detrytus |
 |---------------|----------|
 | a byte (`u8`, `i8`, `bool`) in memory | one tryte holding 0..255, as devices use (isa.md 11) |
-| `u16`, `u32`, a pointer in memory | 2 or 4 trytes, low byte first, each 0..255 |
+| `u16`, `u32` in memory | 2 or 4 trytes, low byte first, each 0..255 |
+| a pointer in memory | 4 trytes, low byte first, each 0..255 (with `--signed-pointers`, the address in two's complement: Pointers) |
 | an N-bit integer in a register | a word holding its unsigned value, 0 .. 2ᴺ − 1 |
 | a 33- to 256-bit integer in registers | a word per 32 bits, low first (Wide integers) |
 | `i1` (a comparison) | 0 or 1 |
@@ -159,6 +162,38 @@ Widths in between (33 to 63 bits, 65 to 127, up to 256) get the
 operations done on the limbs, not the helpers. Core formats a `u128`
 by multiplying it as a 256-bit integer by a constant and shifting,
 which is how it divides by 10¹⁹, so 256 bits are needed too.
+
+### Pointers
+
+A pointer is an unsigned 32-bit number, as LLVM sees it, which a
+program running above address 0 needs no more of: its addresses, and
+the bytes that stand for them, are the same numbers. A kernel runs
+below 0 too (trylobite's code near −68 900, its device pages from −9 to
+−1 pages), so `--signed-pointers` makes pointers signed: in a register
+a pointer is the address itself, below 0 or above, reaching ±2³¹
+trytes balanced around 0 as the machine's addresses are. Where it
+meets memory or an integer it becomes its 32 bits in two's complement
+and back:
+
+- a pointer is stored and loaded through helpers of its own (`ll$stp`,
+  `ll$ldp`): a negative address is stored as 2³² more, and the top
+  byte is read back as signed, so the call site costs what a `u32`'s
+  does;
+- `ptrtoint` gives the 32 bits (2³² more when the address is below 0),
+  `inttoptr` takes the signed value of the low 32;
+- a pointer in static data is those bytes, worked out from the label
+  by the assembler; a number made into a pointer is its own bytes.
+
+Comparisons of pointers compare the addresses. That is LLVM's
+unsigned order wherever both sit on the same side of 0, which holds
+for any two addresses in one object as long as no object straddles
+address 0; page 0 is never mapped for that and other reasons. Copies
+(`memcpy`) and arithmetic (`getelementptr`) are unchanged: one moves
+bytes, the other adds to the address.
+
+It costs time, not room: on trylobite's sort benchmark, whose programs
+load pointers all the time, 10% more steps (810 to 892 million) and
+about 2% more code. So it is a switch, for the code that needs it.
 
 ## Calls and frames
 
