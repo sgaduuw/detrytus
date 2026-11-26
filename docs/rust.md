@@ -70,6 +70,11 @@ and the included assembly provides:
 - whatever `extern "C"` functions the program declares, such as system
   calls.
 
+Each takes and returns its values as the translated code holds them
+(Binary integers, below): an `i32` result such as `memcmp`'s that is
+below 0 is returned as its unsigned value, `2^32` more, or code that
+tests its sign bit (`lshr` by 31, as core's sort does) reads it wrong.
+
 `rust/tc/tests/ll/bare.s` is such a runtime for the bare machine.
 
 ## Binary integers on a ternary machine

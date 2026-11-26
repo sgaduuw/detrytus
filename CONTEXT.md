@@ -1666,6 +1666,14 @@ what the translator needed was the IR `alloc` brings in:
   `#[global_allocator]`, and calls `__rust_no_alloc_shim_is_unstable_v2`,
   which its linker would add, to make sure the shim is linked. Taking
   the call as nothing is what that function does.
+- **Constants: a number as a pointer in data** (`inttoptr (i32 1 to
+  ptr)`, the dangling pointer of an empty slice in a static), and an
+  address plus or minus a number.
+- **A runtime's `i32` results are held unsigned.** `bare.s`'s `memcmp`
+  returned a negative difference as it was; core's sort tests the sign
+  with `lshr 31`, read garbage and indexed off the slice. It now adds
+  2^32, as every `i32` is held, and docs/rust.md says so for any
+  runtime function.
 - **The test is a bump allocator in a static array**
   (`rust/tc/tests/ll/alloc.rs`), which the bare machine needs no heap
   for; `regenerate.sh` builds `alloc` too and prunes it with core.

@@ -95,7 +95,8 @@ fn alloc_vec_string_box_and_overflow_checks() {
     assert_eq!(
         text,
         "8555 [0, 1, 4, 9] joined: <one> <two> <three> 2000000014\n\
-         None Some(4200000000) None None 1e6a2c48 78563412 (-2147483648, true)\n"
+         None Some(4200000000) None None 1e6a2c48 78563412 (-2147483648, true)\n\
+         sorted true line 112 line 999\n"
     );
     assert_eq!(code, 0);
 }
@@ -185,4 +186,14 @@ fn a_block_may_come_before_the_block_defining_what_it_uses() {
                late:\n  %z = add i32 %y, 1\n  ret i32 %z\n\
                def:\n  %y = add i32 %argc, 1\n  br label %late\n}\n";
     detrytus_tc::ll::translate_text(src, &[]).unwrap_or_else(|e| panic!("{e}"));
+}
+
+#[test]
+fn a_number_as_a_pointer_in_data() {
+    // A dangling NonNull, as an empty slice in a static has.
+    let src = "@p = global { ptr, i32 } { ptr inttoptr (i32 1 to ptr), i32 0 }\n\
+               define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n  %v = load ptr, ptr @p\n  %x = ptrtoint ptr %v to i32\n  ret i32 %x\n}\n";
+    let out = detrytus_tc::ll::translate_text(src, &[]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(out.assembly.contains(".tryte (1) % 256"), "{}", out.assembly);
 }

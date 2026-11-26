@@ -634,6 +634,16 @@ impl<'m> Lower<'m> {
             {
                 self.const_addr(&from.1)?
             }
+            // An address plus or minus a number (ptrtoint of a global, add).
+            Const::Bin { op, a, b } if matches!(op.as_str(), "add" | "sub") => {
+                let (Some(x), Some(k)) = (self.const_addr(&a.1)?, self.const_int(&b.1, &b.0)?)
+                else {
+                    return Ok(None);
+                };
+                let k = Self::as_signed(k, self.bits(&b.0)?);
+                let k = if op == "sub" { -k } else { k };
+                Some(format!("{x} + {k}"))
+            }
             _ => None,
         })
     }
@@ -1926,8 +1936,14 @@ impl<'m> Lower<'m> {
                 }
             }
             _ => {
-                let Some(a) = self.const_addr(c)? else {
-                    return Err(format!("constant {c:?} is not supported in data"));
+                // A pointer made from a number (a dangling NonNull, say)
+                // is that number; anything else an address.
+                let a = match self.const_int(c, &t)? {
+                    Some(v) => v.to_string(),
+                    None => match self.const_addr(c)? {
+                        Some(a) => a,
+                        None => return Err(format!("constant {c:?} is not supported in data")),
+                    },
                 };
                 let mut div = 1i128;
                 for _ in 0..size {

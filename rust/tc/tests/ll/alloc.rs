@@ -1,7 +1,8 @@
 //! The alloc crate: Vec, String, Box and format! over a global
 //! allocator, here a bump allocator in a static array; and the
 //! intrinsics alloc reaches: multiplication and addition that report
-//! overflow, bit and byte reversal.
+//! overflow, bit and byte reversal; and sorting Strings, whose
+//! comparison tests the sign bit of memcmp's result.
 #![no_std]
 
 extern crate alloc;
@@ -24,7 +25,7 @@ impl Write for Out {
     }
 }
 
-const SIZE: usize = 6000;
+const SIZE: usize = 30000;
 static mut HEAP: [u8; SIZE] = [0; SIZE];
 static mut BASE: *mut u8 = addr_of_mut!(HEAP) as *mut u8;
 static mut USED: usize = 0;
@@ -80,5 +81,14 @@ pub extern "C" fn main(argc: i32, _argv: *const *const u8) -> i32 {
         x.swap_bytes(),
         (z as i32).overflowing_add(147_483_648),
     );
+    let mut x = x;
+    let mut lines: Vec<String> = Vec::new();
+    for _ in 0..200 {
+        x = x.wrapping_mul(1103515245).wrapping_add(12345);
+        lines.push(format!("line {}", (x >> 16) % 1000));
+    }
+    lines.sort_unstable();
+    let ok = lines.windows(2).all(|w| w[0] <= w[1]);
+    let _ = writeln!(o, "sorted {} {} {}", ok, lines[0], lines[199]);
     0
 }
