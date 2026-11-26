@@ -1677,3 +1677,26 @@ what the translator needed was the IR `alloc` brings in:
 - **The test is a bump allocator in a static array**
   (`rust/tc/tests/ll/alloc.rs`), which the bare machine needs no heap
   for; `regenerate.sh` builds `alloc` too and prunes it with core.
+
+### 2026-11-26 · RAM of any size, and a register that says how much
+
+Eelco wanted the amount of memory to be arbitrary. The ISA never capped
+it: a physical page number is 18 trits, so every positive page up to
+193,710,244, the top of the address space, may be RAM. Two things made
+it look fixed:
+
+- **Nothing told software the size,** so trylobite built `RAM_PAGES`
+  into each kernel and the emulator had to be run with the same count.
+  The power page now has a read-only **RAM size** register at −39363,
+  next to power off: a fixed platform register, as a real board's
+  memory controller or firmware table would say it, rather than having
+  the kernel probe for access faults, which would also read device
+  pages' side effects into a scan.
+- **`--ram-pages` took any number.** It now refuses counts outside
+  1..=193,710,244 rather than building a machine whose top pages no
+  page number can name.
+
+The emulator's RAM was already sparse (a page is allocated on first
+write), so a machine of millions of pages costs only the pages used. A
+conformance case maps a root-level superpage to page 3 × 3¹⁶ + 5 to
+show the far end of RAM is reachable through paging.

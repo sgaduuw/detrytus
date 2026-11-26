@@ -1,0 +1,40 @@
+# Power control (docs/platform.md, Devices): page -2. Writing POWER stops
+# the machine; RAM_SIZE, the next word, reads how many RAM pages there are.
+
+[defaults]
+prelude = '''
+        .equ  POWER, -39366
+        .equ  RAM_SIZE, -39363
+'''
+
+[[case]]
+name = "RAM_SIZE reads the machine's RAM pages"
+ram_pages = 123456
+program = '''
+        li    t0, RAM_SIZE
+        lw    s2, 0(t0)
+        li    t1, 5
+        sw    t1, 0(t0)
+        lw    s3, 0(t0)
+        li    a0, 0
+'''
+postlude = "li t6, POWER\nsw a0, 0(t6)"
+expect.exit_code = 0
+expect.registers = { s2 = 123456, s3 = 123456 }
+
+[[case]]
+name = "the last RAM page is the one RAM_SIZE names"
+ram_pages = 50
+program = '''
+        li    t0, RAM_SIZE
+        lw    s2, 0(t0)
+        li    t1, 19683
+        mul   t0, s2, t1
+        li    t1, 77
+        sw    t1, 9837(t0)
+        lw    s3, 9837(t0)
+        li    a0, 0
+'''
+postlude = "li t6, POWER\nsw a0, 0(t6)"
+expect.exit_code = 0
+expect.registers = { s2 = 50, s3 = 77 }

@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use detrytus_asm::disasm::disassemble;
+use detrytus_core::bus::MAX_RAM_PAGES;
 use detrytus_core::hart::Event;
 use detrytus_core::trits::low;
 use detrytus_core::{Hotplug, Machine, Outcome};
@@ -101,6 +102,17 @@ fn number<T: std::str::FromStr>(flag: &str, value: Option<String>) -> Result<T, 
     value.and_then(|v| v.parse().ok()).ok_or_else(|| usage(&format!("{flag} needs a number")))
 }
 
+/// `--ram-pages`: any count from 1 to the most an 18-trit physical page
+/// number reaches. Pages cost host memory only once something writes them.
+fn ram_pages(flag: &str, value: Option<String>) -> Result<i64, Fail> {
+    let pages: i64 = number(flag, value)?;
+    if (1..=MAX_RAM_PAGES).contains(&pages) {
+        Ok(pages)
+    } else {
+        Err(usage(&format!("{flag} must be 1 to {MAX_RAM_PAGES}")))
+    }
+}
+
 fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     let mut run = RunArgs {
         files: Vec::new(),
@@ -121,7 +133,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--ram-pages" => run.ram_pages = number(&arg, args.next())?,
+            "--ram-pages" => run.ram_pages = ram_pages(&arg, args.next())?,
             "--max-steps" => run.max_steps = Some(number(&arg, args.next())?),
             "--live" => run.live = true,
             "--stats" => run.stats = true,
@@ -472,7 +484,7 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--ram-pages" => ram_pages = number(&arg, args.next())?,
+            "--ram-pages" => ram_pages = self::ram_pages(&arg, args.next())?,
             "-b" | "--break" => {
                 breaks.push(args.next().ok_or_else(|| usage("-b needs an address"))?)
             }
