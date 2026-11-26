@@ -357,6 +357,36 @@ impl Hart {
         bus.write(physical, width, value).ok()
     }
 
+    /// What compiled code's own map of pages (`jit_page`) depends on:
+    /// while it stays the same, a page found earlier is still where an
+    /// access would go, and still allowed. The hart's translations
+    /// change only with its ring, `ptbr`, SUA or a `fence.vm`, none of
+    /// which compiled code runs; a store's page also stops qualifying
+    /// once code is decoded in it or another hart reserves a word.
+    pub fn jit_view(&self, bus: &Bus) -> crate::accel::MemoryView {
+        crate::accel::MemoryView {
+            hart: bus.current,
+            ring: self.ring,
+            ptbr: self.ptbr,
+            sua: field(self.banks[0][isa::TSTATUS], isa::ST_SUA, 1) == 1,
+            generation: self.mmu.generation(),
+            code_pages: bus.code_pages,
+            reserved: bus.reserved_by_others(),
+        }
+    }
+
+    /// The RAM page that a load (or store) at addr reaches, for compiled
+    /// code to read (or write) directly while `jit_view` is unchanged:
+    /// a pointer to the tryte at its centre (`Bus::ram_page`). None
+    /// where the access would trap, or reaches anything but plain RAM.
+    /// Call it only for an access just made, so the translation adds
+    /// nothing the interpreter would not have.
+    pub fn jit_page(&mut self, bus: &mut Bus, addr: i64, store: bool) -> Option<*mut i16> {
+        let access = if store { mmu::Access::Store } else { mmu::Access::Load };
+        let physical = self.translate(bus, addr, access).ok()?;
+        bus.ram_page(page_of(physical), store)
+    }
+
     /// Count instructions compiled code ran.
     pub fn retire(&mut self, n: u64) {
         self.instret += n as i64;

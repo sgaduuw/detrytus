@@ -155,6 +155,10 @@ pub struct Bus {
     code: HashMap<i64, Box<[u64]>>,
     /// How many stores have hit a decoded word.
     pub(crate) code_writes: u64,
+    /// How many times a page first had a word decoded in it: compiled
+    /// code that stores straight to pages without decoded code
+    /// (`Hart::jit_page`) must look again when it moves.
+    pub(crate) code_pages: u64,
 }
 
 /// Words in a page, and so bits in a page's code map.
@@ -189,6 +193,7 @@ impl Bus {
             touched_device: false,
             code: HashMap::default(),
             code_writes: 0,
+            code_pages: 0,
         }
     }
 
@@ -442,6 +447,32 @@ impl Bus {
         (if store { 1 } else { 0 }..=self.ram_pages).contains(&page) || page == FPU_PAGE
     }
 
+    /// Where a RAM page's trytes live in host memory, for compiled code
+    /// to load and store directly: a pointer to the tryte at the page's
+    /// centre, so tryte `addr` is at `addr - page * PAGE` from it. The
+    /// page is allocated if it was not yet; pages are never freed, so
+    /// the pointer stays valid as long as the bus.
+    ///
+    /// For a store, None where the page holds decoded code or another
+    /// hart holds a reservation, as such a store must do more than
+    /// write (`write`).
+    pub(crate) fn ram_page(&mut self, page: i64, store: bool) -> Option<*mut i16> {
+        if !(1..=self.ram_pages).contains(&page) {
+            return None;
+        }
+        if store && (self.code.contains_key(&page) || self.reserved_by_others()) {
+            return None;
+        }
+        let (mem, _) = self.page_mut(page * PAGE);
+        // SAFETY: HALF_PAGE is within the page.
+        Some(unsafe { mem.as_mut_ptr().add(HALF_PAGE as usize) })
+    }
+
+    /// Whether a hart other than the current one holds a reservation.
+    pub(crate) fn reserved_by_others(&self) -> bool {
+        self.reservations.keys().any(|&h| h != self.current)
+    }
+
     /// How many stores have hit decoded code (`code_store`): compiled
     /// code made before the count last moved may be stale.
     pub fn code_writes(&self) -> u64 {
@@ -479,7 +510,10 @@ impl Bus {
     /// in RAM or the boot page), so that a store to it is seen.
     pub(crate) fn mark_code(&mut self, addr: i64) {
         let (page, i) = word_index(addr);
-        let bits = self.code.entry(page).or_insert_with(|| vec![0; PAGE_WORDS.div_ceil(64)].into());
+        let bits = self.code.entry(page).or_insert_with(|| {
+            self.code_pages += 1;
+            vec![0; PAGE_WORDS.div_ceil(64)].into()
+        });
         bits[i / 64] |= 1 << (i % 64);
     }
 

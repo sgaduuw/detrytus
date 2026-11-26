@@ -77,6 +77,50 @@ add3:   add   a0, a0, t3
         jalr  r0, 0(ra)
 "#;
 
+/// Loads and stores of trytes and words, with values too wide for a
+/// tryte, ending in a misaligned load that traps; and the arithmetic
+/// compiled inline, at the edges of the word range. (Stores to decoded
+/// code: SELF_MODIFYING.)
+const MEMORY: &str = r#"
+        li    t0, 59049          # a data page
+        li    t1, 3800000000000  # beyond a tryte, near the word's top
+        li    t2, 40
+        li    a0, 0
+fill:   sw    t1, 0(t0)
+        st    t1, 3(t0)          # keeps the low tryte
+        st    t2, 4(t0)
+        lw    t3, 0(t0)
+        lt    t4, 3(t0)
+        lt    t5, 4(t0)
+        add   a0, a0, t3
+        add   a0, a0, t4
+        sub   a0, a0, t5
+        mul   t3, t1, t3         # wraps
+        mul   t4, t3, t2
+        add   a0, a0, t4
+        div   t4, t3, t2
+        rem   t5, t3, t2
+        add   a0, a0, t4
+        add   a0, a0, t5
+        div   t4, t3, r0         # by zero: 0
+        rem   t5, t3, r0         # by zero: the dividend
+        add   a0, a0, t4
+        sub   a0, a0, t5
+        band  t4, t3, t1
+        bor   t5, t3, t2
+        add   a0, a0, t4
+        add   a0, a0, t5
+        sub   t6, r0, t3
+        bxor  t4, t6, t1
+        add   a0, a0, t4
+        addi  t0, t0, 6
+        addi  t1, t1, -12345678
+        addi  t2, t2, -1
+        bne   t2, r0, fill
+        li    t6, 59049
+        lw    t4, -2(t6)         # misaligned: left to the interpreter
+"#;
+
 fn run_file(
     source: &str,
     file: Option<&str>,
@@ -127,4 +171,14 @@ fn rewritten_code_runs_as_rewritten() {
     let (outcome, _, _) = run(SELF_MODIFYING, "", true);
     assert_eq!(outcome, run(SELF_MODIFYING, "", false).0);
     assert!(matches!(outcome, Outcome::Exit { code: 21, .. }), "{outcome:?}");
+}
+
+#[test]
+fn memory_and_arithmetic_match_the_interpreter() {
+    let (outcome, _, regs) = run(MEMORY, "", true);
+    assert!(matches!(outcome, Outcome::Unhandled { cause: 2, .. }), "{outcome:?}");
+    assert_eq!((outcome, regs), {
+        let (o, _, r) = run(MEMORY, "", false);
+        (o, r)
+    });
 }

@@ -1808,3 +1808,39 @@ a store hits decoded code, by the same rule as the decode cache.
 Sort benchmark: 35 s to 22 s, same output and step count. The next gain
 is loads and stores inline (a translation cache compiled code can read,
 pointing straight at RAM), since every one is a call today.
+
+### 2026-11-26 · Loads and stores in compiled code
+
+Compiled code now loads and stores RAM itself instead of calling back
+into the core for every access.
+
+**A page table of its own.** The JIT keeps a small direct-mapped table
+from virtual page number to the host memory behind the RAM page
+(`Bus::ram_page`, a pointer to the page's centre tryte). Compiled code
+splits the address into page and offset (a multiply by a magic
+constant, no division), checks the slot's page number, and for a word
+that the address is aligned; a hit reads or writes the trytes in place.
+A miss calls the core as before, and a successful access then fills the
+slot (`Hart::jit_page`), so the table only ever holds translations the
+hart's own MMU has just made.
+
+**When a page stops being valid.** A slot is only good while the
+hart's translations are unchanged: the same hart, ring, `ptbr`, SUA and
+MMU generation (bumped by `fence.vm`). Compiled code runs none of the
+instructions that change those. A store slot also needs a page with no
+decoded code (else the store must drop decoded code) and no
+reservation held by another hart (else the store must break it). All
+of this is `MemoryView` (`Hart::jit_view`); the JIT compares it before
+each call and keeps tables for the last four views, since a kernel and
+its programs alternate. Pages are never freed, so a pointer stays
+good as long as the bus.
+
+**More arithmetic inline.** Multiply takes the product modulo 3^27
+without 128-bit arithmetic: a quotient estimated in floating point is
+within one of the true one, the remainder computed modulo 2^64 with it
+is exact, and one correction step finishes it. Divide, remainder and
+the binary `band`/`bor`/`bxor` are inline too. `tlut` in the core no
+longer divides by a variable power of 3 for each trit, which helps the
+interpreter as well.
+
+Sort benchmark: 22 s to 12 s, same output and step count.
