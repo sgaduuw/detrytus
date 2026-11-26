@@ -1770,3 +1770,41 @@ do not count, being word-exact. Faults are never cached.
 Sort benchmark: 59 s to 35 s, same output and step count. This is the
 front end a JIT would compile from: a JIT turns these decoded runs into
 host code, and drops them by the same rule.
+
+### 2026-11-26 · A JIT on Cranelift
+
+Eelco chose Cranelift over an emitter of our own: he works on Apple
+Silicon but did not want Intel left behind, and Cranelift gives arm64
+and x86-64 from one code generator, with `cranelift-native` picking up
+the CPU's features at run time. The host family itself is fixed when
+detrytus is built. To keep the core free of dependencies, the JIT is its
+own crate (`rust/jit`) behind a trait the core names
+(`accel::Accelerator`); the CLI attaches it, `--no-jit` leaves it off,
+and the debugger never uses it. Cranelift needs Rust 1.97, so the CLI
+does too; the core alone still builds with 1.88.
+
+**Exactness first.** Compiled code must match the interpreter step for
+step, so the machine only offers it rounds inside the fast loop (one
+hart, no device due) and no more than `Hart::quiet_steps`, the steps
+before the timer could interrupt. Compiled code counts the instructions
+it runs and stops at that budget. Loads and stores call back into the
+core, which refuses devices (the floating point coprocessor aside) and
+anything that would trap; atomics and system instructions are never
+compiled. A refusal returns before that instruction and the interpreter
+runs it, trap and all. `rust/jit/tests/same.rs` runs the examples, a
+loop and self-modifying code both ways and compares output, exit, step
+count and registers; the sort benchmark and trylobite's tests match too.
+
+**What is compiled.** Starting from a hot pc, everything reachable
+without leaving the page (fall-throughs and branch and jump targets) is
+one Cranelift function, so loops run without returning. Code is
+compiled after it has been asked for 1,000 times: compiling costs
+around a millisecond a function, which short runs, such as the test
+suite, would otherwise pay for nothing. Integer arithmetic, compares,
+selects and branches are inline; other register-only instructions call
+the interpreter's own code for them. Everything compiled is dropped when
+a store hits decoded code, by the same rule as the decode cache.
+
+Sort benchmark: 35 s to 22 s, same output and step count. The next gain
+is loads and stores inline (a translation cache compiled code can read,
+pointing straight at RAM), since every one is a call today.

@@ -32,7 +32,8 @@ software is not a goal (CONTEXT.md explains why).
 
 ## Tooling
 
-A Rust toolchain, 1.88 or later.
+A Rust toolchain, 1.97 or later (Cranelift's minimum, for the JIT; the
+core alone builds with 1.88).
 
 ```sh
 cargo test
@@ -78,6 +79,8 @@ and hides a failure.
 | `rust/asm/src/` | the assembler: `expr`, `source`, `gp` (`.gp`), `operands`, `pseudo`, `slots` (`c.` mnemonics), `assembler`, `disasm`; `error`, `text` and `pyrepr` keep messages and splitting as the Python assembler had them; `object` (the object format) and `link` (the linker) |
 | `rust/tc/src/` | the Trice compiler: `lex`, `parse` (into `ast`), `codegen` (types are checked as code is made, on virtual registers), `alloc` (the back end: registers, redundancy, inlining, frames); `lib.rs` loads imports, reading `.equ` constants from imported assembly, whole or for one file on its own (`tc -c`); `ll/` reads LLVM IR (`ir.rs`) and lowers it to the same back end (`lower.rs`) |
 | `rust/tc/tests/` | Trice programs compiled and run on the bare machine (`bare.s`), and refused ones; `ll/` holds Rust programs, their pruned IR (rebuild with `ll/regenerate.sh`) and a bare-machine runtime, which `ll.rs` translates and runs; `float_lib.rs` checks `lower/float.ll`'s functions against the host |
+| `rust/core/src/accel.rs` | what a JIT plugs into: the `Accelerator` trait, and the narrow access compiled code has to a hart |
+| `rust/jit/` | the JIT: hot code within a page compiled to host code with Cranelift; `tests/same.rs` checks it against the interpreter |
 | `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files, linking objects), `link.rs` (`link`), `disk.rs` (`--disk`), `net.rs` (`--net`, the UDP link), `mix.rs` (`--mix`), `tc.rs` (`tc`), `ll.rs` (`ll`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
 | `rust/cli/tests/pace.rs` | pacing the clock over idle time, as a live console does |

@@ -92,7 +92,7 @@ assume binary integers and 8-bit bytes throughout
 
 ## Try it
 
-Requires a Rust toolchain, 1.88 or later.
+Requires a Rust toolchain, 1.97 or later.
 
 ```bash
 cargo install --git https://github.com/sgaduuw/detrytus detrytus-cli
@@ -124,6 +124,11 @@ writes to the power-off device. It takes several files, sources or
 instruction for stepping, breakpoints, watchpoints and inspection. `--stats` prints
 the step count and `--trace` every instruction. `asm` prints a listing with each word's trits
 and its disassembly.
+
+`run` compiles hot code to the host's own instructions as it goes (a JIT,
+built on Cranelift, for whichever CPU detrytus was built for, using the
+features it finds at run time). Compiled code does exactly what the
+interpreter would, step for step; `--no-jit` interprets everything.
 
 `--input FILE` gives `run` or `debug` text for the program to read from
 the console, `-` meaning stdin:
@@ -228,6 +233,7 @@ Running `detrytus` with no arguments lists every option.
 | Path | Job |
 |------|-----|
 | `rust/core/` | the machine: trits, the instruction set, the hart, privilege, paging, the bus and devices, images; no dependencies |
+| `rust/jit/` | the JIT: hot code compiled to host code with Cranelift |
 | `rust/asm/` | the assembler, disassembler and linker |
 | `rust/cli/` | the `detrytus` command: `asm`, `link`, `run`, `debug`, `tc` and `ll` |
 | `rust/conformance/` | runs the conformance suite on the assembler and core |

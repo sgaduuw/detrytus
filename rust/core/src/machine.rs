@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::accel::Accelerator;
 use crate::bus::Bus;
 use crate::entropy::Entropy;
 use crate::hart::{Event, Hart, Stop};
@@ -56,11 +57,17 @@ pub struct Machine {
     pace: Option<i64>,
     /// Set when a skip stopped at that limit, short of the wake-up.
     paced: bool,
+    /// Compiled code, if a compiler is attached (`set_accelerator`).
+    accel: Option<Box<dyn Accelerator>>,
     /// Ticks skipped since the last skip stopped at the limit: short
     /// skips add up to a paced one, so a link polled every few ticks is
     /// paced too.
     skipped: i64,
 }
+
+/// How many instructions the interpreter runs after the accelerator
+/// declines one, before asking it again.
+const DECLINED_STEPS: u32 = 8;
 
 /// Whether hart `h`, waiting, may run: an interrupt pending and enabled
 /// ends `wfi` and `wrs`; a lost reservation or a deadline reached also
@@ -106,6 +113,7 @@ impl Machine {
             stalled: false,
             pace: None,
             paced: false,
+            accel: None,
             skipped: 0,
         }
     }
@@ -163,6 +171,12 @@ impl Machine {
             }
         }
         out
+    }
+
+    /// Run compiled code where it can stand in for the interpreter
+    /// (accel.rs), or with None, interpret everything.
+    pub fn set_accelerator(&mut self, accel: Option<Box<dyn Accelerator>>) {
+        self.accel = accel;
     }
 
     /// Plug a hart in, or ask for one to go, when the clock reaches
@@ -240,7 +254,32 @@ impl Machine {
         let mut done = 0;
         self.bus.current = h;
         self.bus.touched_device = false;
+        // Instructions to interpret before asking the accelerator again,
+        // after it declined.
+        let mut declined = 0;
         while done < max && self.time + 1 < until {
+            if let Some(accel) = &mut self.accel
+                && declined == 0
+            {
+                let budget =
+                    (max - done).min((until - 1 - self.time) as u64).min(hart.quiet_steps());
+                if budget > 1 {
+                    let ran = accel.run(hart, &mut self.bus, budget);
+                    if ran > 0 {
+                        self.time += ran as i64;
+                        self.bus.now = self.time;
+                        hart.time = self.time;
+                        hart.retire(ran);
+                        done += ran;
+                        if self.bus.touched_device {
+                            break;
+                        }
+                        continue;
+                    }
+                    declined = DECLINED_STEPS;
+                }
+            }
+            declined = declined.saturating_sub(1);
             self.time += 1;
             self.bus.now = self.time;
             hart.time = self.time;
