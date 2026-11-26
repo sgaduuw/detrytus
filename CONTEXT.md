@@ -1875,3 +1875,23 @@ instructions ran before it in the run, and `time`, `cycle` and
 Steps still interpreted on the sort benchmark: 9% to under 4%, mostly
 trap entry now (`sys` and interrupts). Sort benchmark: about 10.5 s to
 about 9.3 s, same output and step count.
+
+### 2026-11-26 · Signed pointers in `detrytus ll`
+
+A Rust pointer was an unsigned 32-bit number, so nothing below address
+0 could be one, and a kernel lives there (trylobite's code runs near
+−68 900, its device pages from −9 to −1 pages). Pointers are now signed
+32-bit addresses: the address in a register, its two's complement in
+memory and in integers, converted where a pointer is loaded, stored or
+cast (docs/rust.md, Pointers). It is the first step of porting
+trylobite's kernel to Rust.
+
+Two other ways were weighed. Moving the kernel and its direct map
+above 0 and below 2³² keeps `ll` as it was but abandons the balanced
+layout. Pointers a whole word wide reach every address but make
+`usize` wider than 32 bits, which every Rust program would pay for.
+Signed pointers need only that no object straddle address 0. Done
+inline, the conversions made trylobite's Rust programs 4 to 7% larger;
+done inside pointer-only load and store helpers (`ll$ldp`, `ll$stp`)
+they cost 0.6 to 3.3% (mostly `ptrtoint`, which now always wraps).
+

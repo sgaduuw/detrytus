@@ -82,11 +82,12 @@ tests its sign bit (`lshr` by 31, as core's sort does) reads it wrong.
 | Rust and LLVM | detrytus |
 |---------------|----------|
 | a byte (`u8`, `i8`, `bool`) in memory | one tryte holding 0..255, as devices use (isa.md 11) |
-| `u16`, `u32`, a pointer in memory | 2 or 4 trytes, low byte first, each 0..255 |
+| `u16`, `u32` in memory | 2 or 4 trytes, low byte first, each 0..255 |
+| a pointer in memory | 4 trytes: the address in two's complement (Pointers) |
 | an N-bit integer in a register | a word holding its unsigned value, 0 .. 2ᴺ − 1 |
 | a 33- to 256-bit integer in registers | a word per 32 bits, low first (Wide integers) |
 | `i1` (a comparison) | 0 or 1 |
-| a pointer in a register | the address |
+| a pointer in a register | the address, which may be negative |
 
 LLVM's integers have no sign of their own, so one form serves both:
 the unsigned value. An operation that can leave the range (`add`,
@@ -159,6 +160,31 @@ Widths in between (33 to 63 bits, 65 to 127, up to 256) get the
 operations done on the limbs, not the helpers. Core formats a `u128`
 by multiplying it as a 256-bit integer by a constant and shifting,
 which is how it divides by 10¹⁹, so 256 bits are needed too.
+
+### Pointers
+
+A pointer is signed. In a register it is the address itself, so an
+address below zero (a kernel's code, a device page) is as good as one
+above: a pointer reaches ±2³¹ trytes, balanced around 0, as the
+machine's addresses are. LLVM sees 32 bits, so where a pointer meets
+memory or an integer it becomes those 32 bits in two's complement and
+back:
+
+- a pointer stored is wrapped to 32 bits with `band`, and a pointer
+  loaded is made signed again, `(x ⊕ 2³¹) − 2³¹`, inside helpers of
+  their own (`ll$stp`, `ll$ldp`), so a pointer load or store costs no
+  more at its call site than a `u32` one (Size);
+- `ptrtoint` gives the 32 bits, `inttoptr` takes the signed value of
+  the low 32;
+- a pointer in static data is those bytes, worked out from the label
+  by the assembler; a number made into a pointer is its own bytes.
+
+Comparisons of pointers compare the addresses. That is LLVM's
+unsigned order wherever both sit on the same side of 0, which holds
+for any two addresses in one object as long as no object straddles
+address 0; page 0 is never mapped for that and other reasons. Copies
+(`memcpy`) and arithmetic (`getelementptr`) are unchanged: one moves
+bytes, the other adds to the address.
 
 ## Calls and frames
 

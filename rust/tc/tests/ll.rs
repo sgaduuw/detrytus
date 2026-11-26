@@ -209,7 +209,53 @@ fn a_number_as_a_pointer_in_data() {
                define i32 @main(i32 %argc, ptr %argv) {\n\
                start:\n  %v = load ptr, ptr @p\n  %x = ptrtoint ptr %v to i32\n  ret i32 %x\n}\n";
     let out = detrytus_tc::ll::translate_text(src, &[]).unwrap_or_else(|e| panic!("{e}"));
-    assert!(out.assembly.contains(".tryte (1) % 256"), "{}", out.assembly);
+    assert!(out.assembly.contains(".tryte 1, 0, 0, 0, 0, 0, 0, 0"), "{}", out.assembly);
+}
+
+#[test]
+fn a_pointer_may_be_negative() {
+    // Pointers are signed: an address below zero (a kernel's, a device
+    // page's) is 32 bits of two's complement in memory and in integers,
+    // and the address again when loaded or cast back (docs/rust.md,
+    // Pointers). Each failed check sets a bit of the exit code.
+    let src = "@g = global [4 x i8] zeroinitializer, align 4\n\
+               @slot = global ptr null, align 4\n\
+               @cell = global ptr getelementptr (i8, ptr @g, i32 -100000), align 4\n\
+               @num = global ptr inttoptr (i32 -5 to ptr), align 4\n\
+               define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n\
+               \x20 %p = getelementptr i8, ptr @g, i32 -100000\n\
+               \x20 store volatile ptr %p, ptr @slot\n\
+               \x20 %q = load volatile ptr, ptr @slot\n\
+               \x20 %ok1 = icmp eq ptr %p, %q\n\
+               \x20 %x = ptrtoint ptr %q to i32\n\
+               \x20 %ok2 = icmp ugt i32 %x, 4000000000\n\
+               \x20 %r = inttoptr i32 %x to ptr\n\
+               \x20 %ok3 = icmp eq ptr %r, %p\n\
+               \x20 %c = load volatile ptr, ptr @cell\n\
+               \x20 %ok4 = icmp eq ptr %c, %p\n\
+               \x20 %n = load volatile ptr, ptr @num\n\
+               \x20 %y = ptrtoint ptr %n to i64\n\
+               \x20 %ok5 = icmp eq i64 %y, 4294967291\n\
+               \x20 %ok6 = icmp ult ptr %p, @g\n\
+               \x20 %z = inttoptr i64 %y to ptr\n\
+               \x20 %d = getelementptr i8, ptr %z, i32 5\n\
+               \x20 %ok7 = icmp eq ptr %d, null\n\
+               \x20 %b1 = select i1 %ok1, i32 0, i32 1\n\
+               \x20 %b2 = select i1 %ok2, i32 0, i32 2\n\
+               \x20 %b3 = select i1 %ok3, i32 0, i32 4\n\
+               \x20 %b4 = select i1 %ok4, i32 0, i32 8\n\
+               \x20 %b5 = select i1 %ok5, i32 0, i32 16\n\
+               \x20 %b6 = select i1 %ok6, i32 0, i32 32\n\
+               \x20 %b7 = select i1 %ok7, i32 0, i32 64\n\
+               \x20 %s1 = or i32 %b1, %b2\n\
+               \x20 %s2 = or i32 %s1, %b3\n\
+               \x20 %s3 = or i32 %s2, %b4\n\
+               \x20 %s4 = or i32 %s3, %b5\n\
+               \x20 %s5 = or i32 %s4, %b6\n\
+               \x20 %s6 = or i32 %s5, %b7\n\
+               \x20 ret i32 %s6\n}\n";
+    assert_eq!(run_text(src), (0, String::new()));
 }
 
 #[test]

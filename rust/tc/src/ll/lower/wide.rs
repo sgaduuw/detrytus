@@ -466,6 +466,13 @@ impl Lower<'_> {
             "zext" | "ptrtoint" | "inttoptr" | "bitcast" | "trunc" => {
                 let mut out: Vec<&'static str> = src.into_iter().take(tnl).collect();
                 out.resize(tnl, "zero");
+                // A pointer's bits are its address in two's complement
+                // (docs/rust.md, Pointers).
+                if op == "ptrtoint" {
+                    out[0] = self.ptr_to_bits(out[0]);
+                } else if op == "inttoptr" {
+                    out[0] = self.bits_to_ptr(out[0]);
+                }
                 // A trunc drops the bits above the narrower width, unless
                 // `nuw` says there are none.
                 let from_w = if tnl <= fnl { width(tnl - 1, fnl, fb) } else { 0 };

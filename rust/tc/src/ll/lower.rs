@@ -84,7 +84,7 @@ pub struct Lower<'m> {
 /// byte first: called with `jal t6`, the address in t5 and the value in
 /// t4, changing only t2..t6 (alloc.rs, `hload` and `hstore`). One call
 /// takes the place of up to eleven instructions at every load or store.
-const HELPERS: [(&str, &str); 6] = [
+const HELPERS: [(&str, &str); 8] = [
     (
         "ll$ld2",
         "lt    t4, 1(t5)\nli    t3, 256\nmul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2",
@@ -95,6 +95,15 @@ const HELPERS: [(&str, &str); 6] = [
          mul   t4, t4, t3\nlt    t2, 1(t5)\nadd   t4, t4, t2\n\
          mul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2",
     ),
+    // A pointer: its 4 bytes are the address in two's complement, made
+    // signed again once joined (docs/rust.md, Pointers).
+    (
+        "ll$ldp",
+        "lt    t4, 3(t5)\nli    t3, 256\nmul   t4, t4, t3\nlt    t2, 2(t5)\nadd   t4, t4, t2\n\
+         mul   t4, t4, t3\nlt    t2, 1(t5)\nadd   t4, t4, t2\n\
+         mul   t4, t4, t3\nlt    t2, 0(t5)\nadd   t4, t4, t2\n\
+         li    t3, 2147483648\nbxor  t4, t4, t3\nsub   t4, t4, t3",
+    ),
     (
         "ll$st2",
         "li    t3, 256\nrem   t2, t4, t3\nst    t2, 0(t5)\ndiv   t4, t4, t3\nst    t4, 1(t5)",
@@ -102,6 +111,14 @@ const HELPERS: [(&str, &str); 6] = [
     (
         "ll$st4",
         "li    t3, 256\nrem   t2, t4, t3\nst    t2, 0(t5)\ndiv   t4, t4, t3\n\
+         rem   t2, t4, t3\nst    t2, 1(t5)\ndiv   t4, t4, t3\n\
+         rem   t2, t4, t3\nst    t2, 2(t5)\ndiv   t4, t4, t3\nst    t4, 3(t5)",
+    ),
+    // A pointer: wrapped to its 32 bits first.
+    (
+        "ll$stp",
+        "li    t3, 4294967295\nband  t4, t4, t3\n\
+         li    t3, 256\nrem   t2, t4, t3\nst    t2, 0(t5)\ndiv   t4, t4, t3\n\
          rem   t2, t4, t3\nst    t2, 1(t5)\ndiv   t4, t4, t3\n\
          rem   t2, t4, t3\nst    t2, 2(t5)\ndiv   t4, t4, t3\nst    t4, 3(t5)",
     ),
@@ -599,6 +616,34 @@ impl<'m> Lower<'m> {
         d
     }
 
+    /// A pointer as the 32 bits that stand for it in memory and in
+    /// integers: the address, which may be negative, in two's complement
+    /// (docs/rust.md, Pointers).
+    fn ptr_to_bits(&mut self, r: &'static str) -> &'static str {
+        if r == "zero" {
+            return r;
+        }
+        if let Some(&v) = self.konst.get(r) {
+            return self.li(Self::canon(v, 32));
+        }
+        let d = self.vreg();
+        let m = self.li(mask(32));
+        self.emit(format!("band  {d}, {r}, {m}"));
+        d
+    }
+
+    /// The address that 32 bits stand for: their signed value. Bits
+    /// above the 32nd are dropped first.
+    fn bits_to_ptr(&mut self, r: &'static str) -> &'static str {
+        if r == "zero" {
+            return r;
+        }
+        if let Some(&v) = self.konst.get(r) {
+            return self.li(Self::as_signed(v, 32));
+        }
+        self.signed(r, 32)
+    }
+
     fn op3(&mut self, op: &str, a: &str, b: &str) -> &'static str {
         let d = self.vreg();
         self.emit(format!("{op:5} {d}, {a}, {b}"));
@@ -686,7 +731,13 @@ impl<'m> Lower<'m> {
                     && matches!(from.1, Const::Int(_)) =>
             {
                 let bits = self.bits(t)?;
-                self.const_int(&from.1, &from.0)?.map(|v| Self::canon(v, bits))
+                let v = self.const_int(&from.1, &from.0)?;
+                if self.resolve(t)? == Ty::Ptr {
+                    // An address: the signed value of its 32 bits.
+                    v.map(|v| Self::as_signed(v, 32))
+                } else {
+                    v.map(|v| Self::canon(v, bits))
+                }
             }
             _ => None,
         })
@@ -814,7 +865,11 @@ impl<'m> Lower<'m> {
             return Err(format!("{}-byte values are not supported yet", bytes));
         }
         if bytes == 2 || bytes == 4 {
-            let name = if bytes == 2 { "ll$ld2" } else { "ll$ld4" };
+            let name = match bytes {
+                2 => "ll$ld2",
+                _ if self.resolve(t)? == Ty::Ptr => "ll$ldp",
+                _ => "ll$ld4",
+            };
             self.helper_address(base, off);
             self.emit(format!("hload {name}"));
             self.helpers.insert(name);
@@ -848,7 +903,11 @@ impl<'m> Lower<'m> {
             return Ok(());
         }
         if bytes == 2 || bytes == 4 {
-            let name = if bytes == 2 { "ll$st2" } else { "ll$st4" };
+            let name = match bytes {
+                2 => "ll$st2",
+                _ if self.resolve(t)? == Ty::Ptr => "ll$stp",
+                _ => "ll$st4",
+            };
             self.emit(format!("mv    t4, {v}"));
             self.helper_address(base, off);
             self.emit(format!("hstore {name}"));
@@ -1101,7 +1160,14 @@ impl<'m> Lower<'m> {
                     self.wrap(d, bits);
                 }
             }
-            "zext" | "inttoptr" | "bitcast" | "addrspacecast" => {}
+            "zext" | "bitcast" | "addrspacecast" => {}
+            "inttoptr" => {
+                let fb = self.bits(from)?;
+                if fb >= 32 {
+                    let p = self.bits_to_ptr(d);
+                    self.emit(format!("mv    {d}, {p}"));
+                }
+            }
             "sext" => {
                 let fb = self.bits(from)?;
                 let tb = self.bits(to)?;
@@ -1111,9 +1177,7 @@ impl<'m> Lower<'m> {
             }
             "ptrtoint" => {
                 let tb = self.bits(to)?;
-                if tb < 32 {
-                    self.wrap(d, tb);
-                }
+                self.wrap(d, tb.min(32));
             }
             op => return Err(format!("the {op} cast is not supported")),
         }
@@ -1947,22 +2011,29 @@ impl<'m> Lower<'m> {
             }
             _ => {
                 // A pointer made from a number (a dangling NonNull, say)
-                // is that number; anything else an address.
-                let a = match self.const_int(c, &t)? {
-                    Some(v) => v.to_string(),
-                    None => match self.const_addr(c)? {
-                        Some(a) => a,
-                        None => return Err(format!("constant {c:?} is not supported in data")),
-                    },
-                };
-                let mut div = 1i128;
-                for _ in 0..size {
-                    out.push(if div == 1 {
-                        format!("({a}) % 256")
-                    } else {
-                        format!("({a}) / {div} % 256")
-                    });
-                    div *= 256;
+                // is that number; anything else an address. Either way
+                // its bytes are two's complement: an address may be
+                // negative (docs/rust.md, Pointers).
+                if let Some(v) = self.const_int(c, &t)? {
+                    let u = Self::canon(v, 8 * size as u32);
+                    for k in 0..size as u32 {
+                        out.push(((u >> (8 * k)) & 255).to_string());
+                    }
+                } else {
+                    let Some(a) = self.const_addr(c)? else {
+                        return Err(format!("constant {c:?} is not supported in data"));
+                    };
+                    // The assembler's `/` and `%` truncate.
+                    let u = format!("(({a}) % 4294967296 + 4294967296) % 4294967296");
+                    let mut div = 1i128;
+                    for _ in 0..size {
+                        out.push(if div == 1 {
+                            format!("{u} % 256")
+                        } else {
+                            format!("{u} / {div} % 256")
+                        });
+                        div *= 256;
+                    }
                 }
             }
         }
