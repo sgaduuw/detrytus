@@ -11,7 +11,9 @@
 //! The bus also keeps each hart's `lr` reservation, so that a store by
 //! one hart breaks another's.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+
+use crate::fastmap::FastMap as HashMap;
 
 use crate::block::{BLOCK_PAGE, BLOCK_READ, BLOCK_TRYTES, BlockDevice, Request, Transfer};
 use crate::block::{ROUNDS_PER_BLOCK, SETUP_ROUNDS};
@@ -145,7 +147,7 @@ impl Bus {
     pub fn with_harts(ram_pages: i64, present: &[i64]) -> Self {
         Bus {
             ram_pages,
-            pages: HashMap::new(),
+            pages: HashMap::default(),
             console: Console::default(),
             harts: HartController::new(present),
             irq: InterruptController::default(),
@@ -154,7 +156,7 @@ impl Bus {
             net: NetDevice::default(),
             now: 0,
             current: 0,
-            reservations: HashMap::new(),
+            reservations: HashMap::default(),
         }
     }
 
@@ -202,6 +204,18 @@ impl Bus {
     }
 
     fn word(&self, addr: i64) -> i64 {
+        let page = page_of(addr);
+        let i = addr - page * PAGE + HALF_PAGE;
+        if (1..PAGE - 1).contains(&i) {
+            // All three trytes in one page: one lookup, not three. An
+            // aligned word always is (PAGE and HALF_PAGE + 1 are
+            // multiples of 3).
+            let Some(mem) = self.pages.get(&page) else { return 0 };
+            let i = i as usize;
+            return mem[i - 1] as i64
+                + mem[i] as i64 * TRYTE_MOD
+                + mem[i + 1] as i64 * TRYTE_MOD * TRYTE_MOD;
+        }
         self.get(addr - 1) + self.get(addr) * TRYTE_MOD + self.get(addr + 1) * TRYTE_MOD * TRYTE_MOD
     }
 
@@ -398,6 +412,15 @@ impl Bus {
         mem[(addr - page * PAGE + HALF_PAGE) as usize] = low(tryte, TRYTE_TRITS) as i16;
     }
 
+    /// The page holding addr, allocated if it was not yet, and addr's
+    /// index in it.
+    fn page_mut(&mut self, addr: i64) -> (&mut [i16], usize) {
+        let page = page_of(addr);
+        let mem =
+            self.pages.entry(page).or_insert_with(|| vec![0; PAGE as usize].into_boxed_slice());
+        (mem, (addr - page * PAGE + HALF_PAGE) as usize)
+    }
+
     /// Read a tryte (width 1) or the word centred on addr (width 3). A
     /// word's alignment is the caller's to check.
     pub fn read(&mut self, addr: i64, width: u32, access: Access) -> Result<i64, BusError> {
@@ -451,9 +474,19 @@ impl Bus {
                 let lo = low(value, TRYTE_TRITS);
                 let rest = (value - lo) / TRYTE_MOD;
                 let mid = low(rest, TRYTE_TRITS);
-                self.poke(addr - 1, lo);
-                self.poke(addr, mid);
-                self.poke(addr + 1, (rest - mid) / TRYTE_MOD);
+                let hi = low((rest - mid) / TRYTE_MOD, TRYTE_TRITS);
+                match self.page_mut(addr) {
+                    (mem, i) if (1..mem.len() - 1).contains(&i) => {
+                        mem[i - 1] = lo as i16;
+                        mem[i] = mid as i16;
+                        mem[i + 1] = hi as i16;
+                    }
+                    _ => {
+                        self.poke(addr - 1, lo);
+                        self.poke(addr, mid);
+                        self.poke(addr + 1, hi);
+                    }
+                }
             }
         }
         Ok(())

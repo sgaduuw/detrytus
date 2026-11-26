@@ -9,7 +9,7 @@
 //! to even; NaN results are the canonical quiet NaN. Conversions to
 //! integers truncate and saturate, NaN giving 0, as Rust's `as` does.
 
-use std::collections::HashMap;
+use crate::fastmap::FastMap as HashMap;
 
 use crate::bus::PAGE;
 

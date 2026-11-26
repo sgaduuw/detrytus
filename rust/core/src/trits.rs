@@ -9,11 +9,13 @@ pub const WORD_TRITS: u32 = 27;
 pub const TRYTE_TRITS: u32 = 9;
 
 /// 3ⁿ for 0 ≤ n ≤ 39.
+#[inline]
 pub const fn pow3(n: u32) -> i64 {
     3i64.pow(n)
 }
 
 /// The largest value an n-trit field holds, (3ⁿ − 1) / 2.
+#[inline]
 pub const fn half(n: u32) -> i64 {
     (pow3(n) - 1) / 2
 }
@@ -25,6 +27,7 @@ pub const TRYTE_MOD: i64 = pow3(TRYTE_TRITS);
 
 /// The low n trits of x, read as a balanced value. This is also
 /// wrap-around to an n-trit field.
+#[inline]
 pub const fn low(x: i64, n: u32) -> i64 {
     let m = pow3(n);
     let h = (m - 1) / 2;
@@ -32,11 +35,13 @@ pub const fn low(x: i64, n: u32) -> i64 {
 }
 
 /// x reduced into the 27-trit word range.
+#[inline]
 pub const fn wrap(x: i64) -> i64 {
     low(x, WORD_TRITS)
 }
 
 /// A wide value, such as a product, reduced into the word range.
+#[inline]
 pub const fn wrap_wide(x: i128) -> i64 {
     let m = WORD_MOD as i128;
     let h = (m - 1) / 2;
@@ -44,21 +49,25 @@ pub const fn wrap_wide(x: i128) -> i64 {
 }
 
 /// x with its low n trits cut off: the exact q in x = q·3ⁿ + low(x, n).
+#[inline]
 pub const fn split_high(x: i64, n: u32) -> i64 {
     (x - low(x, n)) / pow3(n)
 }
 
 /// Trits lo .. lo+n−1 of x, read as a balanced value.
+#[inline]
 pub const fn field(x: i64, lo: u32, n: u32) -> i64 {
     low(split_high(x, lo), n)
 }
 
 /// x with trit i replaced by value.
+#[inline]
 pub const fn set_trit(x: i64, i: u32, value: i64) -> i64 {
     x + (value - field(x, i, 1)) * pow3(i)
 }
 
 /// The low n trits of x, least significant first.
+#[inline]
 pub fn to_trits(mut x: i64, n: u32) -> Vec<i64> {
     (0..n)
         .map(|_| {
@@ -70,6 +79,7 @@ pub fn to_trits(mut x: i64, n: u32) -> Vec<i64> {
 }
 
 /// Inverse of [`to_trits`].
+#[inline]
 pub fn from_trits(trits: &[i64]) -> i64 {
     trits.iter().rev().fold(0, |v, &t| v * 3 + t)
 }

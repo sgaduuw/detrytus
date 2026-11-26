@@ -8,7 +8,7 @@
 //! (ASID, page, access, ring, SUA); it is cleared with the TLB, so it
 //! only saves repeating a check.
 
-use std::collections::HashMap;
+use crate::fastmap::FastMap as HashMap;
 
 use crate::bus::{Access as BusAccess, Bus, PAGE_TRITS};
 use crate::isa;
@@ -95,11 +95,43 @@ fn index(va: i64, level: u32) -> i64 {
 
 type CheckKey = (i64, i64, Access, i64, bool);
 
-#[derive(Default)]
+/// Slots in the direct-mapped cache of checks passed.
+const CHECKED_SLOTS: usize = 1024;
+
+/// A check passed: its key and the page centre it found. An entry
+/// whose generation is not the MMU's current one is empty.
+#[derive(Clone, Copy)]
+struct Checked {
+    key: CheckKey,
+    centre: i64,
+    generation: u64,
+}
+
 pub struct Mmu {
     tlb: HashMap<(i64, i64), Leaf>,
     global: HashMap<i64, Leaf>,
-    checked: HashMap<CheckKey, i64>,
+    /// The checks already passed, direct-mapped by page and access: a
+    /// check that misses here is made again from the TLB, so losing an
+    /// entry to a collision costs time, never correctness.
+    checked: Box<[Checked]>,
+    /// Bumped by `fence.vm` to empty `checked` at once.
+    generation: u64,
+}
+
+impl Default for Mmu {
+    fn default() -> Self {
+        let empty = Checked { key: (0, 0, Access::Fetch, 0, false), centre: 0, generation: 0 };
+        Mmu {
+            tlb: HashMap::default(),
+            global: HashMap::default(),
+            checked: vec![empty; CHECKED_SLOTS].into_boxed_slice(),
+            generation: 1,
+        }
+    }
+}
+
+fn checked_slot(vpn: i64, access: Access) -> usize {
+    (vpn as usize).wrapping_mul(4).wrapping_add(access as usize) % CHECKED_SLOTS
 }
 
 impl Mmu {
@@ -114,8 +146,10 @@ impl Mmu {
     ) -> Result<i64, Fault> {
         let vpn = page_number(va);
         let key = (ptbr.asid, vpn, access, ring, sua);
-        if let Some(centre) = self.checked.get(&key) {
-            return Ok(centre + low(va, PAGE_TRITS));
+        let slot = checked_slot(vpn, access);
+        let hit = self.checked[slot];
+        if hit.generation == self.generation && hit.key == key {
+            return Ok(hit.centre + low(va, PAGE_TRITS));
         }
         let cached = self.global.get(&vpn).or_else(|| self.tlb.get(&(ptbr.asid, vpn))).copied();
         let leaf = match cached {
@@ -134,13 +168,13 @@ impl Mmu {
                 leaf
             }
         };
-        self.checked.insert(key, leaf.page_centre);
+        self.checked[slot] = Checked { key, centre: leaf.page_centre, generation: self.generation };
         Ok(leaf.page_centre + low(va, PAGE_TRITS))
     }
 
     /// `fence.vm`: `va` and `asid` are None when their register field is r0.
     pub fn fence(&mut self, va: Option<i64>, asid: Option<i64>) {
-        self.checked.clear();
+        self.generation += 1;
         let vpn = va.map(page_number);
         let page_matches = |page: i64| vpn.is_none_or(|v| v == page);
         match asid {
