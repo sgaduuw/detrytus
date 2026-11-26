@@ -1700,3 +1700,30 @@ The emulator's RAM was already sparse (a page is allocated on first
 write), so a machine of millions of pages costs only the pages used. A
 conformance case maps a root-level superpage to page 3 × 3¹⁶ + 5 to
 show the far end of RAM is reachable through paging.
+
+### 2026-11-26 · A faster interpreter, same machine
+
+Eelco asked what could be done about emulator speed. Hardware
+virtualisation cannot help: no host runs balanced ternary, so every
+instruction is interpreted. A profile of trylobite sorting 10,000
+lines (814M steps, 249 s) showed about 3,600 host instructions per
+emulated one, most of it bookkeeping rather than the instruction:
+
+- **The trit helpers were not inlined,** so `pow3(n)` ran as a loop and
+  every field split was a division by a number the compiler could not
+  see. `#[inline]` on `trits.rs` lets the constants fold.
+- **SipHash on every access.** Physical pages, the decode caches, the
+  MMU's checks and the CSRs are `HashMap`s keyed by integers the
+  machine itself makes; no attacker picks them, so collision resistance
+  bought nothing. `fastmap.rs` is FxHash's multiply-and-rotate, written
+  out because the core has no dependencies.
+- **A word read looked its page up three times,** once per tryte. An
+  aligned word never straddles a page, so one lookup serves all three.
+- **The MMU's map of checks passed** is now a 1,024-entry direct-mapped
+  cache that `fence.vm` empties by bumping a generation; a miss falls
+  back to the TLB, so a collision costs time, never correctness.
+
+Together: 90 s for the same run, with the same output and step count,
+and nothing about the machine changed. The larger steps (a dispatch
+loop that runs a hart many instructions at a time, predecoded blocks,
+and a JIT) change the core's structure and are planned separately.

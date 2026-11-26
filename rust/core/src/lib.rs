@@ -13,6 +13,7 @@ pub mod block;
 pub mod bus;
 pub mod compressed;
 pub mod entropy;
+mod fastmap;
 pub mod float;
 pub mod fpu;
 pub mod hart;

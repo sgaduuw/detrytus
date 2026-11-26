@@ -13,7 +13,7 @@
 //! waiting in `wfi` runs again; an `lr` reservation is lost to a trap,
 //! a later `sc`, or another hart's store (kept by the bus).
 
-use std::collections::HashMap;
+use crate::fastmap::FastMap as HashMap;
 
 use crate::alu;
 use crate::bus::{Access, Bus, BusError};
@@ -107,7 +107,8 @@ pub struct Hart {
     pub(crate) step_ring: Option<i64>,
     pub(crate) entropy: Entropy,
     cache: HashMap<i64, Result<Decoded, isa::Illegal>>,
-    /// Slots by value, expanded and decoded; None for an illegal slot.
+    /// Slots by bundle and slot (word × 2 + slot), expanded and
+    /// decoded; None for an illegal slot.
     slot_cache: HashMap<i64, Option<Decoded>>,
     /// When Some, every [`Event`] is appended here; a debugger drains it
     /// after each step. None (the default) costs nothing.
@@ -145,8 +146,8 @@ impl Hart {
             reservation: None,
             step_ring: None,
             entropy: Entropy::new(seed),
-            cache: HashMap::new(),
-            slot_cache: HashMap::new(),
+            cache: HashMap::default(),
+            slot_cache: HashMap::default(),
             events: None,
         }
     }
@@ -270,11 +271,11 @@ impl Hart {
     /// Slot A (0) or B (1) of a bundle, decoded as the full instruction
     /// it expands to; an illegal slot traps with the bundle.
     fn decode_slot(&mut self, word: i64, slot: i64) -> Result<Decoded, Exception> {
-        let s = compressed::slots(word)[slot as usize];
-        let d = self
-            .slot_cache
-            .entry(s)
-            .or_insert_with(|| compressed::expand(s).and_then(|w| isa::decode(w).ok()));
+        // Keyed by bundle and slot, so a hit skips splitting the word.
+        let d = self.slot_cache.entry(word * 2 + slot).or_insert_with(|| {
+            let s = compressed::slots(word)[slot as usize];
+            compressed::expand(s).and_then(|w| isa::decode(w).ok())
+        });
         d.ok_or_else(|| trap(isa::ILLEGAL, word))
     }
 
