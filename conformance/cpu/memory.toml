@@ -74,3 +74,42 @@ program = '''
 expect.exit_code = 0
 expect.registers = { a1 = 10, a2 = 5, a3 = 10, a4 = -4 }
 expect.words = { "19683" = 4 }
+
+[[case]]
+name = "a store to code already run changes what runs next"
+# The emulator caches decoded instructions; a store to one must be seen
+# by the next fetch after fence.i (docs/isa.md 7.5).
+program = '''
+        li    t0, 19683          # RAM page 1
+        li    t2, first
+        lw    t1, 0(t2)
+        sw    t1, 0(t0)
+        lw    t1, 3(t2)
+        sw    t1, 3(t0)
+        jalr  ra, 0(t0)          # runs addi a0, r0, 1
+        mv    a1, a0
+        li    t2, second
+        lw    t1, 0(t2)
+        sw    t1, 0(t0)          # a word store over it
+        fence.i
+        jalr  ra, 0(t0)          # runs addi a0, r0, 20
+        add   a1, a1, a0
+        li    t2, third
+        lt    t1, -1(t2)         # tryte stores over it
+        st    t1, -1(t0)
+        lt    t1, 0(t2)
+        st    t1, 0(t0)
+        lt    t1, 1(t2)
+        st    t1, 1(t0)
+        fence.i
+        jalr  ra, 0(t0)          # runs addi a0, r0, 300
+        add   a0, a0, a1
+        j     done
+first:  addi  a0, r0, 1
+        jalr  r0, 0(ra)
+second: addi  a0, r0, 20
+third:  addi  a0, r0, 300
+done:
+'''
+expect.exit_code = 321
+

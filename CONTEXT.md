@@ -1747,3 +1747,26 @@ trit by trit, which it did on every step. Together: 90 s to 59 s on the
 sort benchmark, same output and step count. Most of what is left is
 per instruction: fetch, translation and decode, which decoded blocks
 remove.
+
+### 2026-11-26 · Decoded code, kept until it is written
+
+Each hart keeps the instructions it has decoded, by physical address,
+and the virtual page it last fetched from with how that page
+translated. A fetch on that page reads the decoded instruction from an
+array: no translation, no bus access, no decode lookup. The page's
+translation holds while the ring, `ptbr` and the MMU's generation
+(bumped by `fence.vm`) are unchanged, which is exactly as long as the
+MMU would give the same answer, since its TLB never evicts on its own.
+
+Code that changes must not run stale. The bus keeps a bit per word that
+any hart has decoded; a store, a tryte poke, a block read or a network
+delivery over one of those words counts a code write, and every hart
+drops its whole cache before its next fetch. The spec only promises a
+new instruction after `fence.i`; seeing it at once is stricter and
+simpler. Dropping everything is coarse, but code is rarely written
+(a program being loaded), and data stores that share a page with code
+do not count, being word-exact. Faults are never cached.
+
+Sort benchmark: 59 s to 35 s, same output and step count. This is the
+front end a JIT would compile from: a JIT turns these decoded runs into
+host code, and drops them by the same rule.

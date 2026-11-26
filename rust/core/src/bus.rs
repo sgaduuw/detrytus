@@ -149,6 +149,21 @@ pub struct Bus {
     /// (`Machine::run`) stops at once, as a device may have changed an
     /// interrupt line, started a hart or begun a transfer.
     pub(crate) touched_device: bool,
+    /// Words some hart has decoded and cached, by page: one bit per
+    /// word. A store to one of them bumps `code_writes`, and every hart
+    /// drops its decoded code before its next fetch.
+    code: HashMap<i64, Box<[u64]>>,
+    /// How many stores have hit a decoded word.
+    pub(crate) code_writes: u64,
+}
+
+/// Words in a page, and so bits in a page's code map.
+const PAGE_WORDS: usize = PAGE as usize / 3;
+
+/// A word's index in its page, from the address of its middle tryte.
+fn word_index(addr: i64) -> (i64, usize) {
+    let page = page_of(addr);
+    (page, ((addr - page * PAGE + HALF_PAGE) / 3) as usize)
 }
 
 impl Bus {
@@ -172,6 +187,8 @@ impl Bus {
             current: 0,
             reservations: HashMap::default(),
             touched_device: false,
+            code: HashMap::default(),
+            code_writes: 0,
         }
     }
 
@@ -351,6 +368,13 @@ impl Bus {
                     .or_insert_with(|| vec![0; PAGE as usize].into_boxed_slice());
                 mem.copy_from_slice(block);
             }
+            for &page in &t.pages {
+                if self.code.contains_key(&page) {
+                    self.code_writes += 1;
+                    self.code.clear();
+                    break;
+                }
+            }
             let lo = t.pages.iter().map(|p| p * PAGE - HALF_PAGE);
             for start in lo.collect::<Vec<_>>() {
                 self.reservations.retain(|_, r| *r + 1 < start || *r - 1 > start + PAGE - 1);
@@ -436,8 +460,43 @@ impl Bus {
         out
     }
 
+    /// Note that a hart has decoded the word centred on `addr` (aligned,
+    /// in RAM or the boot page), so that a store to it is seen.
+    pub(crate) fn mark_code(&mut self, addr: i64) {
+        let (page, i) = word_index(addr);
+        let bits = self.code.entry(page).or_insert_with(|| vec![0; PAGE_WORDS.div_ceil(64)].into());
+        bits[i / 64] |= 1 << (i % 64);
+    }
+
+    /// A store or copy is about to change trytes lo..=hi: if any is
+    /// part of a decoded word, count a code write and forget the words
+    /// (every hart drops all its decoded code on seeing the count move).
+    fn code_store(&mut self, lo: i64, hi: i64) {
+        if self.code.is_empty() {
+            return;
+        }
+        // Each tryte belongs to the aligned word centred within one of it.
+        let mut hit = false;
+        let mut centre = lo - (lo + 1).rem_euclid(3) + 1;
+        while centre - 1 <= hi {
+            let (page, i) = word_index(centre);
+            if let Some(bits) = self.code.get_mut(&page)
+                && bits[i / 64] & 1 << (i % 64) != 0
+            {
+                hit = true;
+                break;
+            }
+            centre += 3;
+        }
+        if hit {
+            self.code_writes += 1;
+            self.code.clear();
+        }
+    }
+
     /// Write a tryte without access checks: for loaders, not the CPU.
     pub fn poke(&mut self, addr: i64, tryte: i64) {
+        self.code_store(addr, addr);
         let page = page_of(addr);
         let mem =
             self.pages.entry(page).or_insert_with(|| vec![0; PAGE as usize].into_boxed_slice());
@@ -511,6 +570,7 @@ impl Bus {
                 let rest = (value - lo) / TRYTE_MOD;
                 let mid = low(rest, TRYTE_TRITS);
                 let hi = low((rest - mid) / TRYTE_MOD, TRYTE_TRITS);
+                self.code_store(addr - 1, addr + 1);
                 match self.page_mut(addr) {
                     (mem, i) if (1..mem.len() - 1).contains(&i) => {
                         mem[i - 1] = lo as i16;
