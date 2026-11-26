@@ -31,6 +31,7 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
 use detrytus_core::accel::{self, Accelerator, Class, Insn, MemoryView};
+use detrytus_core::alu::TlutGroups;
 use detrytus_core::bus::{Bus, PAGE, page_of};
 use detrytus_core::fastmap::FastMap;
 use detrytus_core::hart::Hart;
@@ -164,6 +165,8 @@ struct Block {
     f: BlockFn,
     /// The function's instructions, for helpers that run one.
     insns: Box<[Insn]>,
+    /// Truth tables its `tlut`s use, which compiled code points at.
+    _tables: Vec<TlutGroups>,
 }
 
 /// The JIT: compiled blocks and the Cranelift module holding their code.
@@ -189,6 +192,7 @@ struct Helpers {
     load: FuncId,
     store: FuncId,
     compute: FuncId,
+    tlut: FuncId,
 }
 
 fn new_module() -> (JITModule, Helpers) {
@@ -208,6 +212,7 @@ fn new_module() -> (JITModule, Helpers) {
     jb.symbol("detrytus_load", helper_load as *const u8);
     jb.symbol("detrytus_store", helper_store as *const u8);
     jb.symbol("detrytus_compute", helper_compute as *const u8);
+    jb.symbol("detrytus_tlut", helper_tlut as *const u8);
     let mut module = JITModule::new(jb);
     let ptr = module.target_config().pointer_type();
     let sig = |params: &[Type], ret: bool| {
@@ -221,12 +226,14 @@ fn new_module() -> (JITModule, Helpers) {
     let load_sig = sig(&[ptr, types::I64, types::I64], true);
     let store_sig = sig(&[ptr, types::I64, types::I64, types::I64], true);
     let compute_sig = sig(&[ptr, types::I64, types::I64], true);
+    let tlut_sig = sig(&[ptr, types::I64, types::I64], true);
     let helpers = Helpers {
         load: module.declare_function("detrytus_load", Linkage::Import, &load_sig).unwrap(),
         store: module.declare_function("detrytus_store", Linkage::Import, &store_sig).unwrap(),
         compute: module
             .declare_function("detrytus_compute", Linkage::Import, &compute_sig)
             .unwrap(),
+        tlut: module.declare_function("detrytus_tlut", Linkage::Import, &tlut_sig).unwrap(),
     };
     (module, helpers)
 }
@@ -274,6 +281,13 @@ extern "C" fn helper_store(ctx: *mut Ctx, addr: i64, width: i64, value: i64) -> 
             0
         }
     }
+}
+
+/// `tlut` with a table spread by `TlutGroups`, which never traps.
+extern "C" fn helper_tlut(groups: *const [u8; 729], a: i64, b: i64) -> i64 {
+    // SAFETY: compiled code passes `groups()` of one of its block's own
+    // tables, which live as long as the block.
+    TlutGroups::apply_groups(unsafe { &*groups }, a, b)
 }
 
 /// Run instruction `index` of the block, at pc: 0 done, 1 it would trap.
@@ -414,6 +428,7 @@ impl Jit {
         ctx.func.signature.params.push(AbiParam::new(ptr));
         ctx.func.signature.returns.push(AbiParam::new(types::I64));
         let insns: Vec<Insn> = code.iter().map(|(_, insn)| *insn).collect();
+        let mut tables: Vec<TlutGroups> = Vec::new();
         {
             let mut b = FunctionBuilder::new(&mut ctx.func, &mut self.builder);
             let start = b.create_block();
@@ -424,6 +439,7 @@ impl Jit {
             let load = self.module.declare_func_in_func(self.helpers.load, b.func);
             let store = self.module.declare_func_in_func(self.helpers.store, b.func);
             let compute = self.module.declare_func_in_func(self.helpers.compute, b.func);
+            let tlut = self.module.declare_func_in_func(self.helpers.tlut, b.func);
             let trusted = MemFlagsData::trusted();
             let n = b.declare_var(types::I64);
             // Every way out: (count, pc).
@@ -514,6 +530,17 @@ impl Jit {
                         } else {
                             g.b.ins().smax(a, c)
                         };
+                        g.set(regs, d.rd, v);
+                    }
+                    Kind::Tlut => {
+                        // The spread table is on the heap, so it stays
+                        // put when its owner moves into the Block.
+                        let groups = TlutGroups::new(d.fn_);
+                        let at = g.b.ins().iconst(ptr, groups.groups().as_ptr() as i64);
+                        tables.push(groups);
+                        let (a, c) = (g.reg(regs, d.rs1), g.reg(regs, d.rs2));
+                        let call = g.b.ins().call(tlut, &[at, a, c]);
+                        let v = g.b.inst_results(call)[0];
                         g.set(regs, d.rd, v);
                     }
                     Kind::Mul => {
@@ -709,7 +736,7 @@ impl Jit {
         let code = self.module.get_finalized_function(id);
         // SAFETY: the function was built with exactly BlockFn's signature.
         let f = unsafe { std::mem::transmute::<*const u8, BlockFn>(code) };
-        Some(Block { f, insns: insns.into_boxed_slice() })
+        Some(Block { f, insns: insns.into_boxed_slice(), _tables: tables })
     }
 }
 

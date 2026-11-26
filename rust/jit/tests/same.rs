@@ -113,6 +113,10 @@ fill:   sw    t1, 0(t0)
         sub   t6, r0, t3
         bxor  t4, t6, t1
         add   a0, a0, t4
+        tlut  t4, t3, t1, tmin
+        add   a0, a0, t4
+        tlut  t4, t1, t3, tabs
+        add   a0, a0, t4
         addi  t0, t0, 6
         addi  t1, t1, -12345678
         addi  t2, t2, -1
