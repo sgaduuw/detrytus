@@ -49,8 +49,13 @@ defines are left to the included assembly. `--prune` writes the
 reachable part of the modules as one LLVM IR module instead, which is
 how the tests keep only what they need of core; `--root NAME` (any
 number of times) prunes from those functions instead of `main`.
-`--signed-pointers` makes pointers signed (Pointers, below), which
-code running below address 0, a kernel, needs.
+Three options are for a kernel (Words and the machine, below):
+`--root NAME` (any number of times) keeps those functions and what they
+reach instead of `main`, which a kernel does not have;
+`--signed-pointers` makes pointers signed (Pointers); and
+`--sections CODE,DATA` puts the code in section CODE and the static
+data in DATA, sections the including assembly has placed, ending back
+in CODE.
 
 ## What the program and its runtime agree on
 
@@ -294,6 +299,43 @@ one is undefined behaviour in Rust anyway. A thread preempted while it
 holds the lock makes others spin until it runs again, which is slow but
 correct. `atomicrmw` on floats and the wrapping increments
 (`uinc_wrap`) are refused.
+
+## Words and the machine
+
+A kernel handles what no user program does: whole ternary words
+(saved registers, system-call arguments, page-table entries, messages),
+CSRs, and the instructions only ring 0 runs. Rust reaches them through
+builtins, functions named `detrytus.*` that the translator turns into
+the instructions in place instead of calls. Rust declares them with
+`#[link_name]`:
+
+```rust
+unsafe extern "C" {
+    #[link_name = "detrytus.lw"]
+    fn lw(p: *const u8) -> i64;
+}
+```
+
+A word is an `i64` on the Rust side: its value, which a word holds up to
+±(3²⁷ − 1)/2, about ±3.8 × 10¹², so an `i64` holds every one exactly and
+Rust's own arithmetic and comparisons work on it. The translator joins
+the two limbs into one word on the way in (`mul`, `add`) and splits a
+word into limbs on the way out (`band`, `sub`, `div`); a value outside
+a word's range does not survive the trip.
+
+| Builtin | Does |
+|---------|------|
+| `lw(p) -> i64`, `sw(p, w)` | the aligned word at `p` (a misaligned one traps) |
+| `csrr(csr) -> i64`, `csrw(csr, w)` | a CSR, by number (isa.md 8.2); `csr` must be a constant |
+| `tex(w, pos, len) -> i64`, `tins(w, v, pos, len) -> i64` | a trit field of `w`, and `w` with it replaced by `v` (isa.md 7.3); `pos` and `len` constants, `0 ≤ pos`, `1 ≤ len`, `pos + len ≤ 27` |
+| `fence.vm(addr, asid)` | flush translations; a null `addr` or a 0 `asid` means all (isa.md 9.7) |
+| `wfi()` | wait for an interrupt |
+
+Each is a call to Rust, so it is never left out or moved past other
+memory accesses: `lw` and `sw` serve device registers as well as
+memory. `tret` and trap entry have no builtin: they belong in the
+assembly stub around the Rust code, which saves and restores every
+register.
 
 ## Size
 

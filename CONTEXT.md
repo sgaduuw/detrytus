@@ -1898,3 +1898,24 @@ them inside pointer-only load and store helpers and a branch instead
 of a wrap. A program running above 0 gains nothing for that, so only
 the kernel pays it; without the switch the output is unchanged
 (trylobite's disk image is byte for byte the same).
+
+### 2026-11-26 · Words and the machine's instructions for a kernel in Rust
+
+The second step towards trylobite's kernel in Rust. A kernel moves
+ternary words, which no Rust type holds, and runs instructions Rust
+cannot name. `detrytus ll` now turns calls to `detrytus.*` into those
+instructions in place: `lw`, `sw`, `csrr`, `csrw`, `tex`, `tins`,
+`fence.vm` and `wfi` (docs/rust.md, Words and the machine). Two
+options go with them: `--root NAME`, since a kernel has entry points
+but no `main`, and `--sections CODE,DATA`, since its data lives in a
+page of its own.
+
+A word is an `i64` on the Rust side, not a type of its own. Every word's
+value fits an `i64` exactly, so Rust's arithmetic and comparisons are
+right on it, and a word stored in a Rust struct survives `memcpy`. A
+word held as its own 32-bit "opaque" type would not: LLVM moves such a
+value through memory as 4 bytes, and a ternary word is not 4 bytes. The
+cost is the conversion at each builtin, a few instructions, and 64-bit
+arithmetic where Rust computes on words; the kernel mostly passes them
+along. The `i64` is wrapped in a `Word` type in trylobite, not here.
+

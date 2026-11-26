@@ -36,6 +36,13 @@ pub struct Options {
     /// integers, so an address below 0 can be one (docs/rust.md,
     /// Pointers). A kernel needs it; a program running above 0 does not.
     pub signed_pointers: bool,
+    /// The functions to keep, and what they reach; `main` when empty. A
+    /// kernel has no `main` but entry points its assembly calls.
+    pub roots: Vec<String>,
+    /// The sections for code and for data, by name: code that keeps
+    /// its data apart (a kernel's pages) names two the including
+    /// assembly has placed. The output ends back in the code section.
+    pub sections: Option<(String, String)>,
 }
 
 /// Translate the LLVM IR modules at `paths` into one assembly file that
@@ -133,7 +140,8 @@ pub fn prune(paths: &[&Path], roots: &[&str]) -> Result<String, Error> {
         .iter()
         .filter(|d| {
             external.contains_key(*d)
-                || (d.starts_with("llvm.") && text.contains(&format!("@{d}(")))
+                || ((d.starts_with("llvm.") || d.starts_with("detrytus."))
+                    && text.contains(&format!("@{d}(")))
         })
         .collect();
     decls.sort();
@@ -200,12 +208,18 @@ fn translate_module(
     includes: &[String],
     options: &Options,
 ) -> Result<Output, Error> {
-    if !m.funcs.contains_key("main") {
-        return Err(Error::new(shown, 0, "no function main".into()));
+    let mut roots: Vec<&str> = options.roots.iter().map(String::as_str).collect();
+    if roots.is_empty() {
+        roots.push("main");
+    }
+    for r in &roots {
+        if !m.funcs.contains_key(*r) && !m.aliases.contains_key(*r) {
+            return Err(Error::new(shown, 0, format!("no function {r}")));
+        }
     }
     let mut low = lower::Lower::new(m);
     low.signed_ptrs = options.signed_pointers;
-    let (funcs, globals, external) = low.reachable(&["main"]);
+    let (funcs, globals, external) = low.reachable(&roots);
     let muls = funcs
         .iter()
         .flat_map(|f| &m.funcs[f].blocks)
@@ -224,6 +238,9 @@ fn translate_module(
     if !external.is_empty() {
         let names: Vec<&str> = external.keys().map(String::as_str).collect();
         out.push(format!("# From elsewhere: {}.", names.join(", ")));
+    }
+    if let Some((code, _)) = &options.sections {
+        out.push(format!("        .section {code}"));
     }
     out.push("        .compress".into());
     for f in &funcs {
@@ -246,10 +263,17 @@ fn translate_module(
     }
     out.extend(lower::helpers(&low.helpers));
     out.push(String::new());
+    if let Some((_, data)) = &options.sections {
+        out.push(format!("        .section {data}"));
+    }
+    out.extend(lower::helper_data(&low.helpers));
     for g in &globals {
         out.extend(low.global(&m.globals[g])?);
     }
     out.push("        .nocompress".into());
+    if let Some((code, _)) = &options.sections {
+        out.push(format!("        .section {code}"));
+    }
     let mut assembly = out.join("\n");
     assembly.push('\n');
     Ok(Output { assembly, warnings: Vec::new() })

@@ -21,6 +21,14 @@ pub(crate) fn cmd_ll(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
             "--prune" => prune = true,
             "--signed-pointers" => options.signed_pointers = true,
             "--root" => roots.push(args.next().ok_or_else(|| usage("--root needs a name"))?),
+            "--sections" => {
+                let v = args.next().ok_or_else(|| usage("--sections needs CODE,DATA"))?;
+                let (code, data) = v
+                    .split_once(',')
+                    .filter(|(c, d)| !c.is_empty() && !d.is_empty())
+                    .ok_or_else(|| usage("--sections needs CODE,DATA"))?;
+                options.sections = Some((code.to_string(), data.to_string()));
+            }
             flag if flag.starts_with('-') => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -48,6 +56,7 @@ pub(crate) fn cmd_ll(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
         }
         return Ok(0);
     }
+    options.roots = roots;
     let out = detrytus_tc::ll::translate_with(&paths, &includes, &options)
         .map_err(|e| Fail::new(e.to_string(), BAD_INPUT))?;
     match output {
