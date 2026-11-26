@@ -140,7 +140,8 @@ pub fn prune(paths: &[&Path], roots: &[&str]) -> Result<String, Error> {
         .iter()
         .filter(|d| {
             external.contains_key(*d)
-                || (d.starts_with("llvm.") && text.contains(&format!("@{d}(")))
+                || ((d.starts_with("llvm.") || d.starts_with("detrytus."))
+                    && text.contains(&format!("@{d}(")))
         })
         .collect();
     decls.sort();

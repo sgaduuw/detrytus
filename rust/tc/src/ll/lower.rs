@@ -2257,7 +2257,7 @@ impl<'m> Lower<'m> {
                 if let Some(Ok(c)) = &g.init {
                     const_refs(c, &mut refs);
                 }
-            } else if !n.starts_with("llvm.") {
+            } else if !n.starts_with("llvm.") && !n.starts_with("detrytus.") {
                 external.insert(n.clone(), ());
             }
             for r in refs.into_iter().rev() {
