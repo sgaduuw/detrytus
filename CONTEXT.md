@@ -1727,3 +1727,46 @@ Together: 90 s for the same run, with the same output and step count,
 and nothing about the machine changed. The larger steps (a dispatch
 loop that runs a hart many instructions at a time, predecoded blocks,
 and a JIT) change the core's structure and are planned separately.
+
+### 2026-11-26 · A fast loop between deadlines
+
+The first step towards decoded blocks and a JIT. `Machine::run` runs a
+lone running hart in a tight loop for as long as a round's bookkeeping
+would change nothing: no device due to finish or be looked at
+(`Bus::next_event`), no hot-plug change due, and no access to a device
+page since the loop began. Each iteration is still one round, one tick
+and one instruction, so step counts and timing are unchanged. Any
+access to a device page ends the loop, since it may raise a line,
+start a hart or begin a transfer. The binary floating point
+coprocessor is the exception: it only computes for the hart using it,
+and Rust programs touch it every hundred or so instructions.
+
+`take_interrupt` also checks first whether anything could be pending
+(a stored ip trit, the timer due, a line raised) before building ip
+trit by trit, which it did on every step. Together: 90 s to 59 s on the
+sort benchmark, same output and step count. Most of what is left is
+per instruction: fetch, translation and decode, which decoded blocks
+remove.
+
+### 2026-11-26 · Decoded code, kept until it is written
+
+Each hart keeps the instructions it has decoded, by physical address,
+and the virtual page it last fetched from with how that page
+translated. A fetch on that page reads the decoded instruction from an
+array: no translation, no bus access, no decode lookup. The page's
+translation holds while the ring, `ptbr` and the MMU's generation
+(bumped by `fence.vm`) are unchanged, which is exactly as long as the
+MMU would give the same answer, since its TLB never evicts on its own.
+
+Code that changes must not run stale. The bus keeps a bit per word that
+any hart has decoded; a store, a tryte poke, a block read or a network
+delivery over one of those words counts a code write, and every hart
+drops its whole cache before its next fetch. The spec only promises a
+new instruction after `fence.i`; seeing it at once is stricter and
+simpler. Dropping everything is coarse, but code is rarely written
+(a program being loaded), and data stores that share a page with code
+do not count, being word-exact. Faults are never cached.
+
+Sort benchmark: 59 s to 35 s, same output and step count. This is the
+front end a JIT would compile from: a JIT turns these decoded runs into
+host code, and drops them by the same rule.

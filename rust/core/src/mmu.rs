@@ -135,6 +135,12 @@ fn checked_slot(vpn: i64, access: Access) -> usize {
 }
 
 impl Mmu {
+    /// Changes whenever `fence.vm` may have removed a translation: what
+    /// a cache of translations made earlier compares against.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn translate(
         &mut self,
         bus: &mut Bus,

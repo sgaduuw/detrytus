@@ -16,7 +16,7 @@
 use crate::fastmap::FastMap as HashMap;
 
 use crate::alu;
-use crate::bus::{Access, Bus, BusError};
+use crate::bus::{Access, Bus, BusError, PAGE, page_of};
 use crate::compressed;
 use crate::entropy::Entropy;
 use crate::float::{self, Rounding};
@@ -76,6 +76,67 @@ pub enum Event {
     Trap { cause: i64, tval: i64, tpc: i64 },
 }
 
+/// An instruction fetched and decoded at a physical address: what
+/// `execute` needs to run it again without fetching.
+#[derive(Clone, Copy)]
+struct Fetched {
+    /// As `run` takes it: for a slot, `word` is the bundle's.
+    d: Decoded,
+    /// The full instruction, as [`Event::Execute`] reports it.
+    full: i64,
+    /// How far pc moves on: 3, or 1 + slot within a bundle.
+    advance: i64,
+}
+
+/// The virtual page fetches last came from, and how it translated.
+/// Valid while the ring, ptbr and the MMU's generation are as they were,
+/// which is exactly as long as the MMU itself would give the same page.
+#[derive(Clone, Copy)]
+struct Window {
+    vpn: i64,
+    ring: i64,
+    ptbr: Ptbr,
+    generation: u64,
+    /// The physical page, and its index in `CodeCache::pages`.
+    page: i64,
+    slots: usize,
+}
+
+/// Decoded code: per physical page, for each tryte a fetch may start
+/// at, its index in `fetched` plus one (0 for none yet). The bus counts stores
+/// to any word cached here, and the whole cache is dropped when that
+/// count moves, so it never runs code that has since changed.
+#[derive(Default)]
+struct CodeCache {
+    window: Option<Window>,
+    pages: HashMap<i64, usize>,
+    slots: Vec<Box<[u32]>>,
+    fetched: Vec<Fetched>,
+    /// The bus's `code_writes` when this cache was last known good.
+    writes: u64,
+}
+
+/// Drop the cache past this many instructions, to bound its memory.
+const CODE_CACHE_MAX: usize = 1 << 20;
+
+impl CodeCache {
+    fn clear(&mut self) {
+        self.window = None;
+        self.pages.clear();
+        self.slots.clear();
+        self.fetched.clear();
+    }
+
+    /// The index of a physical page's slots, made if new.
+    fn slots_for(&mut self, page: i64) -> usize {
+        let slots = &mut self.slots;
+        *self.pages.entry(page).or_insert_with(|| {
+            slots.push(vec![0; PAGE as usize].into_boxed_slice());
+            slots.len() - 1
+        })
+    }
+}
+
 pub struct Hart {
     regs: [i64; 27],
     pub pc: i64,
@@ -110,6 +171,9 @@ pub struct Hart {
     /// Slots by bundle and slot (word × 2 + slot), expanded and
     /// decoded; None for an illegal slot.
     slot_cache: HashMap<i64, Option<Decoded>>,
+    /// Decoded code by physical address, for fetches that skip the
+    /// translation, the bus and the decode caches.
+    code: CodeCache,
     /// When Some, every [`Event`] is appended here; a debugger drains it
     /// after each step. None (the default) costs nothing.
     pub events: Option<Vec<Event>>,
@@ -148,6 +212,7 @@ impl Hart {
             entropy: Entropy::new(seed),
             cache: HashMap::default(),
             slot_cache: HashMap::default(),
+            code: CodeCache::default(),
             events: None,
         }
     }
@@ -238,27 +303,85 @@ impl Hart {
         if slot == -1 {
             return Err(trap(isa::MISALIGNED, pc));
         }
-        let physical = self.translate(bus, pc, mmu::Access::Fetch)?;
+        let f = self.fetch(bus, pc, slot)?;
+        self.record(Event::Execute { pc, word: f.full });
+        self.next_pc = wrap(pc + f.advance);
+        self.run(bus, &f.d)?;
+        self.pc = self.next_pc;
+        Ok(())
+    }
+
+    /// The instruction at pc, from the code cache when it holds it.
+    /// Faults are never cached: a fetch that faults takes the full path
+    /// each time.
+    fn fetch(&mut self, bus: &mut Bus, pc: i64, slot: i64) -> Result<Fetched, Exception> {
+        let code = &mut self.code;
+        if code.writes != bus.code_writes || code.fetched.len() >= CODE_CACHE_MAX {
+            code.clear();
+            code.writes = bus.code_writes;
+        }
+        let vpn = page_of(pc);
+        let offset = (pc - vpn * PAGE + PAGE / 2) as usize;
+        let current = |w: &Window| {
+            w.vpn == vpn
+                && w.ring == self.ring
+                && w.ptbr == self.ptbr
+                && w.generation == self.mmu.generation()
+        };
+        let window = match self.code.window {
+            Some(w) if current(&w) => w,
+            _ => {
+                let physical = self.translate(bus, pc, mmu::Access::Fetch)?;
+                let page = page_of(physical);
+                let slots = self.code.slots_for(page);
+                let w = Window {
+                    vpn,
+                    ring: self.ring,
+                    ptbr: self.ptbr,
+                    generation: self.mmu.generation(),
+                    page,
+                    slots,
+                };
+                self.code.window = Some(w);
+                w
+            }
+        };
+        let i = self.code.slots[window.slots][offset];
+        if i != 0 {
+            return Ok(self.code.fetched[i as usize - 1]);
+        }
+        let physical = window.page * PAGE + (pc - vpn * PAGE);
+        let f = self.fetch_slow(bus, physical, slot)?;
+        bus.mark_code(physical - slot);
+        self.code.fetched.push(f);
+        self.code.slots[window.slots][offset] = self.code.fetched.len() as u32;
+        Ok(f)
+    }
+
+    /// Read and decode the instruction at a physical address.
+    fn fetch_slow(
+        &mut self,
+        bus: &mut Bus,
+        physical: i64,
+        slot: i64,
+    ) -> Result<Fetched, Exception> {
         let word = bus.read(physical - slot, 3, Access::Fetch).map_err(|e| match e {
             BusError::Fault(addr) => trap(isa::ACCESS_FAULT, addr),
             BusError::Halt(code) => Exception::Stop(Stop::Halt(code)),
         })?;
-        let (mut d, next) = if compressed::is_bundle(word) {
+        let (mut d, advance) = if compressed::is_bundle(word) {
             // After slot A comes slot B (a + 1); after slot B, a + 3.
-            (self.decode_slot(word, slot)?, pc + 1 + slot)
+            (self.decode_slot(word, slot)?, 1 + slot)
         } else if slot == 1 {
             return Err(trap(isa::ILLEGAL, word));
         } else {
-            (self.decode(word)?, pc + 3)
+            (self.decode(word)?, 3)
         };
-        self.record(Event::Execute { pc, word: d.word });
+        let full = d.word;
         // An illegal expansion (a bad tex field, a tret that may not
         // return) reports the bundle, as an illegal slot does.
         d.word = word;
-        self.next_pc = wrap(next);
-        self.run(bus, &d)?;
-        self.pc = self.next_pc;
-        Ok(())
+        Ok(Fetched { d, full, advance })
     }
 
     fn decode(&mut self, word: i64) -> Result<Decoded, Exception> {

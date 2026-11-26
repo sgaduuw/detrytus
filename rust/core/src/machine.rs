@@ -205,12 +205,63 @@ impl Machine {
 
     /// Run until the program powers off, stops, or reaches `max_steps`.
     pub fn run(&mut self, max_steps: u64) -> Outcome {
-        for steps in 0..max_steps {
-            if let Some(outcome) = self.round(steps + 1) {
+        let mut steps = 0;
+        while steps < max_steps {
+            steps += 1;
+            if let Some(outcome) = self.round(steps) {
+                return outcome;
+            }
+            let (done, outcome) = self.fast_rounds(steps, max_steps - steps);
+            steps += done;
+            if let Some(outcome) = outcome {
                 return outcome;
             }
         }
         Outcome::StepLimit
+    }
+
+    /// Run rounds in a tight loop while they need none of a round's
+    /// bookkeeping: one hart running and not waiting, no events
+    /// recorded, and no device or hot-plug change due. Each is still one
+    /// round, one tick and one instruction, exactly as `round` would run
+    /// it; the loop only skips work that would change nothing. It stops
+    /// after an instruction that touched a device page or began a wait,
+    /// whose effects the next full round takes up. Returns the rounds
+    /// run, and the outcome if the program stopped (counted from
+    /// `steps`, the rounds already run).
+    fn fast_rounds(&mut self, steps: u64, max: u64) -> (u64, Option<Outcome>) {
+        let &[h] = self.bus.harts.running() else { return (0, None) };
+        let Some(hart) = self.harts.get_mut(&h) else { return (0, None) };
+        if hart.waiting || hart.events.is_some() {
+            return (0, None);
+        }
+        let plug = self.schedule.first().map_or(i64::MAX, |(t, _)| *t);
+        let until = self.bus.next_event(self.time).min(plug);
+        let mut done = 0;
+        self.bus.current = h;
+        self.bus.touched_device = false;
+        while done < max && self.time + 1 < until {
+            self.time += 1;
+            self.bus.now = self.time;
+            hart.time = self.time;
+            done += 1;
+            if let Err(stop) = hart.step(&mut self.bus) {
+                return (done, Some(Self::outcome(h, stop, steps + done)));
+            }
+            if self.bus.touched_device || hart.waiting {
+                break;
+            }
+        }
+        if done > 0 {
+            // What the end of `run_harts` does after the step.
+            self.start_and_stop(false);
+            for (&h, hart) in &mut self.harts {
+                hart.doorbell = self.bus.harts.doorbell(h);
+                hart.external = self.bus.external_pending(h);
+            }
+        }
+        self.bus.current = 0;
+        (done, None)
     }
 
     /// Whether, since the last call, every running hart has waited with
@@ -242,12 +293,21 @@ impl Machine {
     /// (`take_stalled`) or a skip is paced (`take_paced`); also gives the
     /// steps taken.
     pub fn run_until_stalled(&mut self, max_steps: u64) -> (Outcome, u64) {
-        for steps in 0..max_steps {
-            if let Some(outcome) = self.round(steps + 1) {
-                return (outcome, steps + 1);
+        let mut steps = 0;
+        while steps < max_steps {
+            steps += 1;
+            if let Some(outcome) = self.round(steps) {
+                return (outcome, steps);
             }
             if self.stalled || self.paced {
-                return (Outcome::StepLimit, steps + 1);
+                return (Outcome::StepLimit, steps);
+            }
+            // A fast round never skips idle time, so it neither stalls
+            // nor paces.
+            let (done, outcome) = self.fast_rounds(steps, max_steps - steps);
+            steps += done;
+            if let Some(outcome) = outcome {
+                return (outcome, steps);
             }
         }
         (Outcome::StepLimit, max_steps)
