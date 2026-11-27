@@ -1457,6 +1457,17 @@ impl<'m> Lower<'m> {
                 self.emit(format!("lw    {w}, {off}({base})"));
                 self.split_word(w)
             }
+            // lw32(p) -> i32: the aligned word at p as an i32, for a word
+            // known to fit one (a state, a count): its low limb only, one
+            // `band` instead of the four that split it.
+            "detrytus.lw32" => {
+                want(1)?;
+                let (base, off) = self.addr(&args[0].1)?;
+                let w = self.vreg();
+                self.emit(format!("lw    {w}, {off}({base})"));
+                let m = self.li(mask(32));
+                vec![self.op3("band", w, m)]
+            }
             "detrytus.sw" => {
                 want(2)?;
                 let w = word(self, 1)?;

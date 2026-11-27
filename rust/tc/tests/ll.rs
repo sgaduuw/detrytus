@@ -422,6 +422,32 @@ fn words_and_privileged_instructions_as_builtins() {
 }
 
 #[test]
+fn lw32_reads_a_small_word_as_an_i32() {
+    // A word that fits an i32, negative or not, comes back as that i32;
+    // 7 when every check holds.
+    let src = "@testwords = external global [6 x i8]\n\
+               declare void @detrytus.sw(ptr, i64)\n\
+               declare i32 @detrytus.lw32(ptr)\n\
+               define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n\
+               \x20 %w2 = getelementptr i8, ptr @testwords, i32 3\n\
+               \x20 call void @detrytus.sw(ptr @testwords, i64 -9)\n\
+               \x20 call void @detrytus.sw(ptr %w2, i64 2147483647)\n\
+               \x20 %a = call i32 @detrytus.lw32(ptr @testwords)\n\
+               \x20 %b = call i32 @detrytus.lw32(ptr %w2)\n\
+               \x20 %ok1 = icmp eq i32 %a, -9\n\
+               \x20 %ok2 = icmp slt i32 %a, 0\n\
+               \x20 %ok3 = icmp eq i32 %b, 2147483647\n\
+               \x20 %b1 = select i1 %ok1, i32 1, i32 0\n\
+               \x20 %b2 = select i1 %ok2, i32 2, i32 0\n\
+               \x20 %b3 = select i1 %ok3, i32 4, i32 0\n\
+               \x20 %s1 = or i32 %b1, %b2\n\
+               \x20 %s2 = or i32 %s1, %b3\n\
+               \x20 ret i32 %s2\n}\n";
+    assert_eq!(run_text_with(src, &Default::default()), (7, String::new()));
+}
+
+#[test]
 fn builtins_that_only_assemble() {
     // wfi may wait for an interrupt the bare machine never raises, so
     // these are only translated and assembled.

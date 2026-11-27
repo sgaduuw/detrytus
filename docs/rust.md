@@ -330,6 +330,7 @@ a word's range does not survive the trip.
 | Builtin | Does |
 |---------|------|
 | `lw(p) -> i64`, `sw(p, w)` | the aligned word at `p` (a misaligned one traps) |
+| `lw32(p) -> i32` | the aligned word at `p` as an `i32`, for a word known to fit one (a state, a small count): one `band` instead of the four that split a word into limbs |
 | `csrr(csr) -> i64`, `csrw(csr, w)` | a CSR, by number (isa.md 8.2); `csr` must be a constant |
 | `tex(w, pos, len) -> i64`, `tins(w, v, pos, len) -> i64` | a trit field of `w`, and `w` with it replaced by `v` (isa.md 7.3); `pos` and `len` constants, `0 ≤ pos`, `1 ≤ len`, `pos + len ≤ 27` |
 | `fence.vm(addr, asid)` | flush translations; a null `addr` or a 0 `asid` means all (isa.md 9.7) |

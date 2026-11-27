@@ -1930,3 +1930,15 @@ the kernel had to narrow every such word by hand first. A wide switch
 now tests each case limb by limb and moves on to the next case at the
 first limb that differs. Programs that never had one translate as
 before.
+
+
+### 2026-11-27 · lw32: a small word without the split
+
+A word comes into Rust as an `i64`: `lw`, then `band`, `sub`, `div` and
+`band` to split it into limbs, and every comparison after it looks at
+both limbs. trylobite's scheduler reads each process's state, a small
+number, on every switch, and that walk made a shell pipeline benchmark
+take a fifth more steps than the assembly it replaced. `lw32(p) -> i32`
+reads a word known to fit an `i32` as its low limb only: `lw` and one
+`band`, and one-limb comparisons after it. A word that does not fit
+comes back cut to its low 32 bits, as `trunc` would.
