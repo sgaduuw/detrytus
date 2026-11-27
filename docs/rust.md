@@ -161,7 +161,11 @@ limbs:
 - comparisons weigh the limbs' −1/0/+1 by powers of three, the last
   limb the heaviest, which gives a word with the comparison's sign:
   `eq` and `ne` test the limbs' `bxor` instead;
-- `zext`, `sext` and `trunc` add, fill or drop limbs.
+- `zext`, `sext` and `trunc` add, fill or drop limbs;
+- a `switch` tests each case limb by limb, low first, going on to the
+  next case at the first limb that differs: LLVM makes a chain of
+  comparisons of an `i64` (or of an `i63`, once it knows the sign bit)
+  into one.
 
 Widths in between (33 to 63 bits, 65 to 127, up to 256) get the
 operations done on the limbs, not the helpers. Core formats a `u128`
@@ -326,6 +330,7 @@ a word's range does not survive the trip.
 | Builtin | Does |
 |---------|------|
 | `lw(p) -> i64`, `sw(p, w)` | the aligned word at `p` (a misaligned one traps) |
+| `lw32(p) -> i32` | the aligned word at `p` as an `i32`, for a word known to fit one (a state, a small count): one `band` instead of the four that split a word into limbs |
 | `csrr(csr) -> i64`, `csrw(csr, w)` | a CSR, by number (isa.md 8.2); `csr` must be a constant |
 | `tex(w, pos, len) -> i64`, `tins(w, v, pos, len) -> i64` | a trit field of `w`, and `w` with it replaced by `v` (isa.md 7.3); `pos` and `len` constants, `0 ≤ pos`, `1 ≤ len`, `pos + len ≤ 27` |
 | `fence.vm(addr, asid)` | flush translations; a null `addr` or a 0 `asid` means all (isa.md 9.7) |

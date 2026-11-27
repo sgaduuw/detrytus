@@ -308,6 +308,60 @@ fn an_odd_sized_integer_touches_only_its_own_bytes() {
     assert_eq!(run_text(src), (0, String::new()));
 }
 
+#[test]
+fn a_switch_on_a_wide_integer_matches_every_limb() {
+    // LLVM turns a chain of comparisons into a switch on the type it has,
+    // i64 or narrower odd widths such as i63 (a match on a kernel word).
+    // A case matches only when both 32-bit limbs do: 2^32 and 0 share a
+    // low limb, -3 and 2^32 - 3 share one too.
+    let src = "define i32 @pick(i64 %x) {\n\
+               start:\n\
+               \x20 switch i64 %x, label %other [\n\
+               \x20   i64 -3, label %a\n\
+               \x20   i64 4294967296, label %b\n\
+               \x20   i64 5, label %c\n\
+               \x20 ]\n\
+               a:\n  ret i32 1\n\
+               b:\n  ret i32 2\n\
+               c:\n  ret i32 3\n\
+               other:\n  ret i32 0\n}\n\
+               define i32 @narrow(i64 %x) {\n\
+               start:\n\
+               \x20 %t = trunc i64 %x to i63\n\
+               \x20 switch i63 %t, label %no [\n\
+               \x20   i63 -9, label %yes\n\
+               \x20 ]\n\
+               yes:\n  ret i32 1\n\
+               no:\n  ret i32 0\n}\n\
+               define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n\
+               \x20 %r1 = call i32 @pick(i64 -3)\n\
+               \x20 %r2 = call i32 @pick(i64 4294967296)\n\
+               \x20 %r3 = call i32 @pick(i64 5)\n\
+               \x20 %r4 = call i32 @pick(i64 0)\n\
+               \x20 %r5 = call i32 @pick(i64 4294967293)\n\
+               \x20 %r6 = call i32 @pick(i64 4294967301)\n\
+               \x20 %r7 = call i32 @narrow(i64 -9)\n\
+               \x20 %r8 = call i32 @narrow(i64 9)\n\
+               \x20 %s1 = mul i32 %r1, 1\n\
+               \x20 %s2 = mul i32 %r2, 10\n\
+               \x20 %s3 = mul i32 %r3, 100\n\
+               \x20 %s4 = mul i32 %r4, 1000\n\
+               \x20 %s5 = mul i32 %r5, 10000\n\
+               \x20 %s6 = mul i32 %r6, 100000\n\
+               \x20 %s7 = mul i32 %r7, 1000000\n\
+               \x20 %s8 = mul i32 %r8, 10000000\n\
+               \x20 %t1 = add i32 %s1, %s2\n\
+               \x20 %t2 = add i32 %t1, %s3\n\
+               \x20 %t3 = add i32 %t2, %s4\n\
+               \x20 %t4 = add i32 %t3, %s5\n\
+               \x20 %t5 = add i32 %t4, %s6\n\
+               \x20 %t6 = add i32 %t5, %s7\n\
+               \x20 %t7 = add i32 %t6, %s8\n\
+               \x20 ret i32 %t7\n}\n";
+    assert_eq!(run_text(src), (1_000_321, String::new()));
+}
+
 /// IR run with `options` on the bare machine.
 fn run_text_with(src: &str, options: &detrytus_tc::ll::Options) -> (i64, String) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ll");
@@ -365,6 +419,32 @@ fn words_and_privileged_instructions_as_builtins() {
                \x20 %s6 = or i32 %s5, %b7\n\
                \x20 ret i32 %s6\n}\n";
     assert_eq!(run_text_with(src, &Default::default()), (0, String::new()));
+}
+
+#[test]
+fn lw32_reads_a_small_word_as_an_i32() {
+    // A word that fits an i32, negative or not, comes back as that i32;
+    // 7 when every check holds.
+    let src = "@testwords = external global [6 x i8]\n\
+               declare void @detrytus.sw(ptr, i64)\n\
+               declare i32 @detrytus.lw32(ptr)\n\
+               define i32 @main(i32 %argc, ptr %argv) {\n\
+               start:\n\
+               \x20 %w2 = getelementptr i8, ptr @testwords, i32 3\n\
+               \x20 call void @detrytus.sw(ptr @testwords, i64 -9)\n\
+               \x20 call void @detrytus.sw(ptr %w2, i64 2147483647)\n\
+               \x20 %a = call i32 @detrytus.lw32(ptr @testwords)\n\
+               \x20 %b = call i32 @detrytus.lw32(ptr %w2)\n\
+               \x20 %ok1 = icmp eq i32 %a, -9\n\
+               \x20 %ok2 = icmp slt i32 %a, 0\n\
+               \x20 %ok3 = icmp eq i32 %b, 2147483647\n\
+               \x20 %b1 = select i1 %ok1, i32 1, i32 0\n\
+               \x20 %b2 = select i1 %ok2, i32 2, i32 0\n\
+               \x20 %b3 = select i1 %ok3, i32 4, i32 0\n\
+               \x20 %s1 = or i32 %b1, %b2\n\
+               \x20 %s2 = or i32 %s1, %b3\n\
+               \x20 ret i32 %s2\n}\n";
+    assert_eq!(run_text_with(src, &Default::default()), (7, String::new()));
 }
 
 #[test]
