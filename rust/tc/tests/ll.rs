@@ -502,3 +502,10 @@ fn roots_instead_of_main_and_data_in_its_own_section() {
     let e = detrytus_tc::ll::translate_text_with(src, &[], &missing).expect_err("refused");
     assert!(e.to_string().contains("no function nothing"), "{e}");
 }
+
+#[test]
+fn flat_map_scans_every_inner_item() {
+    let (code, text) = run("flatmap");
+    assert_eq!(text, "111010/111010\n243 21\n");
+    assert_eq!(code, 0);
+}
