@@ -1741,6 +1741,28 @@ impl<'m> Lower<'m> {
                 }
                 self.emit(format!("j     {fl}"));
             }
+            Op::Switch { ty, v, default, cases } if self.wide(ty)?.is_some() => {
+                // A wide value is a word per 32 bits, low first: a case
+                // matches when every limb does.
+                let bits = self.wide(ty)?.unwrap_or(MAX_BITS);
+                let regs = self.leaves_of(v, ty)?;
+                for (c, l) in cases {
+                    let t = self.target(l)?;
+                    let c = Self::canon(*c, bits);
+                    let next = self.new_label();
+                    for (k, r) in regs.iter().enumerate() {
+                        let limb = self.li((c >> (32 * k)) & 0xffff_ffff);
+                        if k + 1 < regs.len() {
+                            self.emit(format!("bne   {r}, {limb}, {next}"));
+                        } else {
+                            self.emit(format!("beq   {r}, {limb}, {t}"));
+                        }
+                    }
+                    self.label(&next);
+                }
+                let t = self.target(default)?;
+                self.emit(format!("j     {t}"));
+            }
             Op::Switch { ty, v, default, cases } => {
                 let r = self.scalar(v, ty)?;
                 let bits = self.bits(ty)?;

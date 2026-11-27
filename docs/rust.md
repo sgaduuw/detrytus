@@ -161,7 +161,11 @@ limbs:
 - comparisons weigh the limbs' −1/0/+1 by powers of three, the last
   limb the heaviest, which gives a word with the comparison's sign:
   `eq` and `ne` test the limbs' `bxor` instead;
-- `zext`, `sext` and `trunc` add, fill or drop limbs.
+- `zext`, `sext` and `trunc` add, fill or drop limbs;
+- a `switch` tests each case limb by limb, low first, going on to the
+  next case at the first limb that differs: LLVM makes a chain of
+  comparisons of an `i64` (or of an `i63`, once it knows the sign bit)
+  into one.
 
 Widths in between (33 to 63 bits, 65 to 127, up to 256) get the
 operations done on the limbs, not the helpers. Core formats a `u128`

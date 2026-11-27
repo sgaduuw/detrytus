@@ -1919,3 +1919,14 @@ cost is the conversion at each builtin, a few instructions, and 64-bit
 arithmetic where Rust computes on words; the kernel mostly passes them
 along. The `i64` is wrapped in a `Word` type in trylobite, not here.
 
+
+### 2026-11-27 · A switch on a wide integer
+
+trylobite's kernel holds a word as an `i64` in Rust, and LLVM turns
+comparisons of one against a few constants (`state == ST_EXITED ||
+state == ST_ZOMBIE`) into a `switch` on `i64`, or on `i63` once it knows
+the sign bit. `ll` took only a single-word switch and refused these, so
+the kernel had to narrow every such word by hand first. A wide switch
+now tests each case limb by limb and moves on to the next case at the
+first limb that differs. Programs that never had one translate as
+before.
