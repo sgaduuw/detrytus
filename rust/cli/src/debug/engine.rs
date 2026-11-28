@@ -15,6 +15,7 @@ use std::io::Write;
 
 use detrytus_asm::disasm::{disassemble, disassemble_slot};
 use detrytus_asm::expr::{Symbols, evaluate};
+use detrytus_core::clock::Source;
 use detrytus_core::hart::{AccessKind, Event, Hart};
 use detrytus_core::trits::low;
 use detrytus_core::{Hotplug, Machine, Outcome};
@@ -85,6 +86,8 @@ pub struct Debugger {
     pub catch: Option<BTreeSet<i64>>,
     ids: u64,
     pub halted: Option<i64>,
+    /// Where the real-time clock's time comes from (`--clock`).
+    clock: Source,
     pub trace: bool,
     printed: usize,
 }
@@ -97,6 +100,7 @@ impl Debugger {
         hotplug: Vec<(i64, Hotplug)>,
         input: String,
         disk: Option<DiskSpec>,
+        clock: Source,
     ) -> Self {
         let symbols: Symbols = program.symbols.iter().cloned().collect::<HashMap<_, _>>();
         let mut dbg = Debugger {
@@ -107,6 +111,7 @@ impl Debugger {
             hotplug,
             input,
             disk,
+            clock,
             focus: 0,
             machine: Machine::new(ram_pages, 1),
             breakpoints: BTreeMap::new(),
@@ -128,6 +133,7 @@ impl Debugger {
     /// with `input` does not.
     pub fn restart(&mut self) {
         self.machine = Machine::with_harts(self.ram_pages, 1, self.harts);
+        self.machine.bus.clock.source = self.clock;
         for &(time, change) in &self.hotplug {
             self.machine.schedule(time, change).expect("checked when it was given");
         }

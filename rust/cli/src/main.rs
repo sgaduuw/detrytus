@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use detrytus_asm::disasm::disassemble;
 use detrytus_core::bus::MAX_RAM_PAGES;
+use detrytus_core::clock::Source;
 use detrytus_core::hart::Event;
 use detrytus_core::trits::low;
 use detrytus_core::{Hotplug, Machine, Outcome};
@@ -34,10 +35,10 @@ const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]";
@@ -80,6 +81,8 @@ struct RunArgs {
     mac: Option<u64>,
     /// `--no-jit`: interpret every instruction.
     no_jit: bool,
+    /// Where the real-time clock's time comes from (`--clock`).
+    clock: Source,
 }
 
 /// A failure that ends the command: its message and exit status.
@@ -116,6 +119,13 @@ fn ram_pages(flag: &str, value: Option<String>) -> Result<i64, Fail> {
     }
 }
 
+/// `--clock SECONDS`: the real-time clock starts SECONDS after the Unix
+/// epoch and moves a microsecond a tick, so a run reads the same time
+/// every time. Without it the clock is the host's.
+fn clock(flag: &str, value: Option<String>) -> Result<Source, Fail> {
+    Ok(Source::Ticks { start: number(flag, value)? })
+}
+
 fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     let mut run = RunArgs {
         files: Vec::new(),
@@ -132,6 +142,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         net: None,
         mac: None,
         no_jit: false,
+        clock: Source::Host,
     };
     let mut disk = DiskArgs::default();
     let mut args = args.peekable();
@@ -153,6 +164,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--disk" | "--disk-blocks" => disk.option(&arg, args.next())?,
             "--net" => run.net = Some(net::NetSpec::parse(args.next())?),
             "--mac" => run.mac = Some(net::parse_mac(args.next())?),
+            "--clock" => run.clock = clock(&arg, args.next())?,
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -354,6 +366,7 @@ fn sign(n: i64) -> String {
 
 fn run(args: RunArgs) -> Result<u8, Fail> {
     let mut machine = Machine::with_harts(args.ram_pages, seed(), args.harts);
+    machine.bus.clock.source = args.clock;
     for &(time, change) in &args.hotplug {
         machine.schedule(time, change).expect("checked when parsed");
     }
@@ -488,7 +501,7 @@ fn seed() -> u32 {
 fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     let (mut files, mut ram_pages, mut breaks, mut commands, mut batch) =
         (Vec::new(), 729, Vec::new(), None, false);
-    let (mut harts, mut hotplug, mut input) = (1, Vec::new(), None);
+    let (mut harts, mut hotplug, mut input, mut clock) = (1, Vec::new(), None, Source::Host);
     let mut disk = DiskArgs::default();
     let mut args = args;
     while let Some(arg) = args.next() {
@@ -506,6 +519,7 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
                 hart_option(&arg, args.next(), &mut harts, &mut hotplug)?
             }
             "--disk" | "--disk-blocks" => disk.option(&arg, args.next())?,
+            "--clock" => clock = self::clock(&arg, args.next())?,
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -525,7 +539,7 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
         spec.open()?; // a bad disk is a startup error, not a debugger message
     }
     let mut shell = debug::shell::Shell {
-        dbg: debug::engine::Debugger::new(program, ram_pages, harts, hotplug, input, disk),
+        dbg: debug::engine::Debugger::new(program, ram_pages, harts, hotplug, input, disk, clock),
     };
     for expr in &breaks {
         shell.onecmd(&format!("break {expr}"));

@@ -1975,3 +1975,31 @@ loads its first stage into RAM.
   interrupt, so it leaves the machine as reset did.
 - **Loading a program file stays.** It is quicker for tests and for
   programs without a disk, and nothing about it changed.
+
+### 2026-11-28 · A real-time clock in the power page
+
+The machine knew only `time`, steps since reset, so an operating system
+could say how long it had been up but not what time it was. The clock
+is two read-only registers next to RAM size: Unix seconds and the
+microseconds past them.
+
+- **Unix time, not a calendar.** A PC's RTC gives fields (year, month,
+  hour) in BCD and leaves time zones to whoever set it; RISC-V's
+  goldfish RTC and most modern ones give one count since an epoch. A
+  count is all software needs, is the same everywhere, and needs no
+  rules about months in hardware. 27 trits of seconds last until the
+  year 122,000; microseconds would not fit one word past 2090, so they
+  are a second register.
+- **Reading the seconds latches the microseconds**, per hart, so a pair
+  is one moment without a retry loop. Rejected: one register in
+  milliseconds (fits, but only until 2090) and a seqlock-style "read
+  until it repeats" rule (every reader has to get it right).
+- **Host time by default, a fixed clock on request.** A real clock is
+  what a person running the machine expects from `date`. Tests need the
+  same output every run, so `--clock SECONDS` drives the clock from
+  `time` instead, a microsecond a tick, the rate the live console
+  already paces idle time at. The core keeps no other host state; only
+  a program that reads the clock sees the difference.
+- **Read-only.** Setting the time is an offset the operating system
+  keeps; writes to the registers are ignored, like RAM size. A battery
+  and a settable clock belong to real hardware.

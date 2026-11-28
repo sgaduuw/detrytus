@@ -150,6 +150,15 @@ real time (docs/platform.md, Time). `--live`
 asks for this from a pipe too, passing bytes on as they arrive and
 closing the console when the pipe ends.
 
+The power page has a real-time clock: Unix seconds and microseconds,
+from the host, or with `--clock SECONDS` from a fixed start that moves
+a microsecond a tick, so a run reads the same time every time
+([docs/platform.md](docs/platform.md), The real-time clock):
+
+```bash
+detrytus run examples/clock.s
+```
+
 `--harts N` starts the machine with N harts (1 to 729), and
 `--plug TIME:HART` / `--unplug TIME:HART` add or remove one while it
 runs:

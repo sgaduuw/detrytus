@@ -15,6 +15,36 @@ detrytus: 202 steps, exit 0
 '''
 
 [[case]]
+name = "a fixed clock reads the same every run"
+args = ["run", "--clock", "1800000000", "{root}/examples/clock.s"]
+status = 0
+stdout = '''
+1800000000.000002
+'''
+stderr = ""
+
+[[case]]
+name = "clock needs a number"
+args = ["run", "--clock", "noon", "{root}/examples/clock.s"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
+                    [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
+                    [--clock SECONDS] [FILE...]
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
+       detrytus tc [-c] FILE [-o FILE]
+       detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
+                   [--prune] FILE... [-o FILE]
+detrytus: --clock needs a number
+'''
+
+[[case]]
 name = "bsearch with stats"
 args = ["run", "--stats", "{root}/examples/bsearch.s"]
 status = 0
@@ -789,10 +819,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -810,10 +840,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -831,10 +861,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -914,10 +944,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -935,10 +965,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -984,10 +1014,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -1005,10 +1035,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -1136,10 +1166,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -1178,10 +1208,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
@@ -1199,10 +1229,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]

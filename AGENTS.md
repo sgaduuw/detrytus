@@ -71,6 +71,7 @@ and hides a failure.
 | `rust/core/src/irq.rs` | the interrupt controller: enables, routes, sources in service |
 | `rust/core/src/block.rs` | the block device: its registers and the command in flight |
 | `rust/core/src/net.rs` | the network device: its registers, the frame in flight, frames waiting for a buffer, and the `Link` trait with the loopback link |
+| `rust/core/src/clock.rs` | the real-time clock: Unix time from the host, or from a fixed start a microsecond a tick |
 | `rust/core/src/harts.rs` | the hart controller: hart states, mailboxes, group sends, hot-plug events |
 | `rust/core/src/image.rs` | the `.dti` image format: reading and writing |
 | `rust/core/src/entropy.rs` | the seeded entropy source |
