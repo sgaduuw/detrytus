@@ -162,7 +162,10 @@ detrytus run examples/console-size.s
 The power page has a real-time clock: Unix seconds and microseconds,
 from the host, or with `--clock SECONDS` from a fixed start that moves
 a microsecond a tick, so a run reads the same time every time
-([docs/platform.md](docs/platform.md), The real-time clock):
+([docs/platform.md](docs/platform.md), The real-time clock). A
+monotonic clock beside it, seconds and nanoseconds since the machine
+started, never jumps when the host's time is set, for measuring
+intervals (The monotonic clock):
 
 ```bash
 detrytus run examples/clock.s

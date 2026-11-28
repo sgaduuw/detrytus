@@ -44,6 +44,8 @@ RAM pages too; only the program writes are checked.
 | −39363 | RAM size | read-only: how many RAM pages the machine has (pages 1 to N are RAM); writes are ignored |
 | −39360 | clock | read-only: the real-time clock, whole seconds since 1970-01-01 00:00:00 UTC; reading it latches clock micros (The real-time clock, below) |
 | −39357 | clock micros | read-only: the microseconds, 0 to 999,999, past the second this hart's last read of clock gave |
+| −39354 | monotonic | read-only: the monotonic clock, whole seconds since the machine started; reading it latches monotonic nanos (The monotonic clock, below) |
+| −39351 | monotonic nanos | read-only: the nanoseconds, 0 to 999,999,999, past the second this hart's last read of monotonic gave |
 
 Console input is the text `--input FILE` names, queued before the
 first step, plus whatever the debugger's `input` command adds, or, with
@@ -118,6 +120,29 @@ in Unix time; turning seconds into a date is software's job.
   system's business: it keeps its own offset from the clock.
 
 `examples/clock.s` reads and prints it.
+
+## The monotonic clock
+
+The real-time clock follows the host's, which a person or NTP can set
+back or forward, and an operating system adds its own offset to it. To
+measure how long something took, software needs a clock that only moves
+forward at a steady rate: the monotonic clock, two read-only registers
+after the real-time clock's, whole seconds since the machine started
+and the nanoseconds past that second.
+
+- **Reading.** As with the real-time clock: load monotonic, then
+  monotonic nanos. Reading monotonic latches the nanoseconds of the
+  same moment for the hart that read it; monotonic nanos before a
+  hart's first read of monotonic is 0.
+- **Where the time comes from.** By default the host's monotonic clock
+  (Rust's `Instant`), from when the machine was made, so setting the
+  host's time of day does not move it. With `--clock SECONDS` it is
+  `time` instead, a microsecond (1,000 nanoseconds) a tick, so runs
+  stay deterministic.
+- **Writes are ignored.**
+
+Unlike `time`, which counts steps and runs as fast as the emulator
+does, the monotonic clock is real time.
 
 ## Harts
 
