@@ -34,7 +34,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -42,6 +42,45 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]
 detrytus: --clock needs a number
+'''
+
+[[case]]
+name = "the console size registers say what --console-size gives"
+args = ["run", "--console-size", "24x80", "{root}/examples/console-size.s"]
+status = 0
+stdout = '''
+24 80
+'''
+stderr = ""
+
+[[case]]
+name = "with no terminal and no --console-size the size is not known"
+args = ["run", "{root}/examples/console-size.s"]
+status = 0
+stdout = '''
+0 0
+'''
+stderr = ""
+
+[[case]]
+name = "a console size needs rows and columns"
+args = ["run", "--console-size", "80", "{root}/examples/console-size.s"]
+status = 2
+stdout = ""
+stderr = '''
+usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
+       detrytus link [-o FILE] [--map] FILE...
+       detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
+                    [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
+       detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
+                    [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
+       detrytus tc [-c] FILE [-o FILE]
+       detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
+                   [--prune] FILE... [-o FILE]
+detrytus: --console-size needs ROWSxCOLUMNS, such as 24x80
 '''
 
 [[case]]
@@ -819,7 +858,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -840,7 +879,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -861,7 +900,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -944,7 +983,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -965,7 +1004,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -1014,7 +1053,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -1035,7 +1074,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -1166,7 +1205,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -1208,7 +1247,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -1229,7 +1268,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]

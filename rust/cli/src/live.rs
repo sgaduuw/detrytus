@@ -8,6 +8,10 @@
 //! console and Ctrl-] stops the machine. The terminal is put back when
 //! the run ends. From a pipe, the bytes are passed on as they come and
 //! the end of the pipe closes the console.
+//!
+//! On a terminal the console's size registers follow the terminal's
+//! size: `stty size` is asked at the start and every SIZE_EVERY after,
+//! so a window made larger or smaller is seen within a second.
 
 use std::io::Read;
 use std::process::{Command, Stdio};
@@ -18,6 +22,8 @@ use std::time::Duration;
 const END: u8 = 0x04;
 /// Ctrl-]: on a terminal, stops the machine (as telnet's escape).
 const STOP: u8 = 0x1d;
+/// How often the terminal's size is asked again.
+const SIZE_EVERY: Duration = Duration::from_millis(500);
 
 /// What has been typed since the last look.
 #[derive(Default)]
@@ -27,6 +33,8 @@ pub struct Typed {
     pub closed: bool,
     /// Ctrl-] on a terminal: stop the machine.
     pub stop: bool,
+    /// The terminal's rows and columns, when they are new.
+    pub size: Option<(i64, i64)>,
 }
 
 pub struct Live {
@@ -37,11 +45,38 @@ pub struct Live {
     /// Set on a terminal: the mode to put back, and Ctrl-D/Ctrl-] apply.
     raw: Option<RawMode>,
     ended: bool,
+    /// The terminal's size as `stty size` says it, when it changes.
+    sizes: Option<Receiver<(i64, i64)>>,
+    /// The size asked at the start, until the first look takes it.
+    first: Option<(i64, i64)>,
 }
 
 impl Live {
-    pub fn start(terminal: bool) -> Live {
+    /// `follow_size`: keep the console's size the terminal's.
+    pub fn start(terminal: bool, follow_size: bool) -> Live {
         let raw = if terminal { RawMode::enter() } else { None };
+        // The first size is asked at once, so the machine never starts
+        // without it.
+        let first = if follow_size { terminal_size() } else { None };
+        let sizes = follow_size.then(|| {
+            let (send, sizes) = channel();
+            std::thread::spawn(move || {
+                let mut last = first;
+                loop {
+                    std::thread::sleep(SIZE_EVERY);
+                    let now = terminal_size();
+                    if let Some(size) = now
+                        && now != last
+                    {
+                        if send.send(size).is_err() {
+                            break;
+                        }
+                        last = now;
+                    }
+                }
+            });
+            sizes
+        });
         let (send, bytes) = channel();
         std::thread::spawn(move || {
             let mut stdin = std::io::stdin();
@@ -60,12 +95,15 @@ impl Live {
                 }
             }
         });
-        Live { bytes, partial: Vec::new(), raw, ended: false }
+        Live { bytes, partial: Vec::new(), raw, ended: false, sizes, first }
     }
 
     /// What has been typed, waiting up to `wait` for the first of it.
     pub fn take(&mut self, wait: Duration) -> Typed {
-        let mut typed = Typed::default();
+        let mut typed = Typed { size: self.first.take(), ..Default::default() };
+        if let Some(sizes) = &self.sizes {
+            typed.size = sizes.try_iter().last().or(typed.size);
+        }
         if self.ended {
             return typed;
         }
@@ -132,6 +170,16 @@ impl Live {
             }
         }
     }
+}
+
+/// The terminal's rows and columns, from `stty size`; None where it
+/// cannot say (no stty, or a size of 0 by 0, as some terminals report).
+fn terminal_size() -> Option<(i64, i64)> {
+    let out = Command::new("stty").arg("size").stdin(Stdio::inherit()).output().ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    let mut words = text.split_whitespace().map(|w| w.parse::<i64>().ok());
+    let (rows, columns) = (words.next()??, words.next()??);
+    (out.status.success() && rows > 0 && columns > 0).then_some((rows, columns))
 }
 
 /// The terminal's settings before the run, put back when dropped.

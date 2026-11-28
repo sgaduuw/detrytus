@@ -35,7 +35,7 @@ const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
@@ -83,6 +83,9 @@ struct RunArgs {
     no_jit: bool,
     /// Where the real-time clock's time comes from (`--clock`).
     clock: Source,
+    /// The console's size, rows and columns, from `--console-size`;
+    /// without it a live console on a terminal follows the terminal's.
+    console_size: Option<(i64, i64)>,
 }
 
 /// A failure that ends the command: its message and exit status.
@@ -131,6 +134,16 @@ fn clock(flag: &str, value: Option<String>) -> Result<Source, Fail> {
     Ok(Source::Ticks { start: number(flag, value)? })
 }
 
+/// `--console-size ROWSxCOLUMNS`: what the console's size registers say,
+/// as for a terminal of that size.
+fn console_size(flag: &str, value: Option<String>) -> Result<(i64, i64), Fail> {
+    let wrong = || usage(&format!("{flag} needs ROWSxCOLUMNS, such as 24x80"));
+    let value = value.ok_or_else(wrong)?;
+    let (rows, columns) = value.split_once('x').ok_or_else(wrong)?;
+    let size = |n: &str| n.parse::<i64>().ok().filter(|n| (1..=9999).contains(n));
+    Ok((size(rows).ok_or_else(wrong)?, size(columns).ok_or_else(wrong)?))
+}
+
 fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     let mut run = RunArgs {
         files: Vec::new(),
@@ -148,6 +161,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         mac: None,
         no_jit: false,
         clock: Source::Host,
+        console_size: None,
     };
     let mut disk = DiskArgs::default();
     let mut args = args.peekable();
@@ -170,6 +184,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--net" => run.net = Some(net::NetSpec::parse(args.next())?),
             "--mac" => run.mac = Some(net::parse_mac(args.next())?),
             "--clock" => run.clock = clock(&arg, args.next())?,
+            "--console-size" => run.console_size = Some(console_size(&arg, args.next())?),
             flag if flag.starts_with('-') && flag != "-" => {
                 return Err(usage(&format!("unknown option {flag}")));
             }
@@ -385,11 +400,15 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     // is read, no more comes. A live one runs until it powers off.
     let mut live = None;
     if args.live {
-        live = Some(live::Live::start(std::io::stdin().is_terminal()));
+        let terminal = std::io::stdin().is_terminal();
+        live = Some(live::Live::start(terminal, terminal && args.console_size.is_none()));
         let per_wait = LIVE_TICKS_PER_SECOND * LIVE_WAIT.as_millis() as i64 / 1000;
         machine.set_pace(Some(per_wait));
     } else {
         machine.bus.console.closed = true;
+    }
+    if let Some((rows, columns)) = args.console_size {
+        (machine.bus.console.rows, machine.bus.console.columns) = (rows, columns);
     }
     let max_steps = args.max_steps.unwrap_or(if args.live { u64::MAX } else { 10_000_000 });
     if let Some(spec) = &args.disk {
@@ -429,6 +448,9 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
             }
             console.feed(&typed.text);
             console.closed |= typed.closed;
+            if let Some((rows, columns)) = typed.size {
+                (console.rows, console.columns) = (rows, columns);
+            }
             if typed.stop {
                 break Err(Fail::after_output("stopped".to_string(), STOPPED));
             }

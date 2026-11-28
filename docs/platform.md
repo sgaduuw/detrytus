@@ -38,6 +38,8 @@ RAM pages too; only the program writes are checked.
 |---------|----------|-----------|
 | −19683 | console out | writing a Unicode code point prints it |
 | −19680 | console in | reading returns the next input code point, or a negative state when there is none (Console input states, below; test the sign: a code point is never negative) |
+| −19677 | console rows | read-only: the rows of the terminal the console is shown on, or 0 if not known (The console's size, below) |
+| −19674 | console columns | read-only: its columns, or 0 if not known |
 | −39366 | power off | writing any value stops the machine; the value becomes the exit code |
 | −39363 | RAM size | read-only: how many RAM pages the machine has (pages 1 to N are RAM); writes are ignored |
 | −39360 | clock | read-only: the real-time clock, whole seconds since 1970-01-01 00:00:00 UTC; reading it latches clock micros (The real-time clock, below) |
@@ -49,6 +51,20 @@ a live console (`run` at a terminal, or `--live`), what is typed, as it
 is typed. Once it is used up, reads say whether more may come (Console
 input states, below). With `--input` a run's input is fixed in advance,
 so runs stay deterministic and nothing waits for a person to type.
+
+### The console's size
+
+The console has a size, as a virtual console does: two read-only
+registers say how many rows and columns of characters the terminal
+showing it has, so a program can lay out a screen to fit. Both read 0
+when the size is not known, and software then picks its own (24 by 80
+is the usual guess). `run --console-size ROWSxCOLUMNS` sets them; a
+live console on a terminal without that flag follows the terminal,
+asking `stty size` at the start and every half second, so a window
+made larger or smaller shows within a second. Nothing interrupts on a
+change: a program reads the registers when it draws. Without a
+terminal and without the flag (`--input`, a pipe, the debugger) they
+read 0, so runs stay deterministic.
 
 ## Time
 

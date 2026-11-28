@@ -33,6 +33,10 @@ pub const CONSOLE_PAGE: i64 = -1;
 pub const POWER_PAGE: i64 = -2;
 pub const CONSOLE_OUT: i64 = CONSOLE_PAGE * PAGE;
 pub const CONSOLE_IN: i64 = CONSOLE_OUT + 3;
+/// Read-only: the terminal the console is shown on, in rows and columns
+/// of characters, or 0 when that is not known (Console::rows).
+pub const CONSOLE_ROWS: i64 = CONSOLE_OUT + 6;
+pub const CONSOLE_COLUMNS: i64 = CONSOLE_OUT + 9;
 pub const POWER_OFF: i64 = POWER_PAGE * PAGE;
 /// Read-only: how many RAM pages the machine has, so a kernel need not
 /// be built for one size of machine.
@@ -79,6 +83,11 @@ pub struct Console {
     pub output: Vec<u32>,
     pub input: VecDeque<i64>,
     pub closed: bool,
+    /// The size of the terminal showing the output, as a virtual
+    /// console's: 0 by 0 when unknown (no terminal, nothing given). The
+    /// host keeps it current; software reads it when it lays out a screen.
+    pub rows: i64,
+    pub columns: i64,
 }
 
 impl Console {
@@ -584,6 +593,8 @@ impl Bus {
         self.touched_device |= region.is_machine_device();
         match region {
             Region::Console if addr == CONSOLE_IN => Ok(self.console.read()),
+            Region::Console if addr == CONSOLE_ROWS => Ok(self.console.rows),
+            Region::Console if addr == CONSOLE_COLUMNS => Ok(self.console.columns),
             Region::Harts => Ok(self.harts.read(addr, self.current)),
             Region::Irq => {
                 let lines = self.lines();
@@ -720,6 +731,11 @@ mod tests {
         bus.console.closed = true;
         assert_eq!(bus.read(CONSOLE_IN, 3, Access::Load), Ok(97), "input before the end");
         assert_eq!(bus.read(CONSOLE_IN, 3, Access::Load), Ok(CONSOLE_CLOSED));
+        assert_eq!(bus.read(CONSOLE_ROWS, 3, Access::Load), Ok(0), "no size known");
+        bus.console.rows = 24;
+        bus.console.columns = 80;
+        assert_eq!(bus.read(CONSOLE_ROWS, 3, Access::Load), Ok(24));
+        assert_eq!(bus.read(CONSOLE_COLUMNS, 3, Access::Load), Ok(80));
         bus.write(CONSOLE_OUT, 3, 'é' as i64).unwrap();
         bus.write(CONSOLE_OUT, 3, -5).unwrap(); // not a code point: ignored
         assert_eq!(bus.console.text(), "é");
