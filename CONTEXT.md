@@ -2003,3 +2003,16 @@ microseconds past them.
 - **Read-only.** Setting the time is an offset the operating system
   keeps; writes to the registers are ignored, like RAM size. A battery
   and a settable clock belong to real hardware.
+
+### 2026-11-28 · A roomier default RAM
+
+- **`detrytus run` and `detrytus debug` give 59,049 pages (3¹⁰) unless
+  `--ram-pages` says otherwise**, up from 729. Pages cost host memory
+  only once written, so the bigger default costs nothing until a program
+  uses it, and trylobite's kernel touches no free page at boot. 3¹⁰ sits
+  under trylobite's direct map (101,695 pages) and holds about eighteen
+  full-size heaps, so a Rust program sorting thousands of lines no
+  longer runs out at the default. Rejected: the largest RAM the platform
+  allows (an operating system that maps only part of it reports less
+  than the machine has) and 6,561 (the size `make run` already used,
+  still tight for several large programs at once).
