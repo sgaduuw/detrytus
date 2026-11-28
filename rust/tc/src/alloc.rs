@@ -705,7 +705,21 @@ fn colour(lines: &[Line], returns: usize) -> Result<BTreeMap<String, String>, Ve
             .collect();
         let free: Vec<&str> = palette.iter().copied().filter(|c| !taken.contains(c)).collect();
         if free.is_empty() {
-            spills.push(v.clone());
+            // A spill's own temporary lives across one instruction:
+            // spilling it again only makes another just like it, for
+            // ever. Spill the busiest value live beside it instead.
+            let pick = if v.starts_with(SPILL) {
+                adj[v]
+                    .iter()
+                    .filter(|n| n.starts_with('%') && !n.starts_with(SPILL))
+                    .max_by_key(|n| adj[*n].len())
+                    .unwrap_or(v)
+            } else {
+                v
+            };
+            if !spills.contains(pick) {
+                spills.push(pick.clone());
+            }
             continue;
         }
         // Prefer the register of a value this one is copied from or to.
@@ -764,6 +778,9 @@ fn colour(lines: &[Line], returns: usize) -> Result<BTreeMap<String, String>, Ve
 
 /// Keep `v` in the frame word at `off` from `s0`: load it before each
 /// use, store it after each write, through a new short-lived register.
+/// The prefix of a spill's temporaries (spill).
+const SPILL: &str = "%spill";
+
 fn spill(lines: &mut Vec<Line>, v: &str, off: i128, fresh: &mut usize) {
     let mut out = Vec::with_capacity(lines.len());
     for mut line in lines.drain(..) {
@@ -775,7 +792,7 @@ fn spill(lines: &mut Vec<Line>, v: &str, off: i128, fresh: &mut usize) {
             continue;
         }
         *fresh += 1;
-        let t = format!("%spill{fresh}");
+        let t = format!("{SPILL}{fresh}");
         rename(&mut line, v, &t);
         if used {
             out.push(Line::Op { op: "lw".into(), args: vec![t.clone(), format!("{off}(s0)")] });
@@ -1213,4 +1230,30 @@ pub fn inline(
         out.push(format!("{name}$ret_{k}:"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// core's `fmt_inner` for u128 as `detrytus ll` lowered it inside one
+    /// trylobite program (its first line: results, slots, stack_params).
+    /// Its virtual registers' numbers depend on the rest of the program,
+    /// and so does the order the allocator meets them in: with these, it
+    /// once spilled a spill's own temporary, which only makes another,
+    /// a thousand times over, and gave up.
+    #[test]
+    fn a_spills_temporary_is_never_spilled_again() {
+        let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/ll/spill_loop.txt"));
+        let (head, body) = text.split_once('\n').unwrap();
+        let head: Vec<&str> = head.split(' ').collect();
+        let f = Func {
+            name: "fmt_inner",
+            results: head[0].parse().unwrap(),
+            slots: head[1].parse().unwrap(),
+            stack_params: head[2] == "true",
+            body: body.lines().map(String::from).collect(),
+        };
+        assert!(finish(f).is_ok());
+    }
 }
