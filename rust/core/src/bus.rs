@@ -17,6 +17,7 @@ use crate::fastmap::FastMap as HashMap;
 
 use crate::block::{BLOCK_PAGE, BLOCK_READ, BLOCK_TRYTES, BlockDevice, Request, Transfer};
 use crate::block::{ROUNDS_PER_BLOCK, SETUP_ROUNDS};
+use crate::clock::Clock;
 use crate::fpu::{FPU_PAGE, Fpu};
 use crate::harts::{HartController, LOCAL_PAGE, SLOTS_PAGE};
 use crate::irq::{BLOCK_SOURCE, CONSOLE_SOURCE, IRQ_PAGE, InterruptController, Lines, NET_SOURCE};
@@ -36,6 +37,12 @@ pub const POWER_OFF: i64 = POWER_PAGE * PAGE;
 /// Read-only: how many RAM pages the machine has, so a kernel need not
 /// be built for one size of machine.
 pub const RAM_SIZE: i64 = POWER_OFF + 3;
+/// Read-only: the real-time clock, whole seconds since the Unix epoch
+/// (clock.rs). Reading it latches CLOCK_MICROS for the reading hart.
+pub const CLOCK: i64 = POWER_OFF + 6;
+/// Read-only: the microseconds past the second the hart's last read of
+/// CLOCK gave, 0 to 999,999.
+pub const CLOCK_MICROS: i64 = POWER_OFF + 9;
 
 /// The most RAM a machine can have: every positive page number an
 /// 18-trit physical page number holds, (3^18 − 1) / 2.
@@ -138,6 +145,8 @@ pub struct Bus {
     pub block: BlockDevice,
     pub fpu: Fpu,
     pub net: NetDevice,
+    /// The real-time clock, in the power page.
+    pub clock: Clock,
     /// The machine's clock, set each round, for devices that take time.
     pub now: i64,
     /// The hart whose access this is: the machine sets it before each
@@ -187,6 +196,7 @@ impl Bus {
             block: BlockDevice::default(),
             fpu: Fpu::default(),
             net: NetDevice::default(),
+            clock: Clock::default(),
             now: 0,
             current: 0,
             reservations: HashMap::default(),
@@ -583,6 +593,8 @@ impl Bus {
             Region::Fpu => Ok(self.fpu.read(addr, self.current)),
             Region::Net => Ok(self.net.read(addr)),
             Region::Power if addr == RAM_SIZE => Ok(self.ram_pages),
+            Region::Power if addr == CLOCK => Ok(self.clock.seconds(self.current, self.now)),
+            Region::Power if addr == CLOCK_MICROS => Ok(self.clock.micros_latched(self.current)),
             Region::Console | Region::Power => Ok(0),
             Region::Boot | Region::Ram if width == 1 => Ok(self.get(addr)),
             Region::Boot | Region::Ram => Ok(self.word(addr)),
@@ -669,6 +681,21 @@ mod tests {
         assert_eq!(bus.read(-5 * PAGE, 3, Access::Load), Err(BusError::Fault(-5 * PAGE)));
         assert_eq!(bus.read(-3 * PAGE, 3, Access::Fetch), Err(BusError::Fault(-3 * PAGE)));
         assert_eq!(bus.write(POWER_OFF, 3, 7), Err(BusError::Halt(7)));
+    }
+
+    #[test]
+    fn the_power_page_holds_a_real_time_clock() {
+        let mut bus = Bus::new(1);
+        bus.clock.source = crate::clock::Source::Ticks { start: 1_795_000_000 };
+        bus.now = 3_000_042;
+        bus.current = 1;
+        assert_eq!(bus.read(CLOCK, 3, Access::Load), Ok(1_795_000_003));
+        bus.now = 3_999_999; // the latch, not the clock, answers
+        assert_eq!(bus.read(CLOCK_MICROS, 3, Access::Load), Ok(42));
+        bus.current = 0; // another hart has latched nothing
+        assert_eq!(bus.read(CLOCK_MICROS, 3, Access::Load), Ok(0));
+        assert_eq!(bus.write(CLOCK, 3, 5), Ok(()));
+        assert_eq!(bus.read(CLOCK, 3, Access::Load), Ok(1_795_000_003));
     }
 
     #[test]

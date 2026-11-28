@@ -5,13 +5,15 @@
 //! single step, paged virtual memory, up to 729 harts with the hart
 //! controller, the interrupt controller for devices, the block device
 //! compressed bundles, the ternary floating point unit, the binary
-//! floating point coprocessor and the network device. Debug
+//! floating point coprocessor, the network device and the real-time
+//! clock. Debug
 //! triggers are specified but not implemented yet.
 
 pub mod accel;
 pub mod alu;
 pub mod block;
 pub mod bus;
+pub mod clock;
 pub mod compressed;
 pub mod entropy;
 pub mod fastmap;

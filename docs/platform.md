@@ -38,6 +38,8 @@ RAM pages too; only the program writes are checked.
 | −19680 | console in | reading returns the next input code point, or a negative state when there is none (Console input states, below; test the sign: a code point is never negative) |
 | −39366 | power off | writing any value stops the machine; the value becomes the exit code |
 | −39363 | RAM size | read-only: how many RAM pages the machine has (pages 1 to N are RAM); writes are ignored |
+| −39360 | clock | read-only: the real-time clock, whole seconds since 1970-01-01 00:00:00 UTC; reading it latches clock micros (The real-time clock, below) |
+| −39357 | clock micros | read-only: the microseconds, 0 to 999,999, past the second this hart's last read of clock gave |
 
 Console input is the text `--input FILE` names, queued before the
 first step, plus whatever the debugger's `input` command adds, or, with
@@ -74,6 +76,30 @@ program that sleeps a million ticks then sleeps about a second, as a
 person watching expects, rather than not at all. Running, the clock
 still moves one tick per step, however fast that is; a run with
 `--input` skips at once, as before, and stays deterministic.
+
+## The real-time clock
+
+`time` counts steps, which says nothing about the time of day. The
+real-time clock does: two read-only registers in the power page give
+Unix time, seconds since 1970-01-01 00:00:00 UTC, and the microseconds
+past that second. There are no time zones and no leap seconds in it, as
+in Unix time; turning seconds into a date is software's job.
+
+- **Reading.** Load clock, then clock micros. Reading clock latches the
+  microseconds of the same moment for the hart that read it, so the
+  pair is consistent however a second turns over between the loads, and
+  harts reading at once do not disturb each other's latch. Clock micros
+  before a hart's first read of clock is 0. The seconds are rounded
+  down, so the microseconds are never negative, before 1970 too.
+- **Where the time comes from.** By default the host's clock, read at
+  each access. `run --clock SECONDS` (and `debug --clock SECONDS`)
+  instead starts the clock SECONDS after the epoch at tick 0 and moves
+  it a microsecond a tick, the rate a live console paces idle time at,
+  so a run that reads it is still the same every time.
+- **Writes are ignored.** Setting the time of day is the operating
+  system's business: it keeps its own offset from the clock.
+
+`examples/clock.s` reads and prints it.
 
 ## Harts
 

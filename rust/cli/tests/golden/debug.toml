@@ -2500,10 +2500,10 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [FILE...]
+                    [--clock SECONDS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] [FILE...]
+                    [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]

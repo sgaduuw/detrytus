@@ -20,6 +20,7 @@ Unlike `run`, the debugger keeps the console open once that text is
 read, so `input` can add more; `eof` closes it. `--disk FILE` and
 `--disk-blocks N` attach a disk as for `run`; `restart` opens the file
 again, so what the program wrote before the restart stays written.
+`--clock SECONDS` fixes the real-time clock as for `run`.
 `--harts N`, `--plug TIME:HART`
 and `--unplug TIME:HART` set up harts as for `run` (see Several harts,
 below).
