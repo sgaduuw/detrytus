@@ -41,10 +41,20 @@ impl NetSpec {
         Ok(NetSpec::Udp { local: endpoint(local), peer: endpoint(peer) })
     }
 
-    pub fn open(&self) -> Result<Box<dyn Link>, Fail> {
+    /// Open the link, with `forwards` (host port, machine port) for a
+    /// user link.
+    pub fn open(&self, forwards: &[(u16, u16)]) -> Result<Box<dyn Link>, Fail> {
         match self {
             NetSpec::Loopback => Ok(Box::new(Loopback::default())),
-            NetSpec::User => Ok(Box::new(crate::nat::UserLink::new())),
+            NetSpec::User => {
+                let mut link = crate::nat::UserLink::new();
+                for &(host, guest) in forwards {
+                    link.forward(host, guest).map_err(|e| {
+                        Fail::new(format!("--forward {host}:{guest}: {}", strerror(&e)), NO_INPUT)
+                    })?;
+                }
+                Ok(Box::new(link))
+            }
             NetSpec::Udp { local, peer } => Ok(Box::new(UdpLink::open(local, peer)?)),
         }
     }
@@ -53,6 +63,15 @@ impl NetSpec {
 /// A bare port means one on this host.
 fn endpoint(text: &str) -> String {
     if text.bytes().all(|b| b.is_ascii_digit()) { format!("127.0.0.1:{text}") } else { text.into() }
+}
+
+/// `--forward HOST:GUEST`: two ports, neither 0.
+pub fn parse_forward(value: Option<String>) -> Result<(u16, u16), Fail> {
+    let bad = || usage("--forward takes HOST:GUEST, two ports, as 2323:23");
+    let value = value.ok_or_else(bad)?;
+    let (host, guest) = value.split_once(':').ok_or_else(bad)?;
+    let port = |p: &str| p.parse::<u16>().ok().filter(|&p| p != 0).ok_or_else(bad);
+    Ok((port(host)?, port(guest)?))
 }
 
 /// `--mac` as six octets in hexadecimal, separated by colons.

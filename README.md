@@ -200,13 +200,17 @@ user networking does: pings, UDP and TCP connections go out to
 wherever the host can reach, with no root and no TAP device, and
 10.0.0.1 itself stands for the host, so a server on the host's
 127.0.0.1 answers there. A name server at 10.0.0.3 answers DNS
-queries for addresses from the host's own resolver. Use it with `--live`, since the far end keeps
+queries for addresses from the host's own resolver, and the gateway
+hands out an address by DHCP (10.0.0.15). `--forward 2323:23` lets the
+host in: a connection to the host's port 2323 reaches the machine's
+port 23. Use it with `--live`, since the far end keeps
 real time. `--mac` sets the interface's address.
 
 ```bash
 detrytus run --net loop examples/net.s
 detrytus run --net udp:5555,5556 kernel.dti   # and the other end: udp:5556,5555
 detrytus run --live --net user kernel.dti
+detrytus run --live --net user --forward 2323:23 --disk disk.img   # telnet localhost 2323
 ```
 
 `--mix` counts instructions by mnemonic and how many of each a

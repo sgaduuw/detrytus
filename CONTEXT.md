@@ -2058,3 +2058,23 @@ machine started and the nanoseconds past them.
   because a step takes a few of them and Rust's `Instant` counts them.
 - **`--clock` drives it from `time` too**, a microsecond a tick, so a
   deterministic run stays deterministic.
+
+### 2026-11-28 · DHCP and port forwarding on `--net user`
+
+trylobite gained a DHCP client and a remote shell (bin/dhcp, bin/telnetd),
+and `--net user` needed both ends of them.
+
+- **The gateway is the DHCP server**, as slirp's is, leasing one fixed
+  address, 10.0.0.15/24, with itself as router and 10.0.0.3 as name
+  server. One machine sits on the link, so there is nothing to pool;
+  an address other than the default 10.0.0.2 shows the lease took.
+  Answers go to everyone (the broadcast flag's way), which every client
+  takes and which needs no ARP for an address the machine does not have
+  yet. Broadcast IPv4 frames are otherwise dropped, so a broadcast ping
+  never reaches the host's ping socket.
+- **`--forward HOST:GUEST`** rather than slirp's `hostfwd=` inside
+  `--net`: a flag of its own, repeatable, and only with `--net user`.
+  It listens on 127.0.0.1 only: the remote shell has no password, so
+  the host's other machines should not reach it. The link plays the
+  connecting side, with the same flow as an outgoing connection
+  (`active` marks the SYN as ours), from gateway ports 32,768 up.
