@@ -8,7 +8,7 @@ the platform (`isa.md` 8.5 and 12.3).
 | Physical page | Contents |
 |---------------|----------|
 | 0 | boot page: the program is loaded here and runs from address 0, or, with a disk and no program, the boot ROM (Booting from a disk, below); read and execute only |
-| 1 .. 729 | RAM (`--ram-pages` changes the count, up to 193,710,244; the RAM size register reads it) |
+| 1 .. 59049 | RAM (`--ram-pages` changes the count, up to 193,710,244; the RAM size register reads it) |
 | -1 | console |
 | -2 | power control |
 | -3 | hart controller: one slot per hart (Harts, below) |
@@ -25,7 +25,9 @@ spans `p·19683 − 9841` .. `p·19683 + 9841`.
 RAM can be any number of pages from 1 to 193,710,244, (3¹⁸ − 1) / 2:
 every positive page number, up to the top of the address space. The
 emulator allocates a page's host memory the first time something writes
-to it, so a large machine costs only what its programs use. Software
+to it, so a large machine costs only what its programs use, and
+`detrytus run` and `detrytus debug` give a machine 59,049 pages (3¹⁰,
+about 1.16 billion trytes) unless `--ram-pages` says otherwise. Software
 learns the size from the RAM size register rather than being built for
 one machine. The loader may place data in
 RAM pages too; only the program writes are checked.
