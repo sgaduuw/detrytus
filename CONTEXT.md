@@ -2037,6 +2037,28 @@ console page, rows (−19677) and columns (−19674), 0 when unknown.
   `--console-size ROWSxCOLUMNS` for tests. The debugger does not take
   it (yet).
 
+### 2026-11-28 · A monotonic clock in the power page
+
+trylobite wanted a std-shaped `Instant`: a clock for intervals that
+NTP stepping the time of day does not move. `time` is monotonic but
+counts steps, so how many a second depends on the emulator's speed and
+on whether the machine is idle. The real-time clock is real time but
+follows the host's, which can be set back. Two read-only registers
+after the real-time clock's, −39354 and −39351: whole seconds since the
+machine started and the nanoseconds past them.
+
+- **A device, not kernel arithmetic.** A kernel could clamp the
+  real-time clock so it never goes back, but a host clock set back an
+  hour would then freeze intervals for an hour. Real machines have a
+  counter for this (a TSC, an HPET, RISC-V's `time` at a known rate);
+  here the host's `Instant` is that counter.
+- **Seconds and latched nanoseconds**, the real-time clock's shape:
+  nanoseconds since start in one word would last only about an hour
+  (27 trits hold 3.8·10¹²). Nanoseconds rather than microseconds
+  because a step takes a few of them and Rust's `Instant` counts them.
+- **`--clock` drives it from `time` too**, a microsecond a tick, so a
+  deterministic run stays deterministic.
+
 ### 2026-11-28 · DHCP and port forwarding on `--net user`
 
 trylobite gained a DHCP client and a remote shell (bin/dhcp, bin/telnetd),
