@@ -7,7 +7,7 @@ the platform (`isa.md` 8.5 and 12.3).
 
 | Physical page | Contents |
 |---------------|----------|
-| 0 | boot page: the program is loaded here and runs from address 0; read and execute only |
+| 0 | boot page: the program is loaded here and runs from address 0, or, with a disk and no program, the boot ROM (Booting from a disk, below); read and execute only |
 | 1 .. 729 | RAM (`--ram-pages` changes the count, up to 193,710,244; the RAM size register reads it) |
 | -1 | console |
 | -2 | power control |
@@ -298,6 +298,55 @@ zeros, and writes extend it. A run refuses a file holding a value that
 is not a tryte. A command's blocks reach the file in one host write
 when it finishes, so a crash keeps whole commands, never half of one.
 The debugger's `restart` does not undo writes already made to the file.
+
+## Booting from a disk
+
+`run --disk FILE` and `debug --disk FILE` with no program put the boot
+ROM in the boot page instead: a small program, `rust/cli/src/boot.s`,
+that loads an image from the disk and starts it, much as a PC's
+firmware reads a boot sector. A disk does not say what is on it, so a
+**boot record** in block 0 does.
+
+**The boot record** is words 3 to 8 of block 0, the trytes at offsets
+−9,832 .. −9,815 from the block's centre. Words 0 to 2 and everything
+after word 8 are left to whatever else uses block 0, such as a
+filesystem's header.
+
+| Offset | Word | Name | Contents |
+|--------|------|------|----------|
+| −9,831 | 3 | `BOOT_MAGIC` | 20,261,128: a disk without it is not bootable |
+| −9,828 | 4 | `BOOT_FIRST` | the image's first block |
+| −9,825 | 5 | `BOOT_COUNT` | how many blocks it has, 1 to 6,561 |
+| −9,822 | 6 | `BOOT_PAGE` | the RAM page its first block goes to; block `BOOT_FIRST + i` goes to page `BOOT_PAGE + i` |
+| −9,819 | 7 | `BOOT_ENTRY` | the physical address to start it at |
+| −9,816 | 8 | | reserved: 0 |
+
+**What the ROM does.** It reads block 0 into page 1, checks the
+record, reads the image's blocks into their pages with one command, and
+jumps to `BOOT_ENTRY` in ring +1, untranslated, with `a0` = 0, as a
+program loaded at address 0 starts. It polls the block device rather
+than take its interrupt, so the interrupt controller, the trap CSRs and
+the other harts are as reset left them, and the block device has no
+command in flight and nothing to acknowledge. The first words of page 1
+are its scratch: block 0 and the scatter list. An image may load over
+them, and RAM it does not load stays zero. Other registers hold what
+the ROM left in them.
+
+**When it cannot boot**, it prints `boot: ` and why on the console,
+and powers off with exit status `BOOT_FAILED` (1):
+
+| Message | Why |
+|---------|-----|
+| `no disk` | the disk has no blocks |
+| `no boot record in block 0` | word 3 of block 0 is not `BOOT_MAGIC` |
+| `the boot record is not valid` | `BOOT_COUNT` is below 1 or above 6,561, or `BOOT_PAGE` is not a RAM page |
+| `the image does not fit in RAM` | its last page is past the machine's RAM (`--ram-pages`) |
+| `reading the disk failed` | a block it reads is not on the disk |
+
+The boot page holds an image that needs nothing of page 0, so the same
+image boots this way and loads directly when its pages are given as a
+program file, if it also puts something at address 0 that jumps to
+`BOOT_ENTRY`. trylobite's disks are built this way.
 
 ## The binary floating point coprocessor (page −15)
 

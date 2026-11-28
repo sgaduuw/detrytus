@@ -81,7 +81,7 @@ and hides a failure.
 | `rust/tc/tests/` | Trice programs compiled and run on the bare machine (`bare.s`), and refused ones; `ll/` holds Rust programs, their pruned IR (rebuild with `ll/regenerate.sh`) and a bare-machine runtime, which `ll.rs` translates and runs; `float_lib.rs` checks `lower/float.ll`'s functions against the host |
 | `rust/core/src/accel.rs` | what a JIT plugs into: the `Accelerator` trait, and the narrow access compiled code has to a hart |
 | `rust/jit/` | the JIT: hot code within a page compiled to host code with Cranelift; `tests/same.rs` checks it against the interpreter |
-| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files, linking objects), `link.rs` (`link`), `disk.rs` (`--disk`), `net.rs` (`--net`, the UDP link), `mix.rs` (`--mix`), `tc.rs` (`tc`), `ll.rs` (`ll`), `debug/` (engine and shell) |
+| `rust/cli/src/` | the `detrytus` command: `main.rs`, `program.rs` (loading files, linking objects, the boot ROM), `boot.s` (the boot ROM's source), `link.rs` (`link`), `disk.rs` (`--disk`), `net.rs` (`--net`, the UDP link), `mix.rs` (`--mix`), `tc.rs` (`tc`), `ll.rs` (`ll`), `debug/` (engine and shell) |
 | `rust/cli/tests/golden/` | recorded transcripts of the command's output |
 | `rust/cli/tests/pace.rs` | pacing the clock over idle time, as a live console does |
 | `rust/conformance/` | the conformance runner (tests only) |

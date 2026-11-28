@@ -1942,3 +1942,36 @@ take a fifth more steps than the assembly it replaced. `lw32(p) -> i32`
 reads a word known to fit an `i32` as its low limb only: `lw` and one
 `band`, and one-limb comparisons after it. A word that does not fit
 comes back cut to its low 32 bits, as `trunc` would.
+
+### 2026-11-28 · A boot ROM that loads an image from the disk
+
+Until now the emulator put a program's image straight into memory, so
+an operating system on a disk still needed its kernel as a file beside
+it. With a disk and no program, `run` and `debug` now put a boot ROM in
+the boot page, which loads the image a boot record names and jumps to
+it, as a PC's firmware reads a boot sector or a RISC-V board's ROM
+loads its first stage into RAM.
+
+- **The record lives in block 0, words 3 to 8.** A disk has no other
+  place everyone agrees on, and block 0 is where a filesystem keeps its
+  header too, so the record takes six words that trylobite's filesystem
+  header leaves unused (it uses words 0 to 2 and the map after word 8)
+  rather than a block of its own, which would have shifted every
+  filesystem's block numbers. Rejected: the last block of the disk
+  (moves when the disk grows) and a list of pages in a block of its own
+  (more than an image of consecutive pages needs; the scatter list
+  already lets the ROM put each block where it wants).
+- **The image is consecutive blocks into consecutive RAM pages, with
+  one command.** The block device's unit is a page, so an image is just
+  pages, and one command is one wait. The ROM cannot write the boot
+  page, which is read and execute only, so the image lives in RAM and
+  page 0 stays the ROM's; a system that keeps firmware at address 0
+  moves it into RAM and leaves a jump at 0 for when its image is loaded
+  as a file (trylobite does).
+- **The ROM is assembly the command assembles at start**, from
+  `rust/cli/src/boot.s` built in, not trytes in the core: the core stays
+  a machine that runs whatever page 0 holds, and the ROM is readable
+  and changed like any other program. It polls rather than take an
+  interrupt, so it leaves the machine as reset did.
+- **Loading a program file stays.** It is quicker for tests and for
+  programs without a disk, and nothing about it changed.
