@@ -418,6 +418,11 @@ impl UserLink {
             r.extend_from_slice(&NAMESERVER.octets());
         }
         r.push(255);
+        if answer == DHCPACK && kind != DHCPINFORM {
+            // The machine has the address now, before it sends from it:
+            // what the link sends it (a forwarded connection) goes there.
+            self.guest_ip = LEASED;
+        }
         while r.len() < 300 {
             r.push(0); // the least a BOOTP message is
         }
@@ -1195,6 +1200,7 @@ mod tests {
         link.send(&dhcp_frame(DHCPREQUEST, &[50, 4, 10, 0, 0, 15, 54, 4, 10, 0, 0, 1]));
         let (kind, given, _) = dhcp_answer(&link.receive().unwrap());
         assert_eq!((kind, given), (DHCPACK, LEASED));
+        assert_eq!(link.guest_ip, LEASED); // forwarded connections go there
 
         link.send(&dhcp_frame(DHCPREQUEST, &[50, 4, 10, 0, 0, 99]));
         let (kind, given, _) = dhcp_answer(&link.receive().unwrap());
