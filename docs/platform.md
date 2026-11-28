@@ -327,7 +327,8 @@ jumps to `BOOT_ENTRY` in ring +1, untranslated, with `a0` = 0, as a
 program loaded at address 0 starts. It polls the block device rather
 than take its interrupt, so the interrupt controller, the trap CSRs and
 the other harts are as reset left them, and the block device has no
-command in flight and nothing to acknowledge. The first words of page 1
+command in flight and nothing to acknowledge, and its BLOCK, COUNT and
+LIST registers read 0, 1 and 0 again, as at reset. The first words of page 1
 are its scratch: block 0 and the scatter list. An image may load over
 them, and RAM it does not load stays zero. Other registers hold what
 the ROM left in them.

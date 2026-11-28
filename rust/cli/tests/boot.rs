@@ -13,12 +13,21 @@ const HALF: i64 = PAGE / 2;
 const MAGIC: i64 = 20261128;
 
 /// Two pages from page 2: code in the first jumps to code in the second,
-/// which prints and powers off with 7 + a0, so a status of 7 also says
-/// the ROM started it with a0 = 0.
+/// which prints and powers off with 7 + a0 + BLOCK + (COUNT - 1) + LIST,
+/// so a status of 7 also says the ROM started it with a0 = 0 and put the
+/// block device's registers back as reset left them.
 const PROGRAM: &str = "
         .equ  PAGE, 19683
         .section one, 2 * PAGE - 9840, 2 * PAGE - 9840
 start:  mv    s0, a0
+        li    t1, -275562
+        lw    t2, -6(t1)
+        add   s0, s0, t2
+        lw    t2, -3(t1)
+        addi  t2, t2, -1
+        add   s0, s0, t2
+        lw    t2, 0(t1)
+        add   s0, s0, t2
         li    t0, far
         jalr  zero, 0(t0)
         .section two, 3 * PAGE - 9840, 3 * PAGE - 9840

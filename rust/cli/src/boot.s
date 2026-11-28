@@ -10,7 +10,7 @@
 #
 # It polls the block device rather than take its interrupt, so it leaves
 # the interrupt controller, the trap CSRs and other harts as reset left
-# them. Page 1's first words are its scratch: block 0 lands in page 1,
+# them, and puts the block device's registers back as reset left them. Page 1's first words are its scratch: block 0 lands in page 1,
 # and the scatter list is built there; the image may load over both.
 
         .equ  PAGE,         19683
@@ -86,6 +86,10 @@ boot:
         mv    a1, s4
         call  read
 
+        sw    zero, D_BLOCK(s0)          # the block device's registers as
+        li    t0, 1                      # reset left them: BLOCK 0, COUNT 1,
+        sw    t0, D_COUNT(s0)            # LIST 0
+        sw    zero, D_LIST(s0)
         li    a0, 0
         jalr  zero, 0(s6)
 
