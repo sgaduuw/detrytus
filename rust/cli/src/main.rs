@@ -108,6 +108,11 @@ fn number<T: std::str::FromStr>(flag: &str, value: Option<String>) -> Result<T, 
     value.and_then(|v| v.parse().ok()).ok_or_else(|| usage(&format!("{flag} needs a number")))
 }
 
+/// RAM a machine has without `--ram-pages`: 3^10 pages, 1,162,261,467
+/// trytes. Pages cost host memory only once written, so a roomy default
+/// is free until a program uses it.
+const DEFAULT_RAM_PAGES: i64 = 59_049;
+
 /// `--ram-pages`: any count from 1 to the most an 18-trit physical page
 /// number reaches. Pages cost host memory only once something writes them.
 fn ram_pages(flag: &str, value: Option<String>) -> Result<i64, Fail> {
@@ -129,7 +134,7 @@ fn clock(flag: &str, value: Option<String>) -> Result<Source, Fail> {
 fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     let mut run = RunArgs {
         files: Vec::new(),
-        ram_pages: 729,
+        ram_pages: DEFAULT_RAM_PAGES,
         max_steps: None,
         stats: false,
         trace: false,
@@ -500,7 +505,7 @@ fn seed() -> u32 {
 
 fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
     let (mut files, mut ram_pages, mut breaks, mut commands, mut batch) =
-        (Vec::new(), 729, Vec::new(), None, false);
+        (Vec::new(), DEFAULT_RAM_PAGES, Vec::new(), None, false);
     let (mut harts, mut hotplug, mut input, mut clock) = (1, Vec::new(), None, Source::Host);
     let mut disk = DiskArgs::default();
     let mut args = args;
