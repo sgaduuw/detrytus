@@ -161,6 +161,13 @@ detrytus run --harts 3 examples/harts.s
 `--disk FILE` attaches a block device whose blocks live in FILE, two
 bytes per tryte; `--disk-blocks N` sets its size and creates the file if
 it is missing. What a program writes stays in the file for the next run.
+With a disk and no program, `run` boots from the disk: a small boot ROM
+loads the image block 0's boot record names and starts it
+([docs/platform.md](docs/platform.md), Booting from a disk):
+
+```bash
+detrytus run --disk disk.img
+```
 
 `--net loop` attaches a network device whose frames come straight back,
 and `--net udp:LOCAL,PEER` carries each Ethernet frame as one UDP

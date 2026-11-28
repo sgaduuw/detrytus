@@ -27,17 +27,17 @@ mod tc;
 
 use disk::DiskSpec;
 
-use program::{Loaded, load, load_one, strerror};
+use program::{Loaded, load_one, load_or_boot, strerror};
 
 const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus link [-o FILE] [--map] FILE...
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    FILE...
+                    [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
-                    [--disk FILE [--disk-blocks N]] FILE...
+                    [--disk FILE [--disk-blocks N]] [FILE...]
        detrytus tc [-c] FILE [-o FILE]
        detrytus ll [--include FILE]... [--root NAME]... [--signed-pointers] [--sections CODE,DATA]
                    [--prune] FILE... [-o FILE]";
@@ -163,8 +163,9 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     if run.mac.is_some() && run.net.is_none() {
         return Err(usage("--mac needs --net"));
     }
-    if run.files.is_empty() {
-        return Err(usage("run needs at least one file"));
+    // With no file the boot ROM loads a program from the disk.
+    if run.files.is_empty() && run.disk.is_none() {
+        return Err(usage("run needs at least one file, or a disk to boot from"));
     }
     if run.input.as_deref() == Some("-") && run.files.iter().any(|f| f == "-") {
         return Err(usage("stdin can be a FILE or the --input, not both"));
@@ -356,7 +357,7 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
     for &(time, change) in &args.hotplug {
         machine.schedule(time, change).expect("checked when parsed");
     }
-    for (addr, tryte) in load(&args.files)?.trytes {
+    for (addr, tryte) in load_or_boot(&args.files)?.trytes {
         machine.bus.poke(addr, tryte);
     }
     if let Some(path) = &args.input {
@@ -512,13 +513,13 @@ fn cmd_debug(args: impl Iterator<Item = String>) -> Result<u8, Fail> {
         }
     }
     let disk = disk.spec()?;
-    if files.is_empty() {
-        return Err(usage("debug needs at least one file"));
+    if files.is_empty() && disk.is_none() {
+        return Err(usage("debug needs at least one file, or a disk to boot from"));
     }
     if input.as_deref() == Some("-") {
         return Err(usage("debug reads its commands from stdin; give --input a file"));
     }
-    let program = load(&files)?;
+    let program = load_or_boot(&files)?;
     let input = input.as_deref().map(read_input).transpose()?.unwrap_or_default();
     if let Some(spec) = &disk {
         spec.open()?; // a bad disk is a startup error, not a debugger message

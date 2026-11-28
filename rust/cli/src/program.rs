@@ -225,3 +225,19 @@ pub fn load(files: &[String]) -> Result<Program, Fail> {
     merged.labels.retain(|(n, _)| !ambiguous.contains(n));
     Ok(merged)
 }
+
+/// The boot ROM's source (docs/platform.md, Booting from a disk).
+pub const BOOT_ROM: &str = include_str!("boot.s");
+
+/// The boot ROM, assembled: what page 0 holds when a run or a debugging
+/// session is given a disk and no program.
+pub fn boot_rom() -> Program {
+    let image = assemble(BOOT_ROM, Some("boot ROM")).expect("the boot ROM assembles");
+    Program::of(&image)
+}
+
+/// The program a run or a debugging session loads: its files, or with
+/// none, the boot ROM (the caller checks there is a disk to boot from).
+pub fn load_or_boot(files: &[String]) -> Result<Program, Fail> {
+    if files.is_empty() { Ok(boot_rom()) } else { load(files) }
+}
