@@ -553,8 +553,27 @@ standard query for one name's A records is looked up with the host's
 own resolver (its hosts file and DNS, on a thread so the machine never
 waits) and answered with every IPv4 address found, TTL 60, or with
 NXDOMAIN (rcode 3) if the lookup fails; a query for any other type is
-answered with no records. Other traffic to it is dropped. Nothing outside can open a
-connection to the machine. The host keeps real time, so a machine on
+answered with no records. Other traffic to it is dropped.
+
+The gateway is the network's DHCP server too (RFC 2131), on UDP port
+67, as slirp's is: a DISCOVER gets an offer of 10.0.0.15, a REQUEST for
+that address (naming the gateway as its server, or no server) an ACK,
+a REQUEST for any other a NAK, and an INFORM an ACK with the options
+alone; the options are the gateway as server identifier and router,
+mask 255.255.255.0, 10.0.0.3 as the name server, and a lease of 86,400
+seconds. Answers go to everyone (MAC ff:ff:ff:ff:ff:ff, address
+255.255.255.255, port 68), since the machine may have no address yet.
+A frame to everyone carrying IPv4 is taken only if it is UDP to
+255.255.255.255, and only DHCP is answered.
+
+Nothing outside can open a connection to the machine, except through
+a forwarded port: `--forward HOST:GUEST` (with `--net user`, as often
+as wanted) listens on the host's 127.0.0.1 port HOST, and makes each
+connection there a TCP connection from the gateway (from a port of
+32,768 or more) to the machine's port GUEST, the emulator playing the
+connecting side: it sends the SYN, and carries data both ways once the
+machine's SYN+ACK comes. A machine that refuses it (RST) closes the
+host's connection. The host keeps real time, so a machine on
 this link wants `--live`; without it, its idle time is skipped and its
 timeouts run out before the host answers.
 

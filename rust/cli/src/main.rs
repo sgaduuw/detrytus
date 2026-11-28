@@ -35,6 +35,7 @@ const USAGE: &str = "usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
+                    [--forward HOST:GUEST]...
                     [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
@@ -79,6 +80,8 @@ struct RunArgs {
     disk: Option<DiskSpec>,
     net: Option<net::NetSpec>,
     mac: Option<u64>,
+    /// `--forward`: host ports a user link forwards to the machine's.
+    forwards: Vec<(u16, u16)>,
     /// `--no-jit`: interpret every instruction.
     no_jit: bool,
     /// Where the real-time clock's time comes from (`--clock`).
@@ -159,6 +162,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
         disk: None,
         net: None,
         mac: None,
+        forwards: Vec::new(),
         no_jit: false,
         clock: Source::Host,
         console_size: None,
@@ -183,6 +187,7 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
             "--disk" | "--disk-blocks" => disk.option(&arg, args.next())?,
             "--net" => run.net = Some(net::NetSpec::parse(args.next())?),
             "--mac" => run.mac = Some(net::parse_mac(args.next())?),
+            "--forward" => run.forwards.push(net::parse_forward(args.next())?),
             "--clock" => run.clock = clock(&arg, args.next())?,
             "--console-size" => run.console_size = Some(console_size(&arg, args.next())?),
             flag if flag.starts_with('-') && flag != "-" => {
@@ -194,6 +199,9 @@ fn parse_run(args: impl Iterator<Item = String>) -> Result<RunArgs, Fail> {
     run.disk = disk.spec()?;
     if run.mac.is_some() && run.net.is_none() {
         return Err(usage("--mac needs --net"));
+    }
+    if !run.forwards.is_empty() && run.net != Some(net::NetSpec::User) {
+        return Err(usage("--forward needs --net user"));
     }
     // With no file the boot ROM loads a program from the disk.
     if run.files.is_empty() && run.disk.is_none() {
@@ -415,7 +423,7 @@ fn run(args: RunArgs) -> Result<u8, Fail> {
         machine.bus.block.disk = Some(Box::new(spec.open()?));
     }
     if let Some(spec) = &args.net {
-        machine.bus.net.link = Some(spec.open()?);
+        machine.bus.net.link = Some(spec.open(&args.forwards)?);
     }
     if let Some(mac) = args.mac {
         machine.bus.net.mac = mac;

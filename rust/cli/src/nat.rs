@@ -21,14 +21,23 @@
 //!
 //! The gateway's own address stands for the host: what the machine sends
 //! to 10.0.0.1 goes to 127.0.0.1, so `nc 10.0.0.1 8080` reaches a server
-//! on the host. Nothing reaches the machine unasked: there is no port
-//! forwarding into it.
+//! on the host. Nothing reaches the machine unasked, except through a
+//! forwarded port (`--forward HOST:GUEST`): the link listens on the
+//! host's 127.0.0.1 port HOST, and makes each connection there one from
+//! the gateway to the machine's port GUEST, playing the client's side of
+//! the machine's TCP.
+//!
+//! The gateway is also the network's DHCP server, as slirp's is: it
+//! leases the machine 10.0.0.15/24, itself as the router and 10.0.0.3
+//! as the name server.
 //!
 //! Real sockets keep real time, so the machine should run `--live`.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{
+    Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
+};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
@@ -39,6 +48,16 @@ pub const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
 /// The name server the link plays, answering from the host's resolver.
 pub const NAMESERVER: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 3);
 const GATEWAY_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0xfe];
+/// What the DHCP server leases: one address, the network's mask, for
+/// this many seconds.
+pub const LEASED: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 15);
+const NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
+const LEASE_SECS: u32 = 86400;
+const DHCP_SERVER: u16 = 67;
+const DHCP_CLIENT: u16 = 68;
+/// Where a forwarded connection's host-side ports start, as the
+/// gateway's ports in the machine's eyes.
+const FORWARD_PORTS: u16 = 32768;
 
 const ETH_ARP: u16 = 0x0806;
 const ETH_IP: u16 = 0x0800;
@@ -63,6 +82,17 @@ const CONNECT: Duration = Duration::from_secs(10);
 /// A UDP port of the machine's keeps its host socket this long unused.
 const UDP_IDLE: Duration = Duration::from_secs(120);
 
+/// A DHCP message: where its options start, past the magic cookie that
+/// ends the fixed part, and the message types it uses.
+const DHCP_OPTIONS: usize = 240;
+const DHCP_MAGIC: [u8; 4] = [99, 130, 83, 99];
+const DHCPDISCOVER: u8 = 1;
+const DHCPOFFER: u8 = 2;
+const DHCPREQUEST: u8 = 3;
+const DHCPACK: u8 = 5;
+const DHCPNAK: u8 = 6;
+const DHCPINFORM: u8 = 8;
+
 pub struct UserLink {
     /// Frames for the machine, oldest first.
     out: VecDeque<Vec<u8>>,
@@ -78,6 +108,9 @@ pub struct UserLink {
     /// Name lookups under way on the host: each query's answer comes
     /// back on its channel, for the machine's port.
     lookups: Vec<Lookup>,
+    /// Forwarded ports: a host listener for each, and the machine's port.
+    forwards: Vec<(TcpListener, u16)>,
+    next_port: u16,
     ident: u16,
 }
 
@@ -133,6 +166,9 @@ struct TcpFlow {
     fin_acked: bool,
     sent_at: Instant,
     tries: u32,
+    /// A forwarded connection: the link opened it, with a SYN, and the
+    /// machine's SYN+ACK sets rcv_nxt.
+    active: bool,
 }
 
 impl Default for UserLink {
@@ -152,8 +188,19 @@ impl UserLink {
             udp: HashMap::new(),
             tcp: HashMap::new(),
             lookups: Vec::new(),
+            forwards: Vec::new(),
+            next_port: FORWARD_PORTS,
             ident: 0,
         }
+    }
+
+    /// Forward the host's 127.0.0.1 port `host` to the machine's port
+    /// `guest`.
+    pub fn forward(&mut self, host: u16, guest: u16) -> std::io::Result<()> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, host))?;
+        listener.set_nonblocking(true)?;
+        self.forwards.push((listener, guest));
+        Ok(())
     }
 
     // --- from the machine ---------------------------------------------------
@@ -178,7 +225,7 @@ impl UserLink {
         self.out.push_back(r);
     }
 
-    fn ipv4(&mut self, f: &[u8]) {
+    fn ipv4(&mut self, f: &[u8], to_everyone: bool) {
         let p = &f[14..];
         if p.len() < 20 || p[0] >> 4 != 4 {
             return;
@@ -192,8 +239,13 @@ impl UserLink {
             return; // a fragment: the machine sends none
         }
         let (src, dst) = (ip_at(&p[12..]), ip_at(&p[16..]));
+        if (to_everyone || dst.is_broadcast()) && !(dst.is_broadcast() && p[9] == UDP) {
+            return; // only DHCP goes to everyone
+        }
         self.guest_mac.copy_from_slice(&f[6..12]);
-        self.guest_ip = src;
+        if !src.is_unspecified() {
+            self.guest_ip = src;
+        }
         let body = &p[hl..total];
         match p[9] {
             ICMP => self.icmp(dst, body),
@@ -231,6 +283,10 @@ impl UserLink {
             return;
         }
         let (sport, dport) = (be16(d), be16(&d[2..]));
+        if dport == DHCP_SERVER && sport == DHCP_CLIENT && (dst.is_broadcast() || dst == GATEWAY) {
+            self.dhcp(&d[8..len]);
+            return;
+        }
         if dst.is_broadcast() || dst.octets()[3] == 255 {
             return;
         }
@@ -287,6 +343,98 @@ impl UserLink {
         }
     }
 
+    /// A DHCP message from the machine (RFC 2131). A DISCOVER is
+    /// offered LEASED; a REQUEST for it, ours or nobody's in particular,
+    /// is acknowledged, and one for any other address refused (NAK); an
+    /// INFORM is acknowledged with the options alone. The answers go to
+    /// everyone, as the machine has no address to send them to yet.
+    fn dhcp(&mut self, m: &[u8]) {
+        if m.len() < DHCP_OPTIONS || m[0] != 1 || m[1] != 1 || m[2] != 6 {
+            return;
+        }
+        if m[DHCP_OPTIONS - 4..DHCP_OPTIONS] != DHCP_MAGIC {
+            return;
+        }
+        let (mut kind, mut requested, mut server) = (0, None, None);
+        let mut o = &m[DHCP_OPTIONS..];
+        while let [code, rest @ ..] = o {
+            match code {
+                0 => o = rest,
+                255 => break,
+                _ => {
+                    let [len, rest @ ..] = rest else { break };
+                    let len = *len as usize;
+                    if rest.len() < len {
+                        break;
+                    }
+                    let value = &rest[..len];
+                    match (code, len) {
+                        (53, 1) => kind = value[0],
+                        (50, 4) => requested = Some(ip_at(value)),
+                        (54, 4) => server = Some(ip_at(value)),
+                        _ => {}
+                    }
+                    o = &rest[len..];
+                }
+            }
+        }
+        let ciaddr = ip_at(&m[12..]);
+        let answer = match kind {
+            DHCPDISCOVER => DHCPOFFER,
+            DHCPREQUEST => {
+                if server.is_some_and(|s| s != GATEWAY) {
+                    return; // the machine chose another server's offer
+                }
+                let wanted = requested.unwrap_or(ciaddr);
+                if wanted == LEASED { DHCPACK } else { DHCPNAK }
+            }
+            DHCPINFORM => DHCPACK,
+            _ => return, // DECLINE, RELEASE: nothing to answer
+        };
+        let mut r = vec![0u8; DHCP_OPTIONS];
+        r[..4].copy_from_slice(&[2, 1, 6, 0]);
+        r[4..8].copy_from_slice(&m[4..8]); // the transaction
+        r[10..12].copy_from_slice(&m[10..12]); // the flags
+        if kind == DHCPINFORM {
+            r[12..16].copy_from_slice(&ciaddr.octets());
+        } else if answer != DHCPNAK {
+            r[16..20].copy_from_slice(&LEASED.octets());
+        }
+        r[20..24].copy_from_slice(&GATEWAY.octets());
+        r[28..44].copy_from_slice(&m[28..44]); // the client's hardware address
+        r[DHCP_OPTIONS - 4..].copy_from_slice(&DHCP_MAGIC);
+        r.extend_from_slice(&[53, 1, answer, 54, 4]);
+        r.extend_from_slice(&GATEWAY.octets());
+        if answer != DHCPNAK {
+            if kind != DHCPINFORM {
+                r.extend_from_slice(&[51, 4]);
+                r.extend_from_slice(&LEASE_SECS.to_be_bytes());
+            }
+            r.extend_from_slice(&[1, 4]);
+            r.extend_from_slice(&NETMASK.octets());
+            r.extend_from_slice(&[3, 4]);
+            r.extend_from_slice(&GATEWAY.octets());
+            r.extend_from_slice(&[6, 4]);
+            r.extend_from_slice(&NAMESERVER.octets());
+        }
+        r.push(255);
+        while r.len() < 300 {
+            r.push(0); // the least a BOOTP message is
+        }
+        let mut d = Vec::with_capacity(8 + r.len());
+        d.extend_from_slice(&DHCP_SERVER.to_be_bytes());
+        d.extend_from_slice(&DHCP_CLIENT.to_be_bytes());
+        d.extend_from_slice(&((8 + r.len()) as u16).to_be_bytes());
+        d.extend_from_slice(&[0, 0]);
+        d.extend_from_slice(&r);
+        let sum = pseudo(GATEWAY, Ipv4Addr::BROADCAST, UDP, d.len());
+        set_checksum(&mut d, 6, sum);
+        if be16(&d[6..]) == 0 {
+            d[6..8].copy_from_slice(&[0xff, 0xff]);
+        }
+        self.send_ip_to([0xff; 6], Ipv4Addr::BROADCAST, GATEWAY, UDP, &d);
+    }
+
     fn tcp_in(&mut self, src: Ipv4Addr, dst: Ipv4Addr, s: &[u8]) {
         if s.len() < 20 || checksum(s, pseudo(src, dst, TCP, s.len())) != 0 {
             return;
@@ -311,9 +459,24 @@ impl UserLink {
             return;
         };
         if flags & RST != 0 {
-            if seq == flow.rcv_nxt {
+            // A forwarded connection's SYN refused: nobody listens.
+            if seq == flow.rcv_nxt || (flow.active && !flow.syn_acked) {
                 self.tcp.remove(&key); // the host stream closes with it
             }
+            return;
+        }
+        if flags & SYN != 0 && flow.active {
+            // The machine's answer to a forwarded connection's SYN.
+            if flags & ACK != 0 && !flow.syn_acked && ack == flow.iss.wrapping_add(1) {
+                flow.rcv_nxt = seq.wrapping_add(1);
+                flow.syn_acked = true;
+                flow.snd_una = ack;
+                flow.window = window;
+                flow.mss = mss_option(&s[20..off]);
+                flow.tries = 0;
+            }
+            let (snd_nxt, rcv_nxt, room) = (flow.snd_nxt, flow.rcv_nxt, flow.room());
+            self.send_tcp(key, ACK, snd_nxt, rcv_nxt, room, &[], false);
             return;
         }
         if flags & SYN != 0 {
@@ -372,8 +535,7 @@ impl UserLink {
         std::thread::spawn(move || {
             let _ = tell.send(TcpStream::connect_timeout(&to, CONNECT));
         });
-        let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-        let iss = clock.map_or(0, |d| d.as_nanos() as u32) ^ (key.port as u32) << 16;
+        let iss = initial_sequence(key.port);
         self.tcp.insert(
             key,
             TcpFlow {
@@ -394,8 +556,58 @@ impl UserLink {
                 fin_acked: false,
                 sent_at: Instant::now(),
                 tries: 0,
+                active: false,
             },
         );
+    }
+
+    /// Connections to forwarded ports: each one a connection from the
+    /// gateway to the machine, its SYN sent at the next step.
+    fn poll_forward(&mut self) {
+        let mut new = Vec::new();
+        for (listener, guest) in &self.forwards {
+            while let Ok((stream, _)) = listener.accept() {
+                new.push((stream, *guest));
+            }
+        }
+        for (stream, guest) in new {
+            if self.tcp.len() >= 64 || stream.set_nonblocking(true).is_err() {
+                continue;
+            }
+            let _ = stream.set_nodelay(true);
+            let key = loop {
+                let port = self.next_port;
+                self.next_port = if port == u16::MAX { FORWARD_PORTS } else { port + 1 };
+                let key = FlowKey { port: guest, to: GATEWAY, to_port: port };
+                if !self.tcp.contains_key(&key) {
+                    break key;
+                }
+            };
+            let iss = initial_sequence(key.to_port);
+            self.tcp.insert(
+                key,
+                TcpFlow {
+                    host: Host::Open(stream),
+                    rcv_nxt: 0,
+                    iss,
+                    snd_una: iss,
+                    snd_nxt: iss,
+                    to_guest: VecDeque::new(),
+                    to_host: Vec::new(),
+                    window: 0,
+                    mss: 536,
+                    syn_acked: false,
+                    guest_fin: false,
+                    host_shut: false,
+                    host_eof: false,
+                    fin_sent: false,
+                    fin_acked: false,
+                    sent_at: Instant::now() - RTO, // send the SYN now
+                    tries: 0,
+                    active: true,
+                },
+            );
+        }
     }
 
     /// Answer a segment that has no connection with a reset.
@@ -415,6 +627,7 @@ impl UserLink {
         self.poll_udp();
         self.poll_tcp();
         self.poll_dns();
+        self.poll_forward();
     }
 
     fn poll_dns(&mut self) {
@@ -548,7 +761,8 @@ impl UserLink {
         if !f.syn_acked {
             if f.snd_nxt == f.iss {
                 let room = f.room();
-                self.send_tcp(key, SYN | ACK, f.iss, f.rcv_nxt, room, &[], true);
+                let (flags, ack) = if f.active { (SYN, 0) } else { (SYN | ACK, f.rcv_nxt) };
+                self.send_tcp(key, flags, f.iss, ack, room, &[], true);
                 f.snd_nxt = f.iss.wrapping_add(1);
                 f.sent_at = now;
             }
@@ -635,8 +849,12 @@ impl UserLink {
     }
 
     fn send_ip(&mut self, src: Ipv4Addr, proto: u8, body: &[u8]) {
+        self.send_ip_to(self.guest_mac, self.guest_ip, src, proto, body);
+    }
+
+    fn send_ip_to(&mut self, mac: [u8; 6], dst: Ipv4Addr, src: Ipv4Addr, proto: u8, body: &[u8]) {
         let mut f = Vec::with_capacity(34 + body.len());
-        f.extend_from_slice(&self.guest_mac);
+        f.extend_from_slice(&mac);
         f.extend_from_slice(&GATEWAY_MAC);
         f.extend_from_slice(&ETH_IP.to_be_bytes());
         f.extend_from_slice(&[0x45, 0]);
@@ -645,7 +863,7 @@ impl UserLink {
         self.ident = self.ident.wrapping_add(1);
         f.extend_from_slice(&[0x40, 0, 64, proto, 0, 0]);
         f.extend_from_slice(&src.octets());
-        f.extend_from_slice(&self.guest_ip.octets());
+        f.extend_from_slice(&dst.octets());
         let sum = checksum(&f[14..34], 0);
         f[24..26].copy_from_slice(&sum.to_be_bytes());
         f.extend_from_slice(body);
@@ -671,7 +889,8 @@ impl Link for UserLink {
         }
         match be16(&frame[12..]) {
             ETH_ARP => self.arp(frame),
-            ETH_IP if dst == GATEWAY_MAC => self.ipv4(frame),
+            // To everyone: a DHCP message is the one IP packet for us.
+            ETH_IP => self.ipv4(frame, dst != GATEWAY_MAC),
             _ => {}
         }
     }
@@ -689,6 +908,12 @@ impl Link for UserLink {
 }
 
 // --- helpers -----------------------------------------------------------------
+
+/// A first sequence number, from the clock and a port.
+fn initial_sequence(port: u16) -> u32 {
+    let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    clock.map_or(0, |d| d.as_nanos() as u32) ^ (port as u32) << 16
+}
 
 /// The host's address for one the machine used: the gateway is the host.
 fn host_side(a: Ipv4Addr) -> Ipv4Addr {
@@ -904,6 +1129,124 @@ mod tests {
             assert_eq!(checksum(&body, pseudo(src, GUEST, f[23], body.len())), 0);
         }
         (src, f[23], body)
+    }
+
+    /// A DHCP message of type `kind` from the machine, which has no
+    /// address yet, to everyone, with these options after the type.
+    fn dhcp_frame(kind: u8, options: &[u8]) -> Vec<u8> {
+        let mut m = vec![0u8; DHCP_OPTIONS];
+        m[..4].copy_from_slice(&[1, 1, 6, 0]);
+        m[4..8].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        m[10] = 0x80; // answer to everyone
+        m[28..34].copy_from_slice(&GUEST_MAC);
+        m[DHCP_OPTIONS - 4..].copy_from_slice(&DHCP_MAGIC);
+        m.extend_from_slice(&[53, 1, kind]);
+        m.extend_from_slice(options);
+        m.push(255);
+        let mut d = vec![0, 68, 0, 67];
+        d.extend_from_slice(&((8 + m.len()) as u16).to_be_bytes());
+        d.extend_from_slice(&[0, 0]);
+        d.extend_from_slice(&m);
+        let unspecified = Ipv4Addr::UNSPECIFIED;
+        let sum = pseudo(unspecified, Ipv4Addr::BROADCAST, UDP, d.len());
+        set_checksum(&mut d, 6, sum);
+        let mut f = ip_frame(Ipv4Addr::BROADCAST, UDP, &d);
+        f[..6].copy_from_slice(&[0xff; 6]);
+        f[26..30].copy_from_slice(&unspecified.octets());
+        f[24..26].copy_from_slice(&[0, 0]);
+        let sum = checksum(&f[14..34], 0);
+        f[24..26].copy_from_slice(&sum.to_be_bytes());
+        f
+    }
+
+    /// The DHCP answer in frame `f`, to everyone: its type, the address
+    /// it gives, and its options.
+    fn dhcp_answer(f: &[u8]) -> (u8, Ipv4Addr, Vec<u8>) {
+        assert_eq!(&f[..6], &[0xff; 6]);
+        assert_eq!((ip_at(&f[26..]), ip_at(&f[30..])), (GATEWAY, Ipv4Addr::BROADCAST));
+        let d = &f[34..];
+        assert_eq!((be16(d), be16(&d[2..])), (67, 68));
+        let m = &d[8..be16(&d[4..]) as usize];
+        assert_eq!(
+            checksum(&d[..m.len() + 8], pseudo(GATEWAY, Ipv4Addr::BROADCAST, UDP, m.len() + 8)),
+            0
+        );
+        assert_eq!(m[0], 2);
+        assert_eq!(&m[4..8], &[0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(&m[28..34], &GUEST_MAC);
+        let options = m[DHCP_OPTIONS..].to_vec();
+        assert_eq!(&options[..2], &[53, 1]);
+        (options[2], ip_at(&m[16..]), options)
+    }
+
+    #[test]
+    fn the_gateway_leases_an_address_by_dhcp() {
+        let mut link = UserLink::new();
+        link.send(&dhcp_frame(DHCPDISCOVER, &[]));
+        let (kind, offered, options) = dhcp_answer(&link.receive().unwrap());
+        assert_eq!((kind, offered), (DHCPOFFER, LEASED));
+        let mut wanted = vec![54, 4, 10, 0, 0, 1, 51, 4];
+        wanted.extend_from_slice(&LEASE_SECS.to_be_bytes());
+        wanted.extend_from_slice(&[
+            1, 4, 255, 255, 255, 0, 3, 4, 10, 0, 0, 1, 6, 4, 10, 0, 0, 3, 255,
+        ]);
+        assert_eq!(&options[3..3 + wanted.len()], &wanted[..]);
+
+        link.send(&dhcp_frame(DHCPREQUEST, &[50, 4, 10, 0, 0, 15, 54, 4, 10, 0, 0, 1]));
+        let (kind, given, _) = dhcp_answer(&link.receive().unwrap());
+        assert_eq!((kind, given), (DHCPACK, LEASED));
+
+        link.send(&dhcp_frame(DHCPREQUEST, &[50, 4, 10, 0, 0, 99]));
+        let (kind, given, _) = dhcp_answer(&link.receive().unwrap());
+        assert_eq!((kind, given), (DHCPNAK, Ipv4Addr::UNSPECIFIED));
+
+        // Another server's offer taken: nothing to say.
+        link.send(&dhcp_frame(DHCPREQUEST, &[50, 4, 10, 0, 0, 15, 54, 4, 10, 0, 0, 9]));
+        assert!(link.receive().is_none());
+    }
+
+    #[test]
+    fn a_forwarded_port_reaches_the_machine() {
+        let mut link = UserLink::new();
+        link.forward(0, 23).unwrap_or_else(|e| panic!("{e}"));
+        link.guest_mac = GUEST_MAC; // as the machine's earlier frames said
+        let port = link.forwards[0].0.local_addr().unwrap().port();
+        let mut host = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let (src, _, syn) = payload(&next(&mut link));
+        assert_eq!((src, be16(&syn[2..]), syn[13]), (GATEWAY, 23, SYN));
+        let from = be16(&syn);
+        let iss = be32(&syn[4..]);
+        let tcp = |seq, ack, flags, data: &[u8]| segment(GATEWAY, 23, from, seq, ack, flags, data);
+        link.send(&tcp(500, iss + 1, SYN | ACK, &[]));
+        let (_, _, ack) = payload(&link.receive().unwrap());
+        assert_eq!((ack[13], be32(&ack[4..]), be32(&ack[8..])), (ACK, iss + 1, 501));
+
+        host.write_all(b"hi").unwrap();
+        let (_, _, data) = payload(&next(&mut link));
+        assert_eq!(&data[20..], b"hi");
+        link.send(&tcp(501, iss + 3, ACK | PSH, b"there"));
+        let (_, _, ack) = payload(&link.receive().unwrap());
+        assert_eq!(be32(&ack[8..]), 506);
+        link.poll();
+        let mut buf = [0u8; 5];
+        host.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        host.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"there");
+    }
+
+    #[test]
+    fn a_forwarded_connection_nobody_takes_is_closed() {
+        let mut link = UserLink::new();
+        link.forward(0, 23).unwrap_or_else(|e| panic!("{e}"));
+        link.guest_mac = GUEST_MAC; // as the machine's earlier frames said
+        let port = link.forwards[0].0.local_addr().unwrap().port();
+        let mut host = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let (_, _, syn) = payload(&next(&mut link));
+        let iss = be32(&syn[4..]);
+        link.send(&segment(GATEWAY, 23, be16(&syn), 0, iss + 1, RST | ACK, &[]));
+        assert!(link.tcp.is_empty());
+        host.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert_eq!(host.read(&mut [0u8; 1]).unwrap_or(0), 0);
     }
 
     #[test]
