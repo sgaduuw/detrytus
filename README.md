@@ -150,6 +150,15 @@ real time (docs/platform.md, Time). `--live`
 asks for this from a pipe too, passing bytes on as they arrive and
 closing the console when the pipe ends.
 
+The console knows its size: two registers give the terminal's rows and
+columns, following the window as it is resized in a live session, or as
+`--console-size 24x80` says ([docs/platform.md](docs/platform.md), The
+console's size):
+
+```bash
+detrytus run examples/console-size.s
+```
+
 The power page has a real-time clock: Unix seconds and microseconds,
 from the host, or with `--clock SECONDS` from a fixed start that moves
 a microsecond a tick, so a run reads the same time every time

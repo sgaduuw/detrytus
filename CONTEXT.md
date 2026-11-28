@@ -2016,3 +2016,23 @@ microseconds past them.
   allows (an operating system that maps only part of it reports less
   than the machine has) and 6,561 (the size `make run` already used,
   still tight for several large programs at once).
+
+### 2026-11-28 · The console's size, as two registers
+
+Eelco asked for the console to report its size (trylobite's vi and the
+shell's Tab list assumed 24 by 80). Two read-only registers in the
+console page, rows (−19677) and columns (−19674), 0 when unknown.
+
+- **A register, not an escape sequence.** A program could ask the
+  terminal (`ESC [ 18 t`, or `ESC [ 6 n` from the far corner), but the
+  answer arrives as input, mixed with keys, and never arrives when
+  input is a file, as in every test. virtio-console has the same two
+  numbers in its configuration space; this is that.
+- **Polled from the host with `stty size`,** at the start and every
+  500 ms, on a thread: no libc dependency for `TIOCGWINSZ`/`SIGWINCH`,
+  and stty is already how the live console sets raw mode.
+- **No interrupt on a change.** Programs read the size when they draw;
+  a resize interrupt can come later if something needs one.
+- **Deterministic by default:** 0 by 0 without a terminal;
+  `--console-size ROWSxCOLUMNS` for tests. The debugger does not take
+  it (yet).

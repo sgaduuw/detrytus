@@ -46,7 +46,7 @@ usage: detrytus asm [-c] FILE [-o FILE] [--listing] [--mix]
        detrytus run [--ram-pages N] [--max-steps N] [--stats] [--trace] [--mix] [--input FILE]
                     [--live] [--no-jit] [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--net loop|user|udp:LOCAL,PEER [--mac MAC]]
-                    [--clock SECONDS] [FILE...]
+                    [--clock SECONDS] [--console-size ROWSxCOLUMNS] [FILE...]
        detrytus debug [--ram-pages N] [-b ADDR]... [-x FILE] [--batch] [--input FILE]
                     [--harts N] [--plug TIME:HART]... [--unplug TIME:HART]...
                     [--disk FILE [--disk-blocks N]] [--clock SECONDS] [FILE...]
